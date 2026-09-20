@@ -1,0 +1,23 @@
+{
+  "name": "meteora-wallet-scanner-v1",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "scan": "node --experimental-strip-types --env-file=.env src/index.ts"
+  },
+  "engines": {
+    "node": ">=22.6.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.2",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.23.13"
+  },
+  "dependencies": {
+    "@solana/web3.js": "^1.99.0",
+    "bs58": "^6.0.0",
+    "playwright-core": "^1.63.0",
+    "ws": "^8.21.3"
+  }
+}
