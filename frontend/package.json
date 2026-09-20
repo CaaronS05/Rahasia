@@ -1,24 +1,24 @@
 {
-  "name": "soltrace-wallet-explorer",
-  "private": true,
+  "name": "meteora-wallet-scanner-v1",
   "version": "0.1.0",
+  "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc -b && vite build",
-    "preview": "vite preview"
+    "scan": "node --experimental-strip-types --env-file=.env src/index.ts",
+    "merge:wallets": "node --experimental-strip-types src/smart-lp-upsert.ts"
   },
-  "dependencies": {
-    "lucide-react": "^0.468.0",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
-    "recharts": "^2.15.0"
+  "engines": {
+    "node": ">=22.6.0"
   },
   "devDependencies": {
-    "@types/react": "^19.0.0",
-    "@types/react-dom": "^19.0.0",
-    "@vitejs/plugin-react": "^4.3.4",
-    "typescript": "^5.7.2",
-    "vite": "^6.0.5"
+    "@types/node": "^26.6.2",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.23.13"
+  },
+  "dependencies": {
+    "@solana/web3.js": "^1.99.0",
+    "bs58": "^6.0.0",
+    "playwright-core": "^1.63.0",
+    "ws": "^8.21.3"
   }
 }

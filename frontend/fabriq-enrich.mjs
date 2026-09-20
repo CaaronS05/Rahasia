@@ -1,0 +1,696 @@
+import fs from "node:fs/promises";
+import { chromium } from "playwright-core";
+
+// ======================================================
+// CONFIG
+// ======================================================
+
+const DATASET = "./public/data/wallets-14d.json";
+
+const OUTPUT = "./fabriq-enriched.json";
+const CHECKPOINT = "./fabriq-checkpoint.jsonl";
+
+const CDP_URL = "http://127.0.0.1:9222";
+
+const TIMEZONE = "Asia/Jakarta";
+
+const DELAY_MS = 500;
+const MAX_RETRIES = 3;
+
+// ======================================================
+// HELPERS
+// ======================================================
+
+const sleep = (ms) =>
+    new Promise((resolve) => setTimeout(resolve, ms));
+
+function getWalletOwner(row) {
+    return (
+        row?.owner ??
+        row?.wallet ??
+        row?.wallet_address ??
+        null
+    );
+}
+
+function extractWalletRows(raw) {
+    const candidates = [
+        raw,
+        raw?.wallets,
+        raw?.smart_lp,
+        raw?.data?.wallets,
+        raw?.data?.smart_lp,
+        raw?.data?.data,
+        raw?.data,
+    ];
+
+    return candidates.find(Array.isArray) ?? [];
+}
+
+function getCurrentMonth() {
+    const parts = new Intl.DateTimeFormat("en-US", {
+        timeZone: TIMEZONE,
+        year: "numeric",
+        month: "2-digit",
+    }).formatToParts(new Date());
+
+    const year = parts.find(
+        (part) => part.type === "year"
+    )?.value;
+
+    const month = parts.find(
+        (part) => part.type === "month"
+    )?.value;
+
+    return `${year}-${month}`;
+}
+
+function decodeJwtExpiry(token) {
+    try {
+        const payload = token.split(".")[1];
+
+        if (!payload) {
+            return 0;
+        }
+
+        const json = JSON.parse(
+            Buffer.from(payload, "base64url").toString("utf8")
+        );
+
+        if (!json.exp) {
+            return 0;
+        }
+
+        return json.exp * 1000;
+    } catch {
+        return 0;
+    }
+}
+
+// ======================================================
+// CHECKPOINT
+// ======================================================
+
+async function loadCheckpoint() {
+    const map = new Map();
+
+    try {
+        const text = await fs.readFile(
+            CHECKPOINT,
+            "utf8"
+        );
+
+        const lines = text
+            .split("\n")
+            .filter(Boolean);
+
+        for (const line of lines) {
+            try {
+                const row = JSON.parse(line);
+
+                if (row.owner) {
+                    // last checkpoint for the wallet wins
+                    map.set(row.owner, row);
+                }
+            } catch {
+                // ignore broken line
+            }
+        }
+    } catch (error) {
+        if (error.code !== "ENOENT") {
+            throw error;
+        }
+    }
+
+    return map;
+}
+
+async function saveCheckpoint(row) {
+    await fs.appendFile(
+        CHECKPOINT,
+        JSON.stringify(row) + "\n"
+    );
+}
+
+// ======================================================
+// CONNECT TO BRAVE
+// ======================================================
+
+console.log("[BOOT] Connecting to Brave...");
+
+const browser = await chromium.connectOverCDP(
+    CDP_URL
+);
+
+const context = browser.contexts()[0];
+
+if (!context) {
+    throw new Error(
+        "No Brave context found. Start Brave with remote debugging."
+    );
+}
+
+const page =
+    context.pages().find((p) =>
+        p.url().includes("fabriq.trade")
+    ) ?? null;
+
+if (!page) {
+    throw new Error(
+        "Fabriq tab not found. Open https://fabriq.trade in Brave first."
+    );
+}
+
+console.log(
+    `[BOOT] Fabriq page: ${page.url()}`
+);
+
+// ======================================================
+// AUTH
+// ======================================================
+
+let token = null;
+let tokenExpiresAt = 0;
+
+async function getToken(forceRefresh = false) {
+    if (
+        !forceRefresh &&
+        token &&
+        Date.now() < tokenExpiresAt - 10_000
+    ) {
+        return token;
+    }
+
+    const result = await page.evaluate(
+        async () => {
+            const response = await fetch(
+                "/auth/verify",
+                {
+                    credentials: "include",
+                    cache: "no-store",
+                }
+            );
+
+            return {
+                status: response.status,
+                text: await response.text(),
+            };
+        }
+    );
+
+    if (result.status !== 200) {
+        throw new Error(
+            `/auth/verify failed: ${result.status} ${result.text.slice(
+                0,
+                200
+            )}`
+        );
+    }
+
+    const json = JSON.parse(result.text);
+
+    if (!json.token) {
+        throw new Error(
+            "JWT missing from /auth/verify"
+        );
+    }
+
+    token = json.token;
+
+    tokenExpiresAt =
+        decodeJwtExpiry(token) ||
+        Date.now() + 45_000;
+
+    const secondsLeft = Math.max(
+        0,
+        Math.floor(
+            (tokenExpiresAt - Date.now()) /
+            1000
+        )
+    );
+
+    console.log(
+        `[AUTH] JWT refreshed (${secondsLeft}s)`
+    );
+
+    return token;
+}
+
+// ======================================================
+// FABRIQ API
+// ======================================================
+
+async function fabriqFetch(
+    url,
+    attempt = 1
+) {
+    try {
+        const jwt = await getToken();
+
+        const response = await fetch(url, {
+            headers: {
+                Authorization: `Bearer ${jwt}`,
+                Accept: "application/json",
+            },
+        });
+
+        // --------------------------------
+        // JWT expired/rejected
+        // --------------------------------
+
+        if (response.status === 401) {
+            if (attempt >= MAX_RETRIES) {
+                throw new Error(
+                    "401 Unauthorized after retries"
+                );
+            }
+
+            console.log(
+                "[AUTH] 401 → refreshing JWT"
+            );
+
+            await getToken(true);
+
+            return fabriqFetch(
+                url,
+                attempt + 1
+            );
+        }
+
+        // --------------------------------
+        // Rate limit
+        // --------------------------------
+
+        if (response.status === 429) {
+            if (attempt >= MAX_RETRIES) {
+                throw new Error(
+                    "429 Too Many Requests"
+                );
+            }
+
+            const retryAfter =
+                Number(
+                    response.headers.get(
+                        "retry-after"
+                    )
+                ) || 5;
+
+            console.log(
+                `[RATE LIMIT] waiting ${retryAfter}s`
+            );
+
+            await sleep(
+                retryAfter * 1000
+            );
+
+            return fabriqFetch(
+                url,
+                attempt + 1
+            );
+        }
+
+        // --------------------------------
+        // Cloudflare / forbidden
+        // --------------------------------
+
+        if (response.status === 403) {
+            throw new Error(
+                "403 Forbidden. Check the existing Fabriq browser session."
+            );
+        }
+
+        // --------------------------------
+        // Server error
+        // --------------------------------
+
+        if (response.status >= 500) {
+            if (attempt >= MAX_RETRIES) {
+                throw new Error(
+                    `Server error ${response.status}`
+                );
+            }
+
+            const delay =
+                attempt * 2000;
+
+            console.log(
+                `[RETRY] server ${response.status}, waiting ${delay}ms`
+            );
+
+            await sleep(delay);
+
+            return fabriqFetch(
+                url,
+                attempt + 1
+            );
+        }
+
+        if (!response.ok) {
+            throw new Error(
+                `${response.status} ${response.statusText}`
+            );
+        }
+
+        return await response.json();
+    } catch (error) {
+        // network error
+        if (
+            attempt < MAX_RETRIES &&
+            !String(error.message).includes(
+                "403 Forbidden"
+            )
+        ) {
+            const delay =
+                attempt * 2000;
+
+            console.log(
+                `[RETRY] ${error.message} → ${delay}ms`
+            );
+
+            await sleep(delay);
+
+            return fabriqFetch(
+                url,
+                attempt + 1
+            );
+        }
+
+        throw error;
+    }
+}
+
+// ======================================================
+// WALLET FETCH
+// ======================================================
+
+const MONTH = getCurrentMonth();
+
+async function fetchWallet(wallet) {
+    const statsUrl =
+        `https://apinew.fabriq.trade/portfolio/stats/${wallet}` +
+        `?timezone=${encodeURIComponent(
+            TIMEZONE
+        )}` +
+        `&sources=wallet&sources=hawkfi`;
+
+    const calendarUrl =
+        `https://apinew.fabriq.trade/portfolio/calendar/${wallet}` +
+        `?month=${MONTH}` +
+        `&timezone=${encodeURIComponent(
+            TIMEZONE
+        )}` +
+        `&sources=wallet&sources=hawkfi`;
+
+    const statsResponse =
+        await fabriqFetch(statsUrl);
+
+    if (
+        statsResponse?.success !== true ||
+        !statsResponse?.data
+    ) {
+        throw new Error(
+            "Invalid Fabriq stats response"
+        );
+    }
+
+    const calendarResponse =
+        await fabriqFetch(calendarUrl);
+
+    if (
+        calendarResponse?.success !== true ||
+        !calendarResponse?.data
+    ) {
+        throw new Error(
+            "Invalid Fabriq calendar response"
+        );
+    }
+
+    return {
+        owner: wallet,
+
+        status: "ok",
+
+        fabriq: {
+            fetchedAt:
+                new Date().toISOString(),
+
+            month: MONTH,
+
+            stats:
+                statsResponse.data,
+
+            calendar:
+                calendarResponse.data,
+        },
+    };
+}
+
+// ======================================================
+// LOAD LP AGENT DATASET
+// ======================================================
+
+const raw = JSON.parse(
+    await fs.readFile(
+        DATASET,
+        "utf8"
+    )
+);
+
+const rows = extractWalletRows(raw);
+
+const wallets = [
+    ...new Set(
+        rows
+            .map(getWalletOwner)
+            .filter(Boolean)
+    ),
+];
+
+if (!wallets.length) {
+    throw new Error(
+        "No wallets found in dataset"
+    );
+}
+
+console.log(
+    `\n[DATASET] ${wallets.length} unique wallets`
+);
+
+console.log(
+    `[CALENDAR] month=${MONTH}`
+);
+
+// ======================================================
+// LOAD OLD PROGRESS
+// ======================================================
+
+const checkpoint =
+    await loadCheckpoint();
+
+const alreadyDone = wallets.filter(
+    (wallet) =>
+        checkpoint.get(wallet)?.status ===
+        "ok" &&
+        checkpoint.get(wallet)?.fabriq
+            ?.stats &&
+        checkpoint.get(wallet)?.fabriq
+            ?.calendar
+).length;
+
+console.log(
+    `[RESUME] ${alreadyDone}/${wallets.length} already completed\n`
+);
+
+// ======================================================
+// SCRAPE
+// ======================================================
+
+let success = alreadyDone;
+let failed = 0;
+let skipped = 0;
+
+const startedAt = Date.now();
+
+for (
+    let i = 0;
+    i < wallets.length;
+    i++
+) {
+    const wallet = wallets[i];
+
+    const existing =
+        checkpoint.get(wallet);
+
+    if (
+        existing?.status === "ok" &&
+        existing?.fabriq?.stats &&
+        existing?.fabriq?.calendar
+    ) {
+        skipped++;
+
+        console.log(
+            `[${i + 1}/${wallets.length}] SKIP ${wallet}`
+        );
+
+        continue;
+    }
+
+    console.log(
+        `\n[${i + 1}/${wallets.length}] ${wallet}`
+    );
+
+    try {
+        const result =
+            await fetchWallet(wallet);
+
+        checkpoint.set(
+            wallet,
+            result
+        );
+
+        await saveCheckpoint(
+            result
+        );
+
+        success++;
+
+        console.log(
+            `[OK] positions=${result.fabriq.stats.totalPositions ?? "?"}` +
+            ` pnlSOL=${result.fabriq.stats.netPnlSol?.toFixed?.(4) ?? "?"}` +
+            ` days=${Object.keys(result.fabriq.calendar).length}`
+        );
+    } catch (error) {
+        failed++;
+
+        const failure = {
+            owner: wallet,
+
+            status: "error",
+
+            failedAt:
+                new Date().toISOString(),
+
+            error:
+                error.message,
+        };
+
+        checkpoint.set(
+            wallet,
+            failure
+        );
+
+        await saveCheckpoint(
+            failure
+        );
+
+        console.error(
+            `[FAIL] ${error.message}`
+        );
+    }
+
+    await sleep(DELAY_MS);
+}
+
+// ======================================================
+// BUILD FINAL OUTPUT
+// ======================================================
+
+const successfulResults = [];
+const failures = [];
+
+for (const wallet of wallets) {
+    const row =
+        checkpoint.get(wallet);
+
+    if (row?.status === "ok") {
+        successfulResults.push(row);
+    } else if (row) {
+        failures.push(row);
+    }
+}
+
+const output = {
+    generatedAt:
+        new Date().toISOString(),
+
+    sourceDataset: DATASET,
+
+    month: MONTH,
+
+    totalWallets:
+        wallets.length,
+
+    success:
+        successfulResults.length,
+
+    failed:
+        failures.length,
+
+    results:
+        successfulResults,
+
+    failures,
+};
+
+await fs.writeFile(
+    OUTPUT,
+    JSON.stringify(
+        output,
+        null,
+        2
+    )
+);
+
+// ======================================================
+// SUMMARY
+// ======================================================
+
+const runtimeSeconds =
+    (Date.now() - startedAt) /
+    1000;
+
+console.log(
+    "\n========================================"
+);
+
+console.log(
+    "FABRIQ ENRICHMENT COMPLETE"
+);
+
+console.log(
+    "========================================"
+);
+
+console.log(
+    `Total   : ${wallets.length}`
+);
+
+console.log(
+    `Success : ${successfulResults.length}`
+);
+
+console.log(
+    `Failed  : ${failures.length}`
+);
+
+console.log(
+    `Skipped : ${skipped}`
+);
+
+console.log(
+    `Runtime : ${runtimeSeconds.toFixed(
+        1
+    )} sec`
+);
+
+console.log(
+    `Output  : ${OUTPUT}`
+);
+
+console.log(
+    `Checkpoint: ${CHECKPOINT}`
+);
+
+// IMPORTANT:
+// jangan browser.close()
+// karena ini attach ke Brave milikmu.

@@ -141,6 +141,7 @@ export function WalletDetailPanel({ wallet }: { wallet?: Wallet }) {
               </div>
               <Activity size={16} />
             </div>
+
             <div className="activity-table-wrap">
               <table className="activity-table">
                 <thead>
@@ -153,6 +154,7 @@ export function WalletDetailPanel({ wallet }: { wallet?: Wallet }) {
                     <th>Pools</th>
                   </tr>
                 </thead>
+
                 <tbody>
                   {dailyRows.map((p) => (
                     <tr key={p.close_day}>
@@ -174,10 +176,13 @@ export function WalletDetailPanel({ wallet }: { wallet?: Wallet }) {
       ) : (
         <div className="tab-placeholder">
           <Layers3 size={25} />
-          <strong>{tab}</strong>
+
+          {/* 0123 adalah marker visual bahwa section ini BELUM punya real data. */}
+          <strong>0123 · DUMMY</strong>
+
           <span>
-            The 14-day Smart LP snapshot does not contain position/trade-level records for this tab yet.
-            Keep this tab in the UI; connect it later to the Meteora position/event pipeline.
+            {tab} belum terhubung ke data position/trade-level.
+            Jangan gunakan section ini untuk analisis sampai pipeline datanya disambungkan.
           </span>
         </div>
       )}
