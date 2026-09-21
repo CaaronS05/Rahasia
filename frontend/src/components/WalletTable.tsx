@@ -324,23 +324,35 @@ export function WalletTable({
                     </td>
                   ) : null}
 
-                  {visible.win ? (
-                    <td>
-                      <div className="win-rate-cell">
-                        <span>{fmt(wallet.win_rate_native * 100, 1)}%</span>
-                        <div className="win-rate-bar">
-                          <span
-                            style={{
-                              width: `${Math.max(
-                                0,
-                                Math.min(100, wallet.win_rate_native * 100),
-                              )}%`,
-                            }}
-                          />
+                  {visible.win ? (() => {
+                    const positionWin =
+                      wallet.fabriq?.stats?.positionWinUsd ??
+                      wallet.fabriq?.stats?.positionWinSol;
+
+                    const winRate =
+                      Number(positionWin?.percentage) || 0;
+
+                    return (
+                      <td>
+                        <div className="win-rate-cell">
+                          <span>
+                            {fmt(winRate, 1)}%
+                          </span>
+
+                          <div className="win-rate-bar">
+                            <span
+                              style={{
+                                width: `${Math.max(
+                                  0,
+                                  Math.min(100, winRate),
+                                )}%`,
+                              }}
+                            />
+                          </div>
                         </div>
-                      </div>
-                    </td>
-                  ) : null}
+                      </td>
+                    );
+                  })() : null}
 
                   {visible.winDays ? (
                     <td className="day-stat win-day-stat">

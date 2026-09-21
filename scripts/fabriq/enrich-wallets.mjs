@@ -58,14 +58,38 @@ function extractWalletRows(raw) {
     return candidates.find(Array.isArray) ?? [];
 }
 
+function hasRequiredCalendars(row) {
+    const calendars =
+        row?.fabriq?.calendars;
+
+    if (
+        !calendars ||
+        typeof calendars !== "object"
+    ) {
+        return false;
+    }
+
+    return CALENDAR_MONTHS.every(
+        (month) =>
+            calendars[month] &&
+            typeof calendars[month] === "object"
+    );
+}
+
 function isFabriqFresh(row) {
-    const fetchedAt = row?.fabriq?.fetchedAt;
+    const fetchedAt =
+        row?.fabriq?.fetchedAt;
 
     if (!fetchedAt) {
         return false;
     }
 
-    const timestamp = Date.parse(fetchedAt);
+    if (!hasRequiredCalendars(row)) {
+        return false;
+    }
+
+    const timestamp =
+        Date.parse(fetchedAt);
 
     if (!Number.isFinite(timestamp)) {
         return false;
@@ -175,7 +199,10 @@ async function saveCheckpoint(row) {
 console.log("[BOOT] Connecting to Brave...");
 
 const browser = await chromium.connectOverCDP(
-    CDP_URL
+    CDP_URL,
+    {
+        timeout: 120_000,
+    }
 );
 
 const context = browser.contexts()[0];
@@ -419,7 +446,37 @@ async function fabriqFetch(
 // WALLET FETCH
 // ======================================================
 
-const MONTH = getCurrentMonth();
+const CURRENT_MONTH = getCurrentMonth();
+
+function getPreviousMonth(month) {
+    const [year, monthNumber] =
+        month.split("-").map(Number);
+
+    const date = new Date(
+        Date.UTC(
+            year,
+            monthNumber - 2,
+            1,
+        )
+    );
+
+    return [
+        date.getUTCFullYear(),
+        String(
+            date.getUTCMonth() + 1
+        ).padStart(2, "0"),
+    ].join("-");
+}
+
+const PREVIOUS_MONTH =
+    getPreviousMonth(
+        CURRENT_MONTH
+    );
+
+const CALENDAR_MONTHS = [
+    PREVIOUS_MONTH,
+    CURRENT_MONTH,
+];
 
 async function fetchWallet(wallet) {
     const statsUrl =
@@ -449,16 +506,42 @@ async function fetchWallet(wallet) {
         );
     }
 
-    const calendarResponse =
-        await fabriqFetch(calendarUrl);
+    const calendars = {};
 
-    if (
-        calendarResponse?.success !== true ||
-        !calendarResponse?.data
-    ) {
-        throw new Error(
-            "Invalid Fabriq calendar response"
-        );
+    for (const month of CALENDAR_MONTHS) {
+        const calendarUrl =
+            `https://apinew.fabriq.trade/portfolio/calendar/${wallet}` +
+            `?month=${month}` +
+            `&timezone=${encodeURIComponent(
+                TIMEZONE
+            )}` +
+            `&sources=wallet&sources=hawkfi`;
+
+        const calendarResponse =
+            await fabriqFetch(
+                calendarUrl
+            );
+
+        if (
+            calendarResponse?.success !== true ||
+            !calendarResponse?.data
+        ) {
+            throw new Error(
+                `Invalid Fabriq calendar response for ${month}`
+            );
+        }
+
+        calendars[month] =
+            Object.fromEntries(
+                Object.entries(
+                    calendarResponse.data
+                ).filter(
+                    ([date]) =>
+                        date.startsWith(
+                            `${month}-`
+                        )
+                )
+            );
     }
 
     return {
@@ -470,13 +553,18 @@ async function fetchWallet(wallet) {
             fetchedAt:
                 new Date().toISOString(),
 
-            month: MONTH,
-
             stats:
                 statsResponse.data,
 
+            calendars,
+
+            // Temporary backward compatibility
+            // untuk Portfolio UI lama.
+            month:
+                CURRENT_MONTH,
+
             calendar:
-                calendarResponse.data,
+                calendars[CURRENT_MONTH],
         },
     };
 }
@@ -547,7 +635,7 @@ console.log(
 );
 
 console.log(
-    `[CALENDAR] month=${MONTH}`
+    `[CALENDAR] months=${CALENDAR_MONTHS.join(", ")}`
 );
 
 // ======================================================
@@ -565,7 +653,7 @@ const alreadyDone =
         return (
             row?.status === "ok" &&
             row?.fabriq?.stats &&
-            row?.fabriq?.calendar &&
+            hasRequiredCalendars(row) &&
             isFabriqFresh(row)
         );
     }).length;
@@ -597,7 +685,7 @@ for (
     if (
         existing?.status === "ok" &&
         existing?.fabriq?.stats &&
-        existing?.fabriq?.calendar &&
+        hasRequiredCalendars(existing) &&
         isFabriqFresh(existing)
     ) {
         skipped++;
@@ -631,7 +719,13 @@ for (
         console.log(
             `[OK] positions=${result.fabriq.stats.totalPositions ?? "?"}` +
             ` pnlSOL=${result.fabriq.stats.netPnlSol?.toFixed?.(4) ?? "?"}` +
-            ` days=${Object.keys(result.fabriq.calendar).length}`
+            ` days=${Object.values(result.fabriq.calendars)
+                .reduce(
+                    (total, calendar) =>
+                        total +
+                        Object.keys(calendar).length,
+                    0
+                )}`
         );
     } catch (error) {
         failed++;

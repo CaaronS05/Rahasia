@@ -164,8 +164,15 @@ export default function App() {
           return wallet.owner;
         case "pnl7":
           return wallet.total_pnl_native_7d;
-        case "win":
-          return wallet.win_rate_native;
+        case "win": {
+          const positionWin =
+            wallet.fabriq?.stats?.positionWinUsd ??
+            wallet.fabriq?.stats?.positionWinSol;
+
+          return Number(
+            positionWin?.percentage ?? 0,
+          );
+        }
         case "winDays": {
           const dayStats =
             wallet.fabriq?.stats?.dayWinUsd ??

@@ -26,6 +26,53 @@ function isObject(
     );
 }
 
+function normalizeCalendars(
+    fabriq: JsonObject,
+): JsonObject {
+    const calendars: JsonObject = {};
+
+    // Schema baru
+    if (isObject(fabriq.calendars)) {
+        for (
+            const [month, calendar]
+            of Object.entries(
+                fabriq.calendars,
+            )
+        ) {
+            if (isObject(calendar)) {
+                calendars[month] =
+                    calendar;
+            }
+        }
+    }
+
+    // Migrasi schema lama:
+    //
+    // month: "2026-09"
+    // calendar: {...}
+    if (
+        typeof fabriq.month ===
+        "string" &&
+        isObject(fabriq.calendar)
+    ) {
+        calendars[fabriq.month] = {
+            ...(isObject(
+                calendars[
+                fabriq.month
+                ],
+            )
+                ? calendars[
+                fabriq.month
+                ]
+                : {}),
+
+            ...fabriq.calendar,
+        };
+    }
+
+    return calendars;
+}
+
 async function loadJson(
     filePath: string,
 ): Promise<any> {
@@ -106,15 +153,52 @@ async function main() {
 
             matched++;
 
+            const existingFabriq =
+                isObject(wallet.fabriq)
+                    ? wallet.fabriq
+                    : {};
+
+            const existingCalendars =
+                normalizeCalendars(
+                    existingFabriq,
+                );
+
+            const incomingCalendars =
+                normalizeCalendars(
+                    fabriq,
+                );
+
+            const calendars: JsonObject = {
+                ...existingCalendars,
+            };
+
+            for (
+                const [month, calendar]
+                of Object.entries(
+                    incomingCalendars,
+                )
+            ) {
+                calendars[month] = {
+                    ...(isObject(
+                        calendars[month],
+                    )
+                        ? calendars[month]
+                        : {}),
+
+                    ...(isObject(calendar)
+                        ? calendar
+                        : {}),
+                };
+            }
+
             return {
                 ...wallet,
 
                 fabriq: {
-                    ...(isObject(wallet.fabriq)
-                        ? wallet.fabriq
-                        : {}),
-
+                    ...existingFabriq,
                     ...fabriq,
+
+                    calendars,
                 },
             };
         },

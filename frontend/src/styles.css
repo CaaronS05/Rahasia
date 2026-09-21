@@ -511,6 +511,25 @@ button {
   font-size: 10px;
 }
 
+.filter-control input[type="date"] {
+  cursor: pointer;
+  color-scheme: dark;
+}
+
+.filter-control input[type="date"]::-webkit-calendar-picker-indicator {
+  cursor: pointer;
+  opacity: 1;
+  filter: brightness(0) invert(1);
+  transition:
+    opacity 140ms ease,
+    transform 140ms ease;
+}
+
+.filter-control input[type="date"]::-webkit-calendar-picker-indicator:hover {
+  opacity: 1;
+  transform: scale(1.08);
+}
+
 .filter-actions {
   grid-column: 7;
   display: flex;
@@ -1074,14 +1093,21 @@ button {
   position: absolute;
   right: 17px;
   bottom: 21px;
+
   width: 76px;
   height: 39px;
+
   border-radius: 76px 76px 0 0;
   overflow: hidden;
-  background: conic-gradient(from 270deg at 50% 100%,
-      var(--green) 0 var(--gauge),
-      #232420 var(--gauge) 50%,
-      transparent 50%);
+
+  background:
+    conic-gradient(from 270deg at 50% 100%,
+
+      var(--green) 0deg var(--gauge-angle),
+
+      var(--red) var(--gauge-angle) 180deg,
+
+      transparent 180deg 360deg);
 }
 
 .mini-gauge::after {
@@ -1099,10 +1125,16 @@ button {
   position: absolute;
   right: 20px;
   bottom: 19px;
+
   width: 53px;
   height: 53px;
+
   border-radius: 50%;
-  background: conic-gradient(var(--green) 0 var(--gauge), #242521 var(--gauge));
+
+  background:
+    conic-gradient(var(--green) 0deg var(--gauge-angle),
+
+      var(--red) var(--gauge-angle) 360deg);
 }
 
 .ring-gauge::after {
@@ -1115,21 +1147,23 @@ button {
 
 .avg-win-loss-bar {
   position: absolute;
+
   right: 17px;
   left: 155px;
   top: 64px;
-  height: 7px;
-  border-radius: 99px;
-  background: #292a26;
-  overflow: hidden;
-}
 
-.avg-win-loss-bar span {
-  display: block;
-  width: 96%;
-  height: 100%;
-  border-radius: inherit;
-  background: var(--green);
+  height: 7px;
+
+  border-radius: 99px;
+
+  background:
+    linear-gradient(to right,
+
+      var(--green) 0% var(--win-share),
+
+      var(--red) var(--win-share) 100%);
+
+  overflow: hidden;
 }
 
 .portfolio-middle-grid {

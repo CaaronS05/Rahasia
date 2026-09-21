@@ -66,6 +66,48 @@ function shortWallet(address: string) {
   return `${address.slice(0, 6)}...${address.slice(-5)}`;
 }
 
+function clampPercent(value: unknown) {
+  const parsed = Number(value);
+
+  if (!Number.isFinite(parsed)) {
+    return 0;
+  }
+
+  return Math.max(
+    0,
+    Math.min(100, parsed),
+  );
+}
+
+function ratioShare(
+  positiveValue: unknown,
+  negativeValue: unknown,
+) {
+  const positive =
+    Math.max(
+      0,
+      Number(positiveValue) || 0,
+    );
+
+  const negative =
+    Math.abs(
+      Number(negativeValue) || 0,
+    );
+
+  const total =
+    positive + negative;
+
+  if (total === 0) {
+    return 0;
+  }
+
+  return (
+    positive /
+    total *
+    100
+  );
+}
+
 function freshness(value?: string) {
   if (!value) return "No Fabriq snapshot";
   const diff = Date.now() - new Date(value).getTime();
@@ -95,10 +137,36 @@ export function PortfolioPage({
   const calendar = enrichedWallet?.fabriq?.calendar;
 
   const metricData = useMemo(() => {
-    const positionWin = stats.positionWinUsd ?? stats.positionWinSol ?? {};
-    const profitFactor = stats.profitFactorUsd ?? stats.profitFactorSol ?? {};
-    const dayWin = stats.dayWinUsd ?? stats.dayWinSol ?? {};
-    const avgWinLoss = stats.avgWinLoss ?? {};
+    const positionWin =
+      stats.positionWinUsd ??
+      stats.positionWinSol ??
+      {};
+
+    const profitFactor =
+      stats.profitFactorUsd ??
+      stats.profitFactorSol ??
+      {};
+
+    const dayWin =
+      stats.dayWinUsd ??
+      stats.dayWinSol ??
+      {};
+
+    const avgWinLoss =
+      stats.avgWinLoss ??
+      {};
+
+    const profitShare =
+      ratioShare(
+        profitFactor.grossProfit,
+        profitFactor.grossLoss,
+      );
+
+    const avgWinShare =
+      ratioShare(
+        avgWinLoss.avgWinUsd,
+        avgWinLoss.avgLossUsd,
+      );
 
     return {
       netPnl: stats.netPnlUsd,
@@ -106,6 +174,9 @@ export function PortfolioPage({
       profitFactor,
       dayWin,
       avgWinLoss,
+
+      profitShare,
+      avgWinShare,
     };
   }, [stats]);
 
@@ -182,9 +253,8 @@ export function PortfolioPage({
                     <Copy size={13} />
                   </button>
                   <button
-                    className={`portfolio-track-button ${
-                      isTracked ? "tracked" : ""
-                    }`}
+                    className={`portfolio-track-button ${isTracked ? "tracked" : ""
+                      }`}
                     onClick={() => onToggleTrack(wallet.owner)}
                   >
                     <Star
@@ -251,10 +321,11 @@ export function PortfolioPage({
                     className="mini-gauge"
                     style={
                       {
-                        "--gauge": `${Math.max(
-                          0,
-                          Math.min(100, Number(metricData.positionWin.percentage) || 0),
-                        )}%`,
+                        "--gauge-angle":
+                          `${clampPercent(
+                            metricData.positionWin.percentage,
+                          ) * 1.8
+                          }deg`,
                       } as React.CSSProperties
                     }
                   />
@@ -276,13 +347,10 @@ export function PortfolioPage({
                     className="ring-gauge"
                     style={
                       {
-                        "--gauge": `${Math.max(
-                          3,
-                          Math.min(
-                            100,
-                            Number(metricData.profitFactor.ratio) > 0 ? 86 : 4,
-                          ),
-                        )}%`,
+                        "--gauge-angle":
+                          `${metricData.profitShare *
+                          3.6
+                          }deg`,
                       } as React.CSSProperties
                     }
                   />
@@ -299,10 +367,11 @@ export function PortfolioPage({
                     className="mini-gauge"
                     style={
                       {
-                        "--gauge": `${Math.max(
-                          0,
-                          Math.min(100, Number(metricData.dayWin.percentage) || 0),
-                        )}%`,
+                        "--gauge-angle":
+                          `${clampPercent(
+                            metricData.dayWin.percentage,
+                          ) * 1.8
+                          }deg`,
                       } as React.CSSProperties
                     }
                   />
@@ -311,9 +380,15 @@ export function PortfolioPage({
                 <article className="portfolio-metric">
                   <span>Avg Win/Loss Position ⓘ</span>
                   <strong>{number(metricData.avgWinLoss.ratioUsd, 2)}</strong>
-                  <div className="avg-win-loss-bar">
-                    <span />
-                  </div>
+                  <div
+                    className="avg-win-loss-bar"
+                    style={
+                      {
+                        "--win-share":
+                          `${metricData.avgWinShare}%`,
+                      } as React.CSSProperties
+                    }
+                  />
                   <small>
                     <span className="positive">
                       {usd(metricData.avgWinLoss.avgWinUsd)}
