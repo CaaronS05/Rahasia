@@ -1,108 +1,113 @@
-import { CalendarDays, RotateCcw, SlidersHorizontal } from "lucide-react";
+import { SlidersHorizontal } from "lucide-react";
+import type { Dispatch, SetStateAction } from "react";
 
 export type FilterState = {
   search: string;
+  firstActivityFrom: string;
+  firstActivityTo: string;
   minPnl: string;
   minLp: string;
   minWinRate: string;
   minPools: string;
-  firstActivityFrom: string;
 };
 
 export const defaultFilters: FilterState = {
   search: "",
+  firstActivityFrom: "2026-09-06",
+  firstActivityTo: "",
   minPnl: "",
   minLp: "",
   minWinRate: "",
   minPools: "",
-  firstActivityFrom: "2026-09-06",
 };
 
-export function Filters({
-  draft,
-  setDraft,
-  onApply,
-  onReset,
-}: {
+type Props = {
   draft: FilterState;
-  setDraft: (next: FilterState) => void;
+  setDraft: Dispatch<SetStateAction<FilterState>>;
   onApply: () => void;
-  onReset: () => void;
-}) {
-  const set = (key: keyof FilterState, value: string) =>
-    setDraft({ ...draft, [key]: value });
+};
+
+export function Filters({ draft, setDraft, onApply }: Props) {
+  function set<K extends keyof FilterState>(key: K, value: FilterState[K]) {
+    setDraft((current) => ({ ...current, [key]: value }));
+  }
 
   return (
-    <div className="filters-card">
-      <div className="filter-field wide">
-        <label>Wallet search</label>
-        <input
-          value={draft.search}
-          onChange={(e) => set("search", e.target.value)}
-          placeholder="Wallet address..."
-        />
-      </div>
-
-      <div className="filter-field">
-        <label>First Activity</label>
-        <div className="input-icon">
-          <CalendarDays size={14} />
-          <input
-            type="date"
-            value={draft.firstActivityFrom}
-            onChange={(e) => set("firstActivityFrom", e.target.value)}
-          />
-        </div>
-      </div>
-
-      <div className="filter-field">
-        <label>Min PnL 7D (SOL)</label>
-        <input
-          inputMode="decimal"
-          value={draft.minPnl}
-          onChange={(e) => set("minPnl", e.target.value)}
-          placeholder="Any"
-        />
-      </div>
-
-      <div className="filter-field">
-        <label>Min LP 7D</label>
-        <input
-          inputMode="numeric"
-          value={draft.minLp}
-          onChange={(e) => set("minLp", e.target.value)}
-          placeholder="Any"
-        />
-      </div>
-
-      <div className="filter-field">
-        <label>Min Win Rate (%)</label>
-        <input
-          inputMode="decimal"
-          value={draft.minWinRate}
-          onChange={(e) => set("minWinRate", e.target.value)}
-          placeholder="Any"
-        />
-      </div>
-
-      <div className="filter-field">
-        <label>Min Pools</label>
-        <input
-          inputMode="numeric"
-          value={draft.minPools}
-          onChange={(e) => set("minPools", e.target.value)}
-          placeholder="Any"
-        />
-      </div>
-
-      <button className="btn secondary" onClick={onReset}>
-        <RotateCcw size={14} />
-        Reset
-      </button>
-      <button className="btn primary" onClick={onApply}>
+    <form
+      className="filters-panel"
+      onSubmit={(event) => {
+        event.preventDefault();
+        onApply();
+      }}
+    >
+      <div className="filters-label">
         <SlidersHorizontal size={14} />
-        Apply
-      </button>
-    </div>
+        <strong>Screening filters</strong>
+      </div>
+
+      <label className="filter-control">
+        <span>FIRST ACTIVITY START</span>
+        <input
+          type="date"
+          value={draft.firstActivityFrom}
+          onChange={(event) => set("firstActivityFrom", event.target.value)}
+        />
+      </label>
+
+      <label className="filter-control">
+        <span>FIRST ACTIVITY END</span>
+        <input
+          type="date"
+          value={draft.firstActivityTo}
+          onChange={(event) => set("firstActivityTo", event.target.value)}
+        />
+      </label>
+
+      <label className="filter-control">
+        <span>MIN 7D PNL (SOL)</span>
+        <input
+          inputMode="decimal"
+          placeholder="Any"
+          value={draft.minPnl}
+          onChange={(event) => set("minPnl", event.target.value)}
+        />
+      </label>
+
+      <label className="filter-control">
+        <span>MIN LP 7D</span>
+        <input
+          inputMode="numeric"
+          placeholder="Any"
+          value={draft.minLp}
+          onChange={(event) => set("minLp", event.target.value)}
+        />
+      </label>
+
+      <label className="filter-control">
+        <span>MIN WIN RATE (%)</span>
+        <input
+          inputMode="decimal"
+          placeholder="Any"
+          value={draft.minWinRate}
+          onChange={(event) => set("minWinRate", event.target.value)}
+        />
+      </label>
+
+      <label className="filter-control">
+        <span>MIN POOLS</span>
+        <input
+          inputMode="numeric"
+          placeholder="Any"
+          value={draft.minPools}
+          onChange={(event) => set("minPools", event.target.value)}
+        />
+      </label>
+
+      <div className="filter-actions">
+        <button className="primary-button" type="submit">
+          Apply
+        </button>
+      </div>
+    </form>
   );
 }

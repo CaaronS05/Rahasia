@@ -10,49 +10,88 @@ import {
   WalletCards,
 } from "lucide-react";
 
-const nav = [
-  { label: "Overview", icon: CircleGauge },
-  { label: "Wallet Explorer", icon: WalletCards, active: true },
-  { label: "Pool Analyzer", icon: Coins },
-  { label: "Watchlist", icon: Star },
-  { label: "Analytics", icon: ChartNoAxesCombined },
+type Props = {
+  activePage: "explore" | "track" | "portfolio";
+  onNavigate: (page: "explore" | "track" | "portfolio") => void;
+};
+
+const discover = [
+  { label: "Wallet Explorer", icon: WalletCards, page: "explore" as const },
+  { label: "Pool Explorer", icon: Coins },
+  { label: "Token Insights", icon: Activity },
+  { label: "Trends", icon: ChartNoAxesCombined },
+  { label: "Opportunities", icon: Star },
+];
+
+const watchlist = [
+  { label: "My Wallets", icon: WalletCards },
+  { label: "Tracked Wallets", icon: ShieldCheck, page: "track" as const },
+];
+
+const tools = [
+  { label: "Screener", icon: CircleGauge },
   { label: "Alerts", icon: Bell },
   { label: "Settings", icon: Settings },
 ];
 
-export function Sidebar() {
+export function Sidebar({ activePage, onNavigate }: Props) {
   return (
     <aside className="sidebar">
       <div className="brand">
-        <div className="brand-mark"><ShieldCheck size={19} /></div>
+        <div className="brand-mark">
+          <ShieldCheck size={18} />
+        </div>
         <div>
-          <div className="brand-name">SOLTRACE</div>
-          <div className="brand-sub">LP ANALYTICS</div>
+          <div className="brand-name">LP SCANNER</div>
+          <div className="brand-sub">DLMM INTELLIGENCE</div>
         </div>
       </div>
 
-      <nav className="nav-list">
-        {nav.map(({ label, icon: Icon, active }) => (
-          <button key={label} className={`nav-item ${active ? "active" : ""}`}>
-            <Icon size={17} strokeWidth={1.8} />
+      <div className="sidebar-section">
+        <span className="sidebar-heading">DISCOVER</span>
+        {discover.map(({ label, icon: Icon, page }) => (
+          <button
+            key={label}
+            className={`nav-item ${page === "explore" && activePage === "explore" ? "active" : ""}`}
+            onClick={() => page && onNavigate(page)}
+          >
+            <Icon size={16} strokeWidth={1.7} />
             <span>{label}</span>
           </button>
         ))}
-      </nav>
+      </div>
+
+      <div className="sidebar-section">
+        <span className="sidebar-heading">WATCHLIST</span>
+        {watchlist.map(({ label, icon: Icon, page }) => (
+          <button
+            key={label}
+            className={`nav-item ${page === "track" && activePage === "track" ? "active" : ""}`}
+            onClick={() => page && onNavigate(page)}
+          >
+            <Icon size={16} strokeWidth={1.7} />
+            <span>{label}</span>
+          </button>
+        ))}
+      </div>
+
+      <div className="sidebar-section">
+        <span className="sidebar-heading">TOOLS</span>
+        {tools.map(({ label, icon: Icon }) => (
+          <button key={label} className="nav-item">
+            <Icon size={16} strokeWidth={1.7} />
+            <span>{label}</span>
+          </button>
+        ))}
+      </div>
 
       <div className="sidebar-spacer" />
 
-      <div className="sidebar-promo">
-        <Activity size={22} />
-        <strong>Track smarter.</strong>
-        <span>Explore LP behavior before building automated screening.</span>
-      </div>
-
-      <div className="profile-row">
-        <div className="avatar">A</div>
+      <div className="workspace-status">
+        <span className="status-dot" />
         <div>
-          <strong>Aaron C.</strong>
-          <span>Local workspace</span>
+          <strong>Scanner workspace</strong>
+          <small>Local data mode</small>
         </div>
       </div>
     </aside>

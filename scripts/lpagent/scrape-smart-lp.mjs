@@ -9,8 +9,15 @@ import { chromium } from "playwright-core";
 const CDP_URL = "http://127.0.0.1:9222";
 const API_MATCH = "/api/v1/smart-lp";
 
-const OUTPUT = "./lpagent-smartlp-latest.json";
-const CHECKPOINT = "./lpagent-smartlp-checkpoint.jsonl";
+const OUTPUT = new URL(
+    "../../data/raw/lpagent/smart-lp-latest.json",
+    import.meta.url
+);
+
+const CHECKPOINT = new URL(
+    "../../data/checkpoints/lpagent.jsonl",
+    import.meta.url
+);
 
 // Sebelumnya request terlalu rapat.
 // Sekarang sekitar 1.5 - 2 detik antar page.
@@ -663,10 +670,62 @@ console.log(
 // LOAD CHECKPOINT
 // ======================================================
 
-const checkpoint =
+let checkpoint =
     await loadCheckpoint(
         filterSignature
     );
+
+function isCheckpointComplete(
+    checkpoint
+) {
+    const totalPages =
+        checkpoint.totalPages;
+
+    if (
+        !Number.isInteger(totalPages) ||
+        totalPages <= 0
+    ) {
+        return false;
+    }
+
+    for (
+        let page = 1;
+        page <= totalPages;
+        page++
+    ) {
+        if (
+            !checkpoint.pages.has(page)
+        ) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+if (
+    isCheckpointComplete(
+        checkpoint
+    )
+) {
+    console.log(
+        "[CHECKPOINT] Previous scrape already complete"
+    );
+
+    console.log(
+        "[CHECKPOINT] Starting fresh from page 1"
+    );
+
+    await fs.rm(
+        CHECKPOINT,
+        { force: true }
+    );
+
+    checkpoint = {
+        pages: new Map(),
+        totalPages: null,
+    };
+}
 
 let totalPages =
     checkpoint.totalPages;
@@ -938,6 +997,16 @@ await fs.writeFile(
     )
 );
 
+// Checkpoint hanya diperlukan untuk resume
+// ketika scrape belum selesai.
+//
+// Setelah output final berhasil ditulis,
+// scrape berikutnya harus mengambil data fresh.
+await fs.rm(
+    CHECKPOINT,
+    { force: true }
+);
+
 // ======================================================
 // SUMMARY
 // ======================================================
@@ -954,8 +1023,10 @@ Output:
 ${OUTPUT}
 
 Checkpoint:
-${CHECKPOINT}
+cleared after successful scrape
 `);
+
+process.exit(0);
 
 // Jangan browser.close()
 // karena browser merupakan Brave milikmu.

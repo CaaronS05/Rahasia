@@ -25,6 +25,40 @@ export const duration = (hours: number) => {
   return `${fmt(hours / 24, 1)}d`;
 };
 
+export const walletAge = (firstActivity: string) => {
+  const first = new Date(firstActivity).getTime();
+
+  if (!Number.isFinite(first)) return "—";
+
+  const diffMs = Date.now() - first;
+  const days = Math.max(
+    0,
+    Math.floor(diffMs / (1000 * 60 * 60 * 24))
+  );
+
+  if (days < 1) {
+    const hours = Math.floor(
+      diffMs / (1000 * 60 * 60)
+    );
+
+    return `${Math.max(1, hours)}h`;
+  }
+
+  if (days < 30) {
+    return `${days}d`;
+  }
+
+  if (days < 365) {
+    const months = days / 30;
+
+    return `${months.toFixed(1)}mo`;
+  }
+
+  const years = days / 365;
+
+  return `${years.toFixed(1)}y`;
+};
+
 export const timeAgo = (iso: string) => {
   const diffMs = Date.now() - new Date(iso).getTime();
   const minutes = Math.max(0, Math.floor(diffMs / 60000));

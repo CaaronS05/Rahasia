@@ -4,7 +4,14 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "scan": "node --experimental-strip-types --env-file=.env src/index.ts"
+    "legacy:scan": "node --experimental-strip-types --env-file=.env archive/old-meteora-scanner/src/index.ts",
+    "scrape:lpagent": "node scripts/lpagent/scrape-smart-lp.mjs",
+    "refresh:lpagent": "node scripts/lpagent/scrape-smart-lp.mjs && node --experimental-strip-types scripts/pipeline/merge-wallets.ts data/raw/lpagent/smart-lp-latest.json",
+    "merge:wallets": "node --experimental-strip-types scripts/pipeline/merge-wallets.ts",
+    "enrich:fabriq": "node scripts/fabriq/enrich-wallets.mjs",
+    "merge:fabriq": "node --experimental-strip-types scripts/pipeline/merge-fabriq.ts",
+    "publish:wallets": "node --experimental-strip-types scripts/pipeline/publish-wallets.ts",
+    "pipeline": "node scripts/pipeline/run-pipeline.mjs"
   },
   "engines": {
     "node": ">=22.6.0"

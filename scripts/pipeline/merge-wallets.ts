@@ -22,7 +22,9 @@ type MasterFile = {
   wallets: SmartLpWallet[];
 };
 
-const DEFAULT_MASTER = path.resolve("frontend/public/data/wallets-14d.json");
+const DEFAULT_MASTER = path.resolve(
+  "data/master/wallets-master.json"
+);
 
 function usage(): never {
   console.error(`
@@ -30,7 +32,7 @@ Usage:
   npm run merge:wallets -- <new-scan.json> [master.json]
 
 Example:
-  npm run merge:wallets -- ./output/lpagent-smart-lp-latest.json
+  npm run merge:wallets -- ./data/raw/lpagent/smart-lp-latest.json
 `);
   process.exit(1);
 }
@@ -144,6 +146,10 @@ function mergeWallet(
 
     // owner adalah primary key.
     owner: existing.owner,
+
+    fabriq:
+      incoming.fabriq ??
+      existing.fabriq,
 
     // Jangan kehilangan tanggal historis paling awal.
     first_activity: earliestIso(

@@ -5,10 +5,20 @@ import { chromium } from "playwright-core";
 // CONFIG
 // ======================================================
 
-const DATASET = "./public/data/wallets-14d.json";
+const DATASET = new URL(
+    "../../data/master/wallets-master.json",
+    import.meta.url
+);
 
-const OUTPUT = "./fabriq-enriched.json";
-const CHECKPOINT = "./fabriq-checkpoint.jsonl";
+const OUTPUT = new URL(
+    "../../data/raw/fabriq/fabriq-enriched.json",
+    import.meta.url
+);
+
+const CHECKPOINT = new URL(
+    "../../data/checkpoints/fabriq.jsonl",
+    import.meta.url
+);
 
 const CDP_URL = "http://127.0.0.1:9222";
 
@@ -16,6 +26,7 @@ const TIMEZONE = "Asia/Jakarta";
 
 const DELAY_MS = 500;
 const MAX_RETRIES = 3;
+const STALE_AFTER_HOURS = 24;
 
 // ======================================================
 // HELPERS
@@ -45,6 +56,31 @@ function extractWalletRows(raw) {
     ];
 
     return candidates.find(Array.isArray) ?? [];
+}
+
+function isFabriqFresh(row) {
+    const fetchedAt = row?.fabriq?.fetchedAt;
+
+    if (!fetchedAt) {
+        return false;
+    }
+
+    const timestamp = Date.parse(fetchedAt);
+
+    if (!Number.isFinite(timestamp)) {
+        return false;
+    }
+
+    const ageMs =
+        Date.now() - timestamp;
+
+    const staleAfterMs =
+        STALE_AFTER_HOURS *
+        60 *
+        60 *
+        1000;
+
+    return ageMs < staleAfterMs;
 }
 
 function getCurrentMonth() {
@@ -456,9 +492,10 @@ const raw = JSON.parse(
     )
 );
 
-const rows = extractWalletRows(raw);
+const rows =
+    extractWalletRows(raw);
 
-const wallets = [
+const allWallets = [
     ...new Set(
         rows
             .map(getWalletOwner)
@@ -466,14 +503,47 @@ const wallets = [
     ),
 ];
 
-if (!wallets.length) {
+if (!allWallets.length) {
     throw new Error(
         "No wallets found in dataset"
     );
 }
 
+const walletsNeedingRefresh =
+    rows
+        .filter((row) => {
+            const owner =
+                getWalletOwner(row);
+
+            if (!owner) {
+                return false;
+            }
+
+            return !isFabriqFresh(row);
+        })
+        .map(getWalletOwner)
+        .filter(Boolean);
+
+const wallets = [
+    ...new Set(
+        walletsNeedingRefresh
+    ),
+];
+
+const freshWallets =
+    allWallets.length -
+    wallets.length;
+
 console.log(
-    `\n[DATASET] ${wallets.length} unique wallets`
+    `\n[DATASET] ${allWallets.length} total wallets`
+);
+
+console.log(
+    `[FRESH] ${freshWallets} wallets`
+);
+
+console.log(
+    `[STALE/MISSING] ${wallets.length} wallets need Fabriq`
 );
 
 console.log(
@@ -487,15 +557,18 @@ console.log(
 const checkpoint =
     await loadCheckpoint();
 
-const alreadyDone = wallets.filter(
-    (wallet) =>
-        checkpoint.get(wallet)?.status ===
-        "ok" &&
-        checkpoint.get(wallet)?.fabriq
-            ?.stats &&
-        checkpoint.get(wallet)?.fabriq
-            ?.calendar
-).length;
+const alreadyDone =
+    wallets.filter((wallet) => {
+        const row =
+            checkpoint.get(wallet);
+
+        return (
+            row?.status === "ok" &&
+            row?.fabriq?.stats &&
+            row?.fabriq?.calendar &&
+            isFabriqFresh(row)
+        );
+    }).length;
 
 console.log(
     `[RESUME] ${alreadyDone}/${wallets.length} already completed\n`
@@ -524,7 +597,8 @@ for (
     if (
         existing?.status === "ok" &&
         existing?.fabriq?.stats &&
-        existing?.fabriq?.calendar
+        existing?.fabriq?.calendar &&
+        isFabriqFresh(existing)
     ) {
         skipped++;
 
@@ -690,6 +764,8 @@ console.log(
 console.log(
     `Checkpoint: ${CHECKPOINT}`
 );
+
+process.exit(0);
 
 // IMPORTANT:
 // jangan browser.close()

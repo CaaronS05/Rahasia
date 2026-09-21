@@ -1,0 +1,4820 @@
+{
+  "generatedAt": "2026-09-21T05:03:25.252Z",
+  "sourceDataset": "file:///Users/aaronmacbook/Documents/Aaron/Project/Meteora%20Scanner/data/master/wallets-master.json",
+  "month": "2026-09",
+  "totalWallets": 59,
+  "success": 59,
+  "failed": 0,
+  "results": [
+    {
+      "owner": "CJboZqp4w3mrzsjWQELXhoyoj2H85wxnQA9nN3bCWZHW",
+      "status": "ok",
+      "fabriq": {
+        "fetchedAt": "2026-09-21T05:01:54.009Z",
+        "month": "2026-09",
+        "stats": {
+          "netPnlUsd": 94.84657195665636,
+          "netPnlSol": 0.8679521073528491,
+          "totalPositions": 1,
+          "avgAddLiquidityUsd": 2197.0800731079985,
+          "avgAddLiquiditySol": 19.645642985270804,
+          "totalDepositsUsd": 2197.0800731079985,
+          "totalDepositsSol": 19.645642985270804,
+          "totalWithdrawalsUsd": 2126.0657061058478,
+          "totalWithdrawalsSol": 19.023915235356156,
+          "totalFeesUsd": 165.86093895880708,
+          "totalFeesSol": 1.489679857267499,
+          "positionWinUsd": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "positionWinSol": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "profitFactorUsd": {
+            "ratio": 94.84657195665636,
+            "grossProfit": 94.84657195665636,
+            "grossLoss": 0
+          },
+          "profitFactorSol": {
+            "ratio": 0.8679521073528491,
+            "grossProfit": 0.8679521073528491,
+            "grossLoss": 0
+          },
+          "dayWinUsd": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "dayWinSol": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "avgWinLoss": {
+            "ratioUsd": 94.84657195665636,
+            "avgWinUsd": 94.84657195665636,
+            "avgLossUsd": 0,
+            "ratioSol": 0.8679521073528491,
+            "avgWinSol": 0.8679521073528491,
+            "avgLossSol": 0
+          }
+        },
+        "calendar": {
+          "2026-09-21": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 1.489679857267499,
+            "feesUsd": 165.86093895880708,
+            "pnlUsd": 94.84657195665636,
+            "pnlSol": 0.8679521073528491,
+            "positions": 1,
+            "winRateUsd": 100,
+            "winRateSol": 100
+          }
+        }
+      }
+    },
+    {
+      "owner": "9QwopmXsWxNHtnkcreefctsGWKWJwFRV3ftf2nVVghR5",
+      "status": "ok",
+      "fabriq": {
+        "fetchedAt": "2026-09-21T05:01:55.124Z",
+        "month": "2026-09",
+        "stats": {
+          "netPnlUsd": 3.31054655453724,
+          "netPnlSol": 0.030438801986993478,
+          "totalPositions": 30,
+          "avgAddLiquidityUsd": 21.914734259662975,
+          "avgAddLiquiditySol": 0.1972211994137005,
+          "totalDepositsUsd": 657.4420277898893,
+          "totalDepositsSol": 5.916635982411015,
+          "totalWithdrawalsUsd": 647.859015506927,
+          "totalWithdrawalsSol": 5.831058896472002,
+          "totalFeesUsd": 12.893558837499569,
+          "totalFeesSol": 0.11601588792600595,
+          "positionWinUsd": {
+            "percentage": 50,
+            "wins": 15,
+            "losses": 15
+          },
+          "positionWinSol": {
+            "percentage": 50,
+            "wins": 15,
+            "losses": 15
+          },
+          "profitFactorUsd": {
+            "ratio": 1.7090461937451842,
+            "grossProfit": 7.979560483024638,
+            "grossLoss": 4.669013928487399
+          },
+          "profitFactorSol": {
+            "ratio": 1.8214380407379738,
+            "grossProfit": 0.067494307670231,
+            "grossLoss": 0.03705550568323752
+          },
+          "dayWinUsd": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "dayWinSol": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "avgWinLoss": {
+            "ratioUsd": 1.9719763773982895,
+            "avgWinUsd": 0.6138123448480491,
+            "avgLossUsd": 0.31126759523249325,
+            "ratioSol": 2.2767975509224674,
+            "avgWinSol": 0.005624525639185917,
+            "avgLossSol": 0.002470367045549168
+          }
+        },
+        "calendar": {
+          "2026-09-21": {
+            "feeWinRateSol": 50,
+            "feeWinRateUsd": 50,
+            "feesSol": 0.11601588792600595,
+            "feesUsd": 12.893558837499569,
+            "pnlUsd": 3.3105465545372406,
+            "pnlSol": 0.030438801986993468,
+            "positions": 30,
+            "winRateUsd": 50,
+            "winRateSol": 50
+          }
+        }
+      }
+    },
+    {
+      "owner": "HEauHfXzF65VE7MaJAF71yvXdzdqY6FYS6U62CP4p69",
+      "status": "ok",
+      "fabriq": {
+        "fetchedAt": "2026-09-21T05:01:56.093Z",
+        "month": "2026-09",
+        "stats": {
+          "netPnlUsd": 79.33220787320096,
+          "netPnlSol": 0.6835012539593253,
+          "totalPositions": 2,
+          "avgAddLiquidityUsd": 752.7763425450057,
+          "avgAddLiquiditySol": 6.842968589511599,
+          "totalDepositsUsd": 1505.5526850900114,
+          "totalDepositsSol": 13.685937179023197,
+          "totalWithdrawalsUsd": 1429.7756241871116,
+          "totalWithdrawalsSol": 12.969475982149326,
+          "totalFeesUsd": 155.10926877610086,
+          "totalFeesSol": 1.3999624508331947,
+          "positionWinUsd": {
+            "percentage": 100,
+            "wins": 2,
+            "losses": 0
+          },
+          "positionWinSol": {
+            "percentage": 100,
+            "wins": 2,
+            "losses": 0
+          },
+          "profitFactorUsd": {
+            "ratio": 79.33220787320096,
+            "grossProfit": 79.33220787320096,
+            "grossLoss": 0
+          },
+          "profitFactorSol": {
+            "ratio": 0.6835012539593253,
+            "grossProfit": 0.6835012539593253,
+            "grossLoss": 0
+          },
+          "dayWinUsd": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "dayWinSol": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "avgWinLoss": {
+            "ratioUsd": 39.66610393660048,
+            "avgWinUsd": 39.66610393660048,
+            "avgLossUsd": 0,
+            "ratioSol": 0.34175062697966263,
+            "avgWinSol": 0.34175062697966263,
+            "avgLossSol": 0
+          }
+        },
+        "calendar": {
+          "2026-09-21": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 1.3999624508331947,
+            "feesUsd": 155.10926877610086,
+            "pnlUsd": 79.33220787320096,
+            "pnlSol": 0.6835012539593253,
+            "positions": 2,
+            "winRateUsd": 100,
+            "winRateSol": 100
+          }
+        }
+      }
+    },
+    {
+      "owner": "BrWjCa6TgNU1wBnWMwtaaX7KD8AUS9nVXZkytpEiN8dk",
+      "status": "ok",
+      "fabriq": {
+        "fetchedAt": "2026-09-21T05:01:57.088Z",
+        "month": "2026-09",
+        "stats": {
+          "netPnlUsd": 88.97005110666788,
+          "netPnlSol": 0.8178230874525154,
+          "totalPositions": 45,
+          "avgAddLiquidityUsd": 127.2626461254128,
+          "avgAddLiquiditySol": 1.138684716934731,
+          "totalDepositsUsd": 5726.819075643576,
+          "totalDepositsSol": 51.24081226206289,
+          "totalWithdrawalsUsd": 5699.4090488118545,
+          "totalWithdrawalsSol": 51.0161107505012,
+          "totalFeesUsd": 116.38007793838987,
+          "totalFeesSol": 1.0425245990142005,
+          "positionWinUsd": {
+            "percentage": 73.33333333333333,
+            "wins": 33,
+            "losses": 12
+          },
+          "positionWinSol": {
+            "percentage": 77.77777777777779,
+            "wins": 35,
+            "losses": 10
+          },
+          "profitFactorUsd": {
+            "ratio": 11.569295413391915,
+            "grossProfit": 97.38783560665807,
+            "grossLoss": 8.41778449999019
+          },
+          "profitFactorSol": {
+            "ratio": 16.369488846524238,
+            "grossProfit": 0.8710339063430516,
+            "grossLoss": 0.05321081889053608
+          },
+          "dayWinUsd": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "dayWinSol": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "avgWinLoss": {
+            "ratioUsd": 5.553261798428119,
+            "avgWinUsd": 3.8955134242663227,
+            "avgLossUsd": 0.7014820416658493,
+            "ratioSol": 6.547795538609694,
+            "avgWinSol": 0.03484135625372206,
+            "avgLossSol": 0.005321081889053609
+          }
+        },
+        "calendar": {
+          "2026-09-21": {
+            "feeWinRateSol": 68.88888888888889,
+            "feeWinRateUsd": 68.88888888888889,
+            "feesSol": 1.0425245990142005,
+            "feesUsd": 116.3800779383899,
+            "pnlUsd": 88.97005110666788,
+            "pnlSol": 0.8178230874525154,
+            "positions": 45,
+            "winRateUsd": 73.33333333333333,
+            "winRateSol": 77.77777777777779
+          }
+        }
+      }
+    },
+    {
+      "owner": "8YjM7gLt4SqVzMvxb2dqxhwvdMtGBPD1ezhR5NkNcjJZ",
+      "status": "ok",
+      "fabriq": {
+        "fetchedAt": "2026-09-21T05:01:58.126Z",
+        "month": "2026-09",
+        "stats": {
+          "netPnlUsd": 11.70355220753764,
+          "netPnlSol": 0.11675461114832586,
+          "totalPositions": 123,
+          "avgAddLiquidityUsd": 55.12460499305101,
+          "avgAddLiquiditySol": 0.5024909014308943,
+          "totalDepositsUsd": 6780.326414145274,
+          "totalDepositsSol": 61.806380876,
+          "totalWithdrawalsUsd": 6770.30148068638,
+          "totalWithdrawalsSol": 61.72612777854785,
+          "totalFeesUsd": 21.728485666428934,
+          "totalFeesSol": 0.19700770860047764,
+          "positionWinUsd": {
+            "percentage": 62.601626016260155,
+            "wins": 77,
+            "losses": 46
+          },
+          "positionWinSol": {
+            "percentage": 36.58536585365854,
+            "wins": 45,
+            "losses": 78
+          },
+          "profitFactorUsd": {
+            "ratio": 3.255663636367514,
+            "grossProfit": 16.892070574746352,
+            "grossLoss": 5.1885183672087125
+          },
+          "profitFactorSol": {
+            "ratio": 4.3816046288433395,
+            "grossProfit": 0.15128100437374006,
+            "grossLoss": 0.034526393225414176
+          },
+          "dayWinUsd": {
+            "percentage": 66.66666666666666,
+            "wins": 2,
+            "losses": 1
+          },
+          "dayWinSol": {
+            "percentage": 66.66666666666666,
+            "wins": 2,
+            "losses": 1
+          },
+          "avgWinLoss": {
+            "ratioUsd": 1.9705332535908635,
+            "avgWinUsd": 0.22226408650982044,
+            "avgLossUsd": 0.1127938775480155,
+            "ratioSol": 11.785005553440705,
+            "avgWinSol": 0.005216586357715175,
+            "avgLossSol": 0.00044264606699248945
+          }
+        },
+        "calendar": {
+          "2026-09-19": {
+            "feeWinRateSol": 18.6046511627907,
+            "feeWinRateUsd": 18.6046511627907,
+            "feesSol": 0.00801369964398199,
+            "feesUsd": 0.8965492392948665,
+            "pnlUsd": -1.586611311101144,
+            "pnlSol": -0.00911632740552264,
+            "positions": 43,
+            "winRateUsd": 58.139534883720934,
+            "winRateSol": 27.906976744186046
+          },
+          "2026-09-20": {
+            "feeWinRateSol": 26.47058823529412,
+            "feeWinRateUsd": 26.47058823529412,
+            "feesSol": 0.07891911286458962,
+            "feesUsd": 8.555580661865042,
+            "pnlUsd": 2.5575201159567342,
+            "pnlSol": 0.026755672716167245,
+            "positions": 68,
+            "winRateUsd": 60.29411764705882,
+            "winRateSol": 33.82352941176471
+          },
+          "2026-09-21": {
+            "feeWinRateSol": 75,
+            "feeWinRateUsd": 75,
+            "feesSol": 0.110074896091906,
+            "feesUsd": 12.27635576526903,
+            "pnlUsd": 10.73264340268205,
+            "pnlSol": 0.09911526583768127,
+            "positions": 12,
+            "winRateUsd": 91.66666666666666,
+            "winRateSol": 83.33333333333334
+          }
+        }
+      }
+    },
+    {
+      "owner": "FNAtMP5YtwtCZ5NUEnoSUUeheYT3NL9ggreUChW8RWbQ",
+      "status": "ok",
+      "fabriq": {
+        "fetchedAt": "2026-09-21T05:01:59.243Z",
+        "month": "2026-09",
+        "stats": {
+          "netPnlUsd": 96.45079317903358,
+          "netPnlSol": 0.832604597258335,
+          "totalPositions": 36,
+          "avgAddLiquidityUsd": 202.7693902913956,
+          "avgAddLiquiditySol": 1.8385041553297197,
+          "totalDepositsUsd": 7299.698050490242,
+          "totalDepositsSol": 66.1861495918699,
+          "totalWithdrawalsUsd": 7203.7857094123765,
+          "totalWithdrawalsSol": 65.28279194509909,
+          "totalFeesUsd": 192.36313425689977,
+          "totalFeesSol": 1.7359622440291433,
+          "positionWinUsd": {
+            "percentage": 38.88888888888889,
+            "wins": 14,
+            "losses": 22
+          },
+          "positionWinSol": {
+            "percentage": 41.66666666666667,
+            "wins": 15,
+            "losses": 21
+          },
+          "profitFactorUsd": {
+            "ratio": 2.6511595115578523,
+            "grossProfit": 154.8647698444578,
+            "grossLoss": 58.4139766654242
+          },
+          "profitFactorSol": {
+            "ratio": 2.435509494265557,
+            "grossProfit": 1.4126109299118965,
+            "grossLoss": 0.5800063326535617
+          },
+          "dayWinUsd": {
+            "percentage": 100,
+            "wins": 2,
+            "losses": 0
+          },
+          "dayWinSol": {
+            "percentage": 100,
+            "wins": 2,
+            "losses": 0
+          },
+          "avgWinLoss": {
+            "ratioUsd": 4.166107803876625,
+            "avgWinUsd": 11.06176927460413,
+            "avgLossUsd": 2.655180757519282,
+            "ratioSol": 3.4097132919717796,
+            "avgWinSol": 0.09417406199412644,
+            "avgLossSol": 0.02761934917397913
+          }
+        },
+        "calendar": {
+          "2026-09-20": {
+            "feeWinRateSol": 95.23809523809523,
+            "feeWinRateUsd": 95.23809523809523,
+            "feesSol": 0.8516655146745664,
+            "feesUsd": 93.97930243928819,
+            "pnlUsd": 34.9050763144909,
+            "pnlSol": 0.28751457258509683,
+            "positions": 21,
+            "winRateUsd": 42.857142857142854,
+            "winRateSol": 47.61904761904761
+          },
+          "2026-09-21": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 0.8842967293545769,
+            "feesUsd": 98.38383181761155,
+            "pnlUsd": 61.5457168645427,
+            "pnlSol": 0.5450900246732382,
+            "positions": 15,
+            "winRateUsd": 33.33333333333333,
+            "winRateSol": 33.33333333333333
+          }
+        }
+      }
+    },
+    {
+      "owner": "C28CFX54Zank3zKrueLr75meGvhegTcMnfxQJs2udB73",
+      "status": "ok",
+      "fabriq": {
+        "fetchedAt": "2026-09-21T05:02:00.247Z",
+        "month": "2026-09",
+        "stats": {
+          "netPnlUsd": 12.727518544607438,
+          "netPnlSol": 0.1084973509533406,
+          "totalPositions": 30,
+          "avgAddLiquidityUsd": 22.36204764784615,
+          "avgAddLiquiditySol": 0.1999999953333333,
+          "totalDepositsUsd": 670.8614294353845,
+          "totalDepositsSol": 5.999999859999999,
+          "totalWithdrawalsUsd": 671.4603946145328,
+          "totalWithdrawalsSol": 5.999947038476243,
+          "totalFeesUsd": 12.128553365459231,
+          "totalFeesSol": 0.10855017247709742,
+          "positionWinUsd": {
+            "percentage": 86.66666666666667,
+            "wins": 26,
+            "losses": 4
+          },
+          "positionWinSol": {
+            "percentage": 76.66666666666667,
+            "wins": 23,
+            "losses": 7
+          },
+          "profitFactorUsd": {
+            "ratio": 243.58925602705153,
+            "grossProfit": 12.779983846463956,
+            "grossLoss": 0.05246530185651821
+          },
+          "profitFactorSol": {
+            "ratio": 1334.3399359995283,
+            "grossProfit": 0.10857872356359846,
+            "grossLoss": 0.00008137261025786824
+          },
+          "dayWinUsd": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "dayWinSol": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "avgWinLoss": {
+            "ratioUsd": 37.47527015800793,
+            "avgWinUsd": 0.4915378402486137,
+            "avgLossUsd": 0.013116325464129552,
+            "ratioSol": 406.1034587824651,
+            "avgWinSol": 0.004720814067982542,
+            "avgLossSol": 0.000011624658608266891
+          }
+        },
+        "calendar": {
+          "2026-09-21": {
+            "feeWinRateSol": 93.33333333333333,
+            "feeWinRateUsd": 93.33333333333333,
+            "feesSol": 0.10855017247709742,
+            "feesUsd": 12.128553365459231,
+            "pnlUsd": 12.727518544607438,
+            "pnlSol": 0.1084973509533406,
+            "positions": 30,
+            "winRateUsd": 86.66666666666667,
+            "winRateSol": 76.66666666666667
+          }
+        }
+      }
+    },
+    {
+      "owner": "7ckCmkLSKYbCVj7cDmwy7MYDGYM9FMHwFBxwN8riF7D4",
+      "status": "ok",
+      "fabriq": {
+        "fetchedAt": "2026-09-21T05:02:01.352Z",
+        "month": "2026-09",
+        "stats": {
+          "netPnlUsd": 26.90967218414147,
+          "netPnlSol": 0.2642469828209735,
+          "totalPositions": 3,
+          "avgAddLiquidityUsd": 1196.8856777229246,
+          "avgAddLiquiditySol": 10.750815742620714,
+          "totalDepositsUsd": 3590.657033168774,
+          "totalDepositsSol": 32.25244722786214,
+          "totalWithdrawalsUsd": 3544.380092213073,
+          "totalWithdrawalsSol": 31.85909954692306,
+          "totalFeesUsd": 73.18661313984269,
+          "totalFeesSol": 0.6575946637600576,
+          "positionWinUsd": {
+            "percentage": 100,
+            "wins": 3,
+            "losses": 0
+          },
+          "positionWinSol": {
+            "percentage": 100,
+            "wins": 3,
+            "losses": 0
+          },
+          "profitFactorUsd": {
+            "ratio": 26.90967218414147,
+            "grossProfit": 26.90967218414147,
+            "grossLoss": 0
+          },
+          "profitFactorSol": {
+            "ratio": 0.2642469828209735,
+            "grossProfit": 0.2642469828209735,
+            "grossLoss": 0
+          },
+          "dayWinUsd": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "dayWinSol": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "avgWinLoss": {
+            "ratioUsd": 8.969890728047156,
+            "avgWinUsd": 8.969890728047156,
+            "avgLossUsd": 0,
+            "ratioSol": 0.08808232760699115,
+            "avgWinSol": 0.08808232760699115,
+            "avgLossSol": 0
+          }
+        },
+        "calendar": {
+          "2026-09-21": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 0.6575946637600576,
+            "feesUsd": 73.18661313984269,
+            "pnlUsd": 26.90967218414147,
+            "pnlSol": 0.2642469828209735,
+            "positions": 3,
+            "winRateUsd": 100,
+            "winRateSol": 100
+          }
+        }
+      }
+    },
+    {
+      "owner": "8RbiVr6gmW4vAvK15wR7fRJqEwt5H3RMCzYvRuumVypj",
+      "status": "ok",
+      "fabriq": {
+        "fetchedAt": "2026-09-21T05:02:02.348Z",
+        "month": "2026-09",
+        "stats": {
+          "netPnlUsd": 267.852917817047,
+          "netPnlSol": 2.842484787808349,
+          "totalPositions": 4,
+          "avgAddLiquidityUsd": 4609.49803475,
+          "avgAddLiquiditySol": 41.44711612483174,
+          "totalDepositsUsd": 18437.992139,
+          "totalDepositsSol": 165.78846449932695,
+          "totalWithdrawalsUsd": 18449.432411,
+          "totalWithdrawalsSol": 166.30990213616587,
+          "totalFeesUsd": 256.41264581704735,
+          "totalFeesSol": 2.3210471509694686,
+          "positionWinUsd": {
+            "percentage": 50,
+            "wins": 2,
+            "losses": 2
+          },
+          "positionWinSol": {
+            "percentage": 50,
+            "wins": 2,
+            "losses": 2
+          },
+          "profitFactorUsd": {
+            "ratio": 11063.441971849197,
+            "grossProfit": 267.87713063719093,
+            "grossLoss": 0.024212820143930003
+          },
+          "profitFactorSol": {
+            "ratio": 8.025215806188648,
+            "grossProfit": 3.2470965273230767,
+            "grossLoss": 0.40461173951472773
+          },
+          "dayWinUsd": {
+            "percentage": 50,
+            "wins": 1,
+            "losses": 1
+          },
+          "dayWinSol": {
+            "percentage": 100,
+            "wins": 2,
+            "losses": 0
+          },
+          "avgWinLoss": {
+            "ratioUsd": 11063.441971849197,
+            "avgWinUsd": 133.93856531859547,
+            "avgLossUsd": 0.012106410071965001,
+            "ratioSol": 8.025215806188648,
+            "avgWinSol": 1.6235482636615384,
+            "avgLossSol": 0.20230586975736387
+          }
+        },
+        "calendar": {
+          "2026-09-19": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 0.0018970760472407093,
+            "feesUsd": 0.211634,
+            "pnlUsd": -0.024192000000311964,
+            "pnlSol": 0.49305938535539084,
+            "positions": 1,
+            "winRateUsd": 0,
+            "winRateSol": 100
+          },
+          "2026-09-21": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 2.319150074922228,
+            "feesUsd": 256.20101181704734,
+            "pnlUsd": 267.8771098170473,
+            "pnlSol": 2.349425402452958,
+            "positions": 3,
+            "winRateUsd": 66.66666666666666,
+            "winRateSol": 33.33333333333333
+          }
+        }
+      }
+    },
+    {
+      "owner": "bxXCeGS7CX4zbr1tzt86fzYJTRXQv27HMvdN5xJusMQ",
+      "status": "ok",
+      "fabriq": {
+        "fetchedAt": "2026-09-21T05:02:03.346Z",
+        "month": "2026-09",
+        "stats": {
+          "netPnlUsd": 112.17053598948792,
+          "netPnlSol": 0.7731844399808558,
+          "totalPositions": 2,
+          "avgAddLiquidityUsd": 1749.7580825342097,
+          "avgAddLiquiditySol": 15.939054678368944,
+          "totalDepositsUsd": 3499.5161650684195,
+          "totalDepositsSol": 31.878109356737887,
+          "totalWithdrawalsUsd": 3599.354638714978,
+          "totalWithdrawalsSol": 32.53987385973849,
+          "totalFeesUsd": 12.332062342929405,
+          "totalFeesSol": 0.11141993698024927,
+          "positionWinUsd": {
+            "percentage": 50,
+            "wins": 1,
+            "losses": 1
+          },
+          "positionWinSol": {
+            "percentage": 50,
+            "wins": 1,
+            "losses": 1
+          },
+          "profitFactorUsd": {
+            "ratio": 12.585748326959445,
+            "grossProfit": 121.85230473018055,
+            "grossLoss": 9.681768740692632
+          },
+          "profitFactorSol": {
+            "ratio": 9.074534204086929,
+            "grossProfit": 0.8689403585810282,
+            "grossLoss": 0.09575591860017241
+          },
+          "dayWinUsd": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "dayWinSol": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "avgWinLoss": {
+            "ratioUsd": 12.585748326959445,
+            "avgWinUsd": 121.85230473018055,
+            "avgLossUsd": 9.681768740692632,
+            "ratioSol": 9.074534204086929,
+            "avgWinSol": 0.8689403585810282,
+            "avgLossSol": 0.09575591860017241
+          }
+        },
+        "calendar": {
+          "2026-09-21": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 0.11141993698024927,
+            "feesUsd": 12.332062342929405,
+            "pnlUsd": 112.17053598948792,
+            "pnlSol": 0.7731844399808558,
+            "positions": 2,
+            "winRateUsd": 50,
+            "winRateSol": 50
+          }
+        }
+      }
+    },
+    {
+      "owner": "J9zz2HaYW3oEjMtUQGnRhehiay3Th9iH3a7tyi7SL3Hc",
+      "status": "ok",
+      "fabriq": {
+        "fetchedAt": "2026-09-21T05:02:04.354Z",
+        "month": "2026-09",
+        "stats": {
+          "netPnlUsd": 9.655792781683736,
+          "netPnlSol": 0.09359397032772726,
+          "totalPositions": 14,
+          "avgAddLiquidityUsd": 62.652629770004104,
+          "avgAddLiquiditySol": 0.5642856860714286,
+          "totalDepositsUsd": 877.1368167800574,
+          "totalDepositsSol": 7.8999996050000005,
+          "totalWithdrawalsUsd": 876.1847423743679,
+          "totalWithdrawalsSol": 7.8978578750572765,
+          "totalFeesUsd": 10.607867187373046,
+          "totalFeesSol": 0.0957357002704515,
+          "positionWinUsd": {
+            "percentage": 57.14285714285714,
+            "wins": 8,
+            "losses": 6
+          },
+          "positionWinSol": {
+            "percentage": 64.28571428571429,
+            "wins": 9,
+            "losses": 5
+          },
+          "profitFactorUsd": {
+            "ratio": 7.595561704936044,
+            "grossProfit": 11.119776171370994,
+            "grossLoss": 1.4639833896872574
+          },
+          "profitFactorSol": {
+            "ratio": 70.18548581824022,
+            "grossProfit": 0.09494676808900354,
+            "grossLoss": 0.001352797761276281
+          },
+          "dayWinUsd": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "dayWinSol": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "avgWinLoss": {
+            "ratioUsd": 5.696671278702033,
+            "avgWinUsd": 1.3899720214213742,
+            "avgLossUsd": 0.2439972316145429,
+            "ratioSol": 50.13248987017159,
+            "avgWinSol": 0.013563824012714791,
+            "avgLossSol": 0.0002705595522552562
+          }
+        },
+        "calendar": {
+          "2026-09-21": {
+            "feeWinRateSol": 85.71428571428571,
+            "feeWinRateUsd": 85.71428571428571,
+            "feesSol": 0.0957357002704515,
+            "feesUsd": 10.607867187373046,
+            "pnlUsd": 9.655792781683736,
+            "pnlSol": 0.09359397032772726,
+            "positions": 14,
+            "winRateUsd": 57.14285714285714,
+            "winRateSol": 64.28571428571429
+          }
+        }
+      }
+    },
+    {
+      "owner": "8Fs3cgTz6WU3SCQFhoqv5YTRCes4kjT2pGhd2BX1pbga",
+      "status": "ok",
+      "fabriq": {
+        "fetchedAt": "2026-09-21T05:02:05.331Z",
+        "month": "2026-09",
+        "stats": {
+          "netPnlUsd": 3.4512676436447336,
+          "netPnlSol": 0.031752786346918305,
+          "totalPositions": 2,
+          "avgAddLiquidityUsd": 55.879286771778624,
+          "avgAddLiquiditySol": 0.499999975,
+          "totalDepositsUsd": 111.75857354355725,
+          "totalDepositsSol": 0.99999995,
+          "totalWithdrawalsUsd": 108.07970274723154,
+          "totalWithdrawalsSol": 0.967917502103208,
+          "totalFeesUsd": 7.130138439970452,
+          "totalFeesSol": 0.06383523424371026,
+          "positionWinUsd": {
+            "percentage": 50,
+            "wins": 1,
+            "losses": 1
+          },
+          "positionWinSol": {
+            "percentage": 50,
+            "wins": 1,
+            "losses": 1
+          },
+          "profitFactorUsd": {
+            "ratio": 4.407587458559616,
+            "grossProfit": 4.464086151053955,
+            "grossLoss": 1.0128185074092215
+          },
+          "profitFactorSol": {
+            "ratio": 5.195989925368981,
+            "grossProfit": 0.039320198783955096,
+            "grossLoss": 0.007567412437036791
+          },
+          "dayWinUsd": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "dayWinSol": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "avgWinLoss": {
+            "ratioUsd": 4.407587458559616,
+            "avgWinUsd": 4.464086151053955,
+            "avgLossUsd": 1.0128185074092215,
+            "ratioSol": 5.195989925368981,
+            "avgWinSol": 0.039320198783955096,
+            "avgLossSol": 0.007567412437036791
+          }
+        },
+        "calendar": {
+          "2026-09-21": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 0.06383523424371026,
+            "feesUsd": 7.130138439970452,
+            "pnlUsd": 3.4512676436447336,
+            "pnlSol": 0.031752786346918305,
+            "positions": 2,
+            "winRateUsd": 50,
+            "winRateSol": 50
+          }
+        }
+      }
+    },
+    {
+      "owner": "FrMTHcvh6A6yZg9geStYvGczhqK8NrUV71j1ThZbZi9u",
+      "status": "ok",
+      "fabriq": {
+        "fetchedAt": "2026-09-21T05:02:06.295Z",
+        "month": "2026-09",
+        "stats": {
+          "netPnlUsd": 85.39613101736927,
+          "netPnlSol": 0.7592118487355597,
+          "totalPositions": 3,
+          "avgAddLiquidityUsd": 613.4474199910957,
+          "avgAddLiquiditySol": 5.499999974333332,
+          "totalDepositsUsd": 1840.3422599732871,
+          "totalDepositsSol": 16.499999922999997,
+          "totalWithdrawalsUsd": 1697.2967660652657,
+          "totalWithdrawalsSol": 15.215593728542144,
+          "totalFeesUsd": 228.44162492539056,
+          "totalFeesSol": 2.0436180431934146,
+          "positionWinUsd": {
+            "percentage": 66.66666666666666,
+            "wins": 2,
+            "losses": 1
+          },
+          "positionWinSol": {
+            "percentage": 66.66666666666666,
+            "wins": 2,
+            "losses": 1
+          },
+          "profitFactorUsd": {
+            "ratio": 1.9040982050950954,
+            "grossProfit": 179.85061675366944,
+            "grossLoss": 94.45448573630017
+          },
+          "profitFactorSol": {
+            "ratio": 1.9233372894764593,
+            "grossProfit": 1.581459425421258,
+            "grossLoss": 0.8222475766856983
+          },
+          "dayWinUsd": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "dayWinSol": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "avgWinLoss": {
+            "ratioUsd": 0.9520491025475477,
+            "avgWinUsd": 89.92530837683472,
+            "avgLossUsd": 94.45448573630017,
+            "ratioSol": 0.9616686447382297,
+            "avgWinSol": 0.790729712710629,
+            "avgLossSol": 0.8222475766856983
+          }
+        },
+        "calendar": {
+          "2026-09-21": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 2.0436180431934146,
+            "feesUsd": 228.44162492539056,
+            "pnlUsd": 85.39613101736927,
+            "pnlSol": 0.7592118487355597,
+            "positions": 3,
+            "winRateUsd": 66.66666666666666,
+            "winRateSol": 66.66666666666666
+          }
+        }
+      }
+    },
+    {
+      "owner": "5ZXZgLiHJ1yCPLPtYbu6C8UkJUqGkwk4Ed96mqjL1z5L",
+      "status": "ok",
+      "fabriq": {
+        "fetchedAt": "2026-09-21T05:02:07.307Z",
+        "month": "2026-09",
+        "stats": {
+          "netPnlUsd": 35.97151603243479,
+          "netPnlSol": 0.13571413114132674,
+          "totalPositions": 33,
+          "avgAddLiquidityUsd": 126.3482053490662,
+          "avgAddLiquiditySol": 1.1524329771515154,
+          "totalDepositsUsd": 4169.490776519185,
+          "totalDepositsSol": 38.030288246000005,
+          "totalWithdrawalsUsd": 4138.481068704953,
+          "totalWithdrawalsSol": 37.553273472031854,
+          "totalFeesUsd": 66.98122384666694,
+          "totalFeesSol": 0.6127289051094745,
+          "positionWinUsd": {
+            "percentage": 66.66666666666666,
+            "wins": 22,
+            "losses": 11
+          },
+          "positionWinSol": {
+            "percentage": 69.6969696969697,
+            "wins": 23,
+            "losses": 10
+          },
+          "profitFactorUsd": {
+            "ratio": 2.745110704094898,
+            "grossProfit": 56.584257647065726,
+            "grossLoss": 20.612741614630934
+          },
+          "profitFactorSol": {
+            "ratio": 1.8704791236161307,
+            "grossProfit": 0.29162152450596623,
+            "grossLoss": 0.1559073933646395
+          },
+          "dayWinUsd": {
+            "percentage": 75,
+            "wins": 3,
+            "losses": 1
+          },
+          "dayWinSol": {
+            "percentage": 75,
+            "wins": 3,
+            "losses": 1
+          },
+          "avgWinLoss": {
+            "ratioUsd": 1.372555352047449,
+            "avgWinUsd": 2.5720117112302603,
+            "avgLossUsd": 1.8738856013300849,
+            "ratioSol": 0.8132517928765786,
+            "avgWinSol": 0.012679196717650706,
+            "avgLossSol": 0.01559073933646395
+          }
+        },
+        "calendar": {
+          "2026-09-18": {
+            "feeWinRateSol": 91.66666666666666,
+            "feeWinRateUsd": 91.66666666666666,
+            "feesSol": 0.2751807172581201,
+            "feesUsd": 29.308494956238995,
+            "pnlUsd": 37.7676138358303,
+            "pnlSol": 0.11311007379079602,
+            "positions": 12,
+            "winRateUsd": 83.33333333333334,
+            "winRateSol": 41.66666666666667
+          },
+          "2026-09-19": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 0.09897570610144549,
+            "feesUsd": 11.18364250782985,
+            "pnlUsd": -15.722385666688965,
+            "pnlSol": -0.1020407960791021,
+            "positions": 9,
+            "winRateUsd": 33.33333333333333,
+            "winRateSol": 77.77777777777779
+          },
+          "2026-09-20": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 0.06101424898910397,
+            "feesUsd": 6.620921313863005,
+            "pnlUsd": 3.843987761194626,
+            "pnlSol": 0.037621581251263914,
+            "positions": 4,
+            "winRateUsd": 100,
+            "winRateSol": 100
+          },
+          "2026-09-21": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 0.17755823276080493,
+            "feesUsd": 19.86816506873508,
+            "pnlUsd": 10.082300102098827,
+            "pnlSol": 0.08702327217836892,
+            "positions": 8,
+            "winRateUsd": 62.5,
+            "winRateSol": 87.5
+          }
+        }
+      }
+    },
+    {
+      "owner": "Bp9AFGKig5fM1SM1hEEG9VAGWVnmihtao9A2P8LVAosT",
+      "status": "ok",
+      "fabriq": {
+        "fetchedAt": "2026-09-21T05:02:08.280Z",
+        "month": "2026-09",
+        "stats": {
+          "netPnlUsd": 28.711089380777075,
+          "netPnlSol": 0.26145145140891757,
+          "totalPositions": 7,
+          "avgAddLiquidityUsd": 77.33974723221628,
+          "avgAddLiquiditySol": 0.6999999677142857,
+          "totalDepositsUsd": 541.378230625514,
+          "totalDepositsSol": 4.899999774,
+          "totalWithdrawalsUsd": 531.8388353310734,
+          "totalWithdrawalsSol": 4.813899087899498,
+          "totalFeesUsd": 38.25048467521776,
+          "totalFeesSol": 0.3475521375094204,
+          "positionWinUsd": {
+            "percentage": 71.42857142857143,
+            "wins": 5,
+            "losses": 2
+          },
+          "positionWinSol": {
+            "percentage": 71.42857142857143,
+            "wins": 5,
+            "losses": 2
+          },
+          "profitFactorUsd": {
+            "ratio": 13.279320403265572,
+            "grossProfit": 31.049255373509183,
+            "grossLoss": 2.338165992732108
+          },
+          "profitFactorSol": {
+            "ratio": 13.293751828338964,
+            "grossProfit": 0.2827184702213709,
+            "grossLoss": 0.021267018812453353
+          },
+          "dayWinUsd": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "dayWinSol": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "avgWinLoss": {
+            "ratioUsd": 5.311728161306228,
+            "avgWinUsd": 6.209851074701836,
+            "avgLossUsd": 1.169082996366054,
+            "ratioSol": 8.862501218892643,
+            "avgWinSol": 0.0942394900737903,
+            "avgLossSol": 0.010633509406226677
+          }
+        },
+        "calendar": {
+          "2026-09-21": {
+            "feeWinRateSol": 71.42857142857143,
+            "feeWinRateUsd": 71.42857142857143,
+            "feesSol": 0.3475521375094204,
+            "feesUsd": 38.25048467521776,
+            "pnlUsd": 28.711089380777075,
+            "pnlSol": 0.26145145140891757,
+            "positions": 7,
+            "winRateUsd": 71.42857142857143,
+            "winRateSol": 71.42857142857143
+          }
+        }
+      }
+    },
+    {
+      "owner": "F3BWvxNx1APW1YaZB299VQ4cnPWDgfknFQxvc4EL7SzC",
+      "status": "ok",
+      "fabriq": {
+        "fetchedAt": "2026-09-21T05:02:09.343Z",
+        "month": "2026-09",
+        "stats": {
+          "netPnlUsd": 651.6197420845093,
+          "netPnlSol": 5.720094543862513,
+          "totalPositions": 23,
+          "avgAddLiquidityUsd": 2279.0008651513785,
+          "avgAddLiquiditySol": 20.426803703809945,
+          "totalDepositsUsd": 52417.01989848171,
+          "totalDepositsSol": 469.8164851876287,
+          "totalWithdrawalsUsd": 52380.39116523886,
+          "totalWithdrawalsSol": 469.3857985259112,
+          "totalFeesUsd": 688.2484753273543,
+          "totalFeesSol": 6.150781205580036,
+          "positionWinUsd": {
+            "percentage": 91.30434782608695,
+            "wins": 21,
+            "losses": 2
+          },
+          "positionWinSol": {
+            "percentage": 91.30434782608695,
+            "wins": 21,
+            "losses": 2
+          },
+          "profitFactorUsd": {
+            "ratio": 163318.67718939108,
+            "grossProfit": 651.6237319755811,
+            "grossLoss": 0.003989891071796592
+          },
+          "profitFactorSol": {
+            "ratio": 6008.159819997095,
+            "grossProfit": 5.7210467566744345,
+            "grossLoss": 0.0009522128119217044
+          },
+          "dayWinUsd": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "dayWinSol": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "avgWinLoss": {
+            "ratioUsd": 15554.159732322958,
+            "avgWinUsd": 31.029701522646718,
+            "avgLossUsd": 0.001994945535898296,
+            "ratioSol": 600.8159819997095,
+            "avgWinSol": 0.28605233783372175,
+            "avgLossSol": 0.0004761064059608522
+          }
+        },
+        "calendar": {
+          "2026-09-21": {
+            "feeWinRateSol": 95.65217391304348,
+            "feeWinRateUsd": 95.65217391304348,
+            "feesSol": 6.150781205580036,
+            "feesUsd": 688.2484753273543,
+            "pnlUsd": 651.6197420845093,
+            "pnlSol": 5.720094543862513,
+            "positions": 23,
+            "winRateUsd": 91.30434782608695,
+            "winRateSol": 91.30434782608695
+          }
+        }
+      }
+    },
+    {
+      "owner": "9GdjyW4RMp5mQ5mL9koEg7xcMEFwxZTUuHTspZLSCSBe",
+      "status": "ok",
+      "fabriq": {
+        "fetchedAt": "2026-09-21T05:02:10.329Z",
+        "month": "2026-09",
+        "stats": {
+          "netPnlUsd": 21.030998161976868,
+          "netPnlSol": 0.13814532374836386,
+          "totalPositions": 2,
+          "avgAddLiquidityUsd": 920.094374882679,
+          "avgAddLiquiditySol": 8.249999964,
+          "totalDepositsUsd": 1840.188749765358,
+          "totalDepositsSol": 16.499999928,
+          "totalWithdrawalsUsd": 1842.7740684220137,
+          "totalWithdrawalsSol": 16.473308036642372,
+          "totalFeesUsd": 18.445679505321234,
+          "totalFeesSol": 0.16483721510599025,
+          "positionWinUsd": {
+            "percentage": 100,
+            "wins": 2,
+            "losses": 0
+          },
+          "positionWinSol": {
+            "percentage": 100,
+            "wins": 2,
+            "losses": 0
+          },
+          "profitFactorUsd": {
+            "ratio": 21.030998161976868,
+            "grossProfit": 21.030998161976868,
+            "grossLoss": 0
+          },
+          "profitFactorSol": {
+            "ratio": 0.13814532374836386,
+            "grossProfit": 0.13814532374836386,
+            "grossLoss": 0
+          },
+          "dayWinUsd": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "dayWinSol": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "avgWinLoss": {
+            "ratioUsd": 10.515499080988434,
+            "avgWinUsd": 10.515499080988434,
+            "avgLossUsd": 0,
+            "ratioSol": 0.06907266187418193,
+            "avgWinSol": 0.06907266187418193,
+            "avgLossSol": 0
+          }
+        },
+        "calendar": {
+          "2026-09-21": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 0.16483721510599025,
+            "feesUsd": 18.445679505321234,
+            "pnlUsd": 21.030998161976868,
+            "pnlSol": 0.13814532374836386,
+            "positions": 2,
+            "winRateUsd": 100,
+            "winRateSol": 100
+          }
+        }
+      }
+    },
+    {
+      "owner": "E4vzhBJQoxgCCtmcjQcGUkGpGyjnbaFWLb5cJ6rEPAkY",
+      "status": "ok",
+      "fabriq": {
+        "fetchedAt": "2026-09-21T05:02:11.307Z",
+        "month": "2026-09",
+        "stats": {
+          "netPnlUsd": 114.26568076421813,
+          "netPnlSol": 1.0256117304539383,
+          "totalPositions": 11,
+          "avgAddLiquidityUsd": 272.60423282994066,
+          "avgAddLiquiditySol": 2.449040660626942,
+          "totalDepositsUsd": 2998.646561129347,
+          "totalDepositsSol": 26.939447266896366,
+          "totalWithdrawalsUsd": 2869.037821278715,
+          "totalWithdrawalsSol": 25.784077704519778,
+          "totalFeesUsd": 243.87442061485095,
+          "totalFeesSol": 2.180981292830529,
+          "positionWinUsd": {
+            "percentage": 54.54545454545454,
+            "wins": 6,
+            "losses": 5
+          },
+          "positionWinSol": {
+            "percentage": 72.72727272727273,
+            "wins": 8,
+            "losses": 3
+          },
+          "profitFactorUsd": {
+            "ratio": 4.915695540768209,
+            "grossProfit": 143.4471325840909,
+            "grossLoss": 29.181451819872763
+          },
+          "profitFactorSol": {
+            "ratio": 5.384759852696532,
+            "grossProfit": 1.2595154708887102,
+            "grossLoss": 0.2339037404347719
+          },
+          "dayWinUsd": {
+            "percentage": 50,
+            "wins": 1,
+            "losses": 1
+          },
+          "dayWinSol": {
+            "percentage": 100,
+            "wins": 2,
+            "losses": 0
+          },
+          "avgWinLoss": {
+            "ratioUsd": 4.0964129506401745,
+            "avgWinUsd": 23.907855430681817,
+            "avgLossUsd": 5.836290363974553,
+            "ratioSol": 2.6923799263482655,
+            "avgWinSol": 0.20991924514811836,
+            "avgLossSol": 0.07796791347825731
+          }
+        },
+        "calendar": {
+          "2026-09-20": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 0.04067288278358506,
+            "feesUsd": 4.484684411086157,
+            "pnlUsd": -2.0138534605643486,
+            "pnlSol": 0.00878682415148857,
+            "positions": 2,
+            "winRateUsd": 50,
+            "winRateSol": 50
+          },
+          "2026-09-21": {
+            "feeWinRateSol": 77.77777777777779,
+            "feeWinRateUsd": 77.77777777777779,
+            "feesSol": 2.140308410046944,
+            "feesUsd": 239.38973620376476,
+            "pnlUsd": 116.27953422478248,
+            "pnlSol": 1.0168249063024497,
+            "positions": 9,
+            "winRateUsd": 55.55555555555556,
+            "winRateSol": 77.77777777777779
+          }
+        }
+      }
+    },
+    {
+      "owner": "DQShR4tEozY2WNN3kxggoRgSQhXDZtzekS7TEK6A6x8b",
+      "status": "ok",
+      "fabriq": {
+        "fetchedAt": "2026-09-21T05:02:12.288Z",
+        "month": "2026-09",
+        "stats": {
+          "netPnlUsd": 34.820821329492446,
+          "netPnlSol": 0.2108851871166039,
+          "totalPositions": 6,
+          "avgAddLiquidityUsd": 223.08474521588923,
+          "avgAddLiquiditySol": 2.0453175524231635,
+          "totalDepositsUsd": 1338.5084712953353,
+          "totalDepositsSol": 12.271905314538982,
+          "totalWithdrawalsUsd": 1372.1479923861523,
+          "totalWithdrawalsSol": 12.472153321267259,
+          "totalFeesUsd": 1.1813002386754499,
+          "totalFeesSol": 0.010637180388327876,
+          "positionWinUsd": {
+            "percentage": 100,
+            "wins": 6,
+            "losses": 0
+          },
+          "positionWinSol": {
+            "percentage": 66.66666666666666,
+            "wins": 4,
+            "losses": 2
+          },
+          "profitFactorUsd": {
+            "ratio": 34.820821329492446,
+            "grossProfit": 34.820821329492446,
+            "grossLoss": 0
+          },
+          "profitFactorSol": {
+            "ratio": 93.82705927806471,
+            "grossProfit": 0.21315699437578783,
+            "grossLoss": 0.002271807259183925
+          },
+          "dayWinUsd": {
+            "percentage": 100,
+            "wins": 4,
+            "losses": 0
+          },
+          "dayWinSol": {
+            "percentage": 50,
+            "wins": 2,
+            "losses": 2
+          },
+          "avgWinLoss": {
+            "ratioUsd": 5.803470221582074,
+            "avgWinUsd": 5.803470221582074,
+            "avgLossUsd": 0,
+            "ratioSol": 46.913529639032355,
+            "avgWinSol": 0.05328924859394696,
+            "avgLossSol": 0.0011359036295919625
+          }
+        },
+        "calendar": {
+          "2026-09-14": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 0.000003975,
+            "feesUsd": 0.0004079106719122528,
+            "pnlUsd": 0.04730844600516271,
+            "pnlSol": -0.0006366699459994657,
+            "positions": 1,
+            "winRateUsd": 100,
+            "winRateSol": 0
+          },
+          "2026-09-18": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 0.00007573721890352214,
+            "feesUsd": 0.008022004991013154,
+            "pnlUsd": 0.6291149280410195,
+            "pnlSol": -0.0016351373131844593,
+            "positions": 1,
+            "winRateUsd": 100,
+            "winRateSol": 0
+          },
+          "2026-09-20": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 0.00046438,
+            "feesUsd": 0.05031778025911747,
+            "pnlUsd": 1.2954085074342157,
+            "pnlSol": 0.010188117311107123,
+            "positions": 2,
+            "winRateUsd": 100,
+            "winRateSol": 100
+          },
+          "2026-09-21": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 0.010093088169424353,
+            "feesUsd": 1.1225525427534069,
+            "pnlUsd": 32.84898944801205,
+            "pnlSol": 0.2029688770646807,
+            "positions": 2,
+            "winRateUsd": 100,
+            "winRateSol": 100
+          }
+        }
+      }
+    },
+    {
+      "owner": "FJnNwk3yZ64bH7bxNi5qbZiFCK1NdJKzSoNyeMdRLXyF",
+      "status": "ok",
+      "fabriq": {
+        "fetchedAt": "2026-09-21T05:02:13.275Z",
+        "month": "2026-09",
+        "stats": {
+          "netPnlUsd": 259.55304862436117,
+          "netPnlSol": 2.2884895917590335,
+          "totalPositions": 5,
+          "avgAddLiquidityUsd": 680.8584967784784,
+          "avgAddLiquiditySol": 6.197024402951212,
+          "totalDepositsUsd": 3404.292483892392,
+          "totalDepositsSol": 30.985122014756058,
+          "totalWithdrawalsUsd": 2831.296780036937,
+          "totalWithdrawalsSol": 25.717745985276938,
+          "totalFeesUsd": 832.5487524798156,
+          "totalFeesSol": 7.555865621238155,
+          "positionWinUsd": {
+            "percentage": 60,
+            "wins": 3,
+            "losses": 2
+          },
+          "positionWinSol": {
+            "percentage": 60,
+            "wins": 3,
+            "losses": 2
+          },
+          "profitFactorUsd": {
+            "ratio": 2.27759607375916,
+            "grossProfit": 462.7104110766895,
+            "grossLoss": 203.1573624523283
+          },
+          "profitFactorSol": {
+            "ratio": 2.2251197868705703,
+            "grossProfit": 4.156461700514798,
+            "grossLoss": 1.8679721087557652
+          },
+          "dayWinUsd": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "dayWinSol": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "avgWinLoss": {
+            "ratioUsd": 1.5183973825061066,
+            "avgWinUsd": 154.23680369222984,
+            "avgLossUsd": 101.57868122616415,
+            "ratioSol": 1.483413191247047,
+            "avgWinSol": 1.3854872335049329,
+            "avgLossSol": 0.9339860543778826
+          }
+        },
+        "calendar": {
+          "2026-09-21": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 7.555865621238155,
+            "feesUsd": 832.5487524798156,
+            "pnlUsd": 259.55304862436117,
+            "pnlSol": 2.2884895917590335,
+            "positions": 5,
+            "winRateUsd": 60,
+            "winRateSol": 60
+          }
+        }
+      }
+    },
+    {
+      "owner": "FfMM5CKMJukvsPTfZz4uLQmjavnnELoMgydsPeJg2FRA",
+      "status": "ok",
+      "fabriq": {
+        "fetchedAt": "2026-09-21T05:02:14.252Z",
+        "month": "2026-09",
+        "stats": {
+          "netPnlUsd": 13.072999831014343,
+          "netPnlSol": 0.041070599738799674,
+          "totalPositions": 12,
+          "avgAddLiquidityUsd": 107.7155538707609,
+          "avgAddLiquiditySol": 0.9891582618333333,
+          "totalDepositsUsd": 1292.5866464491307,
+          "totalDepositsSol": 11.869899142,
+          "totalWithdrawalsUsd": 1300.012021542221,
+          "totalWithdrawalsSol": 11.859824224557284,
+          "totalFeesUsd": 5.647624737924039,
+          "totalFeesSol": 0.05114551718151608,
+          "positionWinUsd": {
+            "percentage": 91.66666666666666,
+            "wins": 11,
+            "losses": 1
+          },
+          "positionWinSol": {
+            "percentage": 100,
+            "wins": 12,
+            "losses": 0
+          },
+          "profitFactorUsd": {
+            "ratio": 125.29439132167975,
+            "grossProfit": 13.17817754411952,
+            "grossLoss": 0.10517771310517787
+          },
+          "profitFactorSol": {
+            "ratio": 0.041070599738799674,
+            "grossProfit": 0.041070599738799674,
+            "grossLoss": 0
+          },
+          "dayWinUsd": {
+            "percentage": 100,
+            "wins": 2,
+            "losses": 0
+          },
+          "dayWinSol": {
+            "percentage": 100,
+            "wins": 2,
+            "losses": 0
+          },
+          "avgWinLoss": {
+            "ratioUsd": 11.390399211061796,
+            "avgWinUsd": 1.198016140374502,
+            "avgLossUsd": 0.10517771310517787,
+            "ratioSol": 0.003422549978233306,
+            "avgWinSol": 0.003422549978233306,
+            "avgLossSol": 0
+          }
+        },
+        "calendar": {
+          "2026-09-20": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 0.015909057866773133,
+            "feesUsd": 1.7259168949788912,
+            "pnlUsd": 1.7401941378038117,
+            "pnlSol": 0.011587050811966204,
+            "positions": 6,
+            "winRateUsd": 83.33333333333334,
+            "winRateSol": 100
+          },
+          "2026-09-21": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 0.03523645931474295,
+            "feesUsd": 3.9217078429451475,
+            "pnlUsd": 11.332805693210531,
+            "pnlSol": 0.02948354892683347,
+            "positions": 6,
+            "winRateUsd": 100,
+            "winRateSol": 100
+          }
+        }
+      }
+    },
+    {
+      "owner": "DY3yi3VNjsB7y6WVsct5Ybs1Srzmg3QacoroNoSUM2zV",
+      "status": "ok",
+      "fabriq": {
+        "fetchedAt": "2026-09-21T05:02:15.283Z",
+        "month": "2026-09",
+        "stats": {
+          "netPnlUsd": 633.897892635195,
+          "netPnlSol": 6.930699411742623,
+          "totalPositions": 65,
+          "avgAddLiquidityUsd": 1050.6068425404937,
+          "avgAddLiquiditySol": 9.464941945646155,
+          "totalDepositsUsd": 68289.4447651321,
+          "totalDepositsSol": 615.2212264670001,
+          "totalWithdrawalsUsd": 68154.93654518905,
+          "totalWithdrawalsSol": 615.2295784164304,
+          "totalFeesUsd": 768.4061125782324,
+          "totalFeesSol": 6.922347462312129,
+          "positionWinUsd": {
+            "percentage": 56.92307692307692,
+            "wins": 37,
+            "losses": 28
+          },
+          "positionWinSol": {
+            "percentage": 100,
+            "wins": 65,
+            "losses": 0
+          },
+          "profitFactorUsd": {
+            "ratio": 4.118998607656667,
+            "grossProfit": 837.1355250852616,
+            "grossLoss": 203.2376324500666
+          },
+          "profitFactorSol": {
+            "ratio": 6.930699411742623,
+            "grossProfit": 6.930699411742623,
+            "grossLoss": 0
+          },
+          "dayWinUsd": {
+            "percentage": 66.66666666666666,
+            "wins": 2,
+            "losses": 1
+          },
+          "dayWinSol": {
+            "percentage": 100,
+            "wins": 3,
+            "losses": 0
+          },
+          "avgWinLoss": {
+            "ratioUsd": 3.117080027415856,
+            "avgWinUsd": 22.62528446176383,
+            "avgLossUsd": 7.258486873216664,
+            "ratioSol": 0.10662614479604035,
+            "avgWinSol": 0.10662614479604035,
+            "avgLossSol": 0
+          }
+        },
+        "calendar": {
+          "2026-09-19": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 0.057948990116420164,
+            "feesUsd": 6.525033909483213,
+            "pnlUsd": 8.05631972474589,
+            "pnlSol": 0.058098725116416894,
+            "positions": 13,
+            "winRateUsd": 61.53846153846154,
+            "winRateSol": 100
+          },
+          "2026-09-20": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 0.3049888575910888,
+            "feesUsd": 33.71698103030103,
+            "pnlUsd": -134.44732586209136,
+            "pnlSol": 0.3053768547547602,
+            "positions": 29,
+            "winRateUsd": 34.48275862068966,
+            "winRateSol": 100
+          },
+          "2026-09-21": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 6.559409614604619,
+            "feesUsd": 728.1640976384477,
+            "pnlUsd": 760.2888987725405,
+            "pnlSol": 6.567223831871446,
+            "positions": 23,
+            "winRateUsd": 82.6086956521739,
+            "winRateSol": 100
+          }
+        }
+      }
+    },
+    {
+      "owner": "GXbFvEMpVapS1QJeD8m3fcjngHknMbo6QfH54VKfeCbi",
+      "status": "ok",
+      "fabriq": {
+        "fetchedAt": "2026-09-21T05:02:16.500Z",
+        "month": "2026-09",
+        "stats": {
+          "netPnlUsd": 19.59639941355462,
+          "netPnlSol": 0.1753993816772328,
+          "totalPositions": 1,
+          "avgAddLiquidityUsd": 220.10667737416662,
+          "avgAddLiquiditySol": 1.9691431053661013,
+          "totalDepositsUsd": 220.10667737416662,
+          "totalDepositsSol": 1.9691431053661013,
+          "totalWithdrawalsUsd": 224.52453363419664,
+          "totalWithdrawalsSol": 2.008745186815181,
+          "totalFeesUsd": 15.1785431535246,
+          "totalFeesSol": 0.13579730022815312,
+          "positionWinUsd": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "positionWinSol": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "profitFactorUsd": {
+            "ratio": 19.59639941355462,
+            "grossProfit": 19.59639941355462,
+            "grossLoss": 0
+          },
+          "profitFactorSol": {
+            "ratio": 0.1753993816772328,
+            "grossProfit": 0.1753993816772328,
+            "grossLoss": 0
+          },
+          "dayWinUsd": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "dayWinSol": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "avgWinLoss": {
+            "ratioUsd": 19.59639941355462,
+            "avgWinUsd": 19.59639941355462,
+            "avgLossUsd": 0,
+            "ratioSol": 0.1753993816772328,
+            "avgWinSol": 0.1753993816772328,
+            "avgLossSol": 0
+          }
+        },
+        "calendar": {
+          "2026-09-21": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 0.13579730022815312,
+            "feesUsd": 15.1785431535246,
+            "pnlUsd": 19.59639941355462,
+            "pnlSol": 0.1753993816772328,
+            "positions": 1,
+            "winRateUsd": 100,
+            "winRateSol": 100
+          }
+        }
+      }
+    },
+    {
+      "owner": "AFKzNMg6W1bDWrpgfn4Ttc4x7vU9Ba7J2Gt8HpnxagYS",
+      "status": "ok",
+      "fabriq": {
+        "fetchedAt": "2026-09-21T05:02:17.528Z",
+        "month": "2026-09",
+        "stats": {
+          "netPnlUsd": 49.95143888138125,
+          "netPnlSol": 0.4360451742391076,
+          "totalPositions": 9,
+          "avgAddLiquidityUsd": 890.9267296539269,
+          "avgAddLiquiditySol": 7.999999960666667,
+          "totalDepositsUsd": 8018.340566885343,
+          "totalDepositsSol": 71.999999646,
+          "totalWithdrawalsUsd": 7945.720954096871,
+          "totalWithdrawalsSol": 71.33838636651481,
+          "totalFeesUsd": 122.57105166985257,
+          "totalFeesSol": 1.0976584537242884,
+          "positionWinUsd": {
+            "percentage": 77.77777777777779,
+            "wins": 7,
+            "losses": 2
+          },
+          "positionWinSol": {
+            "percentage": 88.88888888888889,
+            "wins": 8,
+            "losses": 1
+          },
+          "profitFactorUsd": {
+            "ratio": 51.55448635557548,
+            "grossProfit": 50.939510217524344,
+            "grossLoss": 0.9880713361430935
+          },
+          "profitFactorSol": {
+            "ratio": 72674201.45137037,
+            "grossProfit": 0.4360451802391072,
+            "grossLoss": 5.999999608263806e-9
+          },
+          "dayWinUsd": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "dayWinSol": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "avgWinLoss": {
+            "ratioUsd": 14.729853244450137,
+            "avgWinUsd": 7.277072888217764,
+            "avgLossUsd": 0.49403566807154675,
+            "ratioSol": 10382028.778767196,
+            "avgWinSol": 0.06229216860558674,
+            "avgLossSol": 5.999999608263806e-9
+          }
+        },
+        "calendar": {
+          "2026-09-21": {
+            "feeWinRateSol": 77.77777777777779,
+            "feeWinRateUsd": 77.77777777777779,
+            "feesSol": 1.0976584537242884,
+            "feesUsd": 122.57105166985257,
+            "pnlUsd": 49.95143888138125,
+            "pnlSol": 0.4360451742391076,
+            "positions": 9,
+            "winRateUsd": 77.77777777777779,
+            "winRateSol": 88.88888888888889
+          }
+        }
+      }
+    },
+    {
+      "owner": "68mPurdw2gpum2e3iJFwuWBp3QecdubjHWTUmEpBiQdH",
+      "status": "ok",
+      "fabriq": {
+        "fetchedAt": "2026-09-21T05:02:18.614Z",
+        "month": "2026-09",
+        "stats": {
+          "netPnlUsd": 10.350474532102453,
+          "netPnlSol": 0.08578651349529598,
+          "totalPositions": 4,
+          "avgAddLiquidityUsd": 162.57410689544892,
+          "avgAddLiquiditySol": 1.464705667,
+          "totalDepositsUsd": 650.2964275817957,
+          "totalDepositsSol": 5.858822668,
+          "totalWithdrawalsUsd": 648.534397513901,
+          "totalWithdrawalsSol": 5.836363934869718,
+          "totalFeesUsd": 12.112504599997035,
+          "totalFeesSol": 0.10824524662557829,
+          "positionWinUsd": {
+            "percentage": 75,
+            "wins": 3,
+            "losses": 1
+          },
+          "positionWinSol": {
+            "percentage": 100,
+            "wins": 4,
+            "losses": 0
+          },
+          "profitFactorUsd": {
+            "ratio": 180.93223786681588,
+            "grossProfit": 10.407998823773653,
+            "grossLoss": 0.05752429167119999
+          },
+          "profitFactorSol": {
+            "ratio": 0.08578651349529598,
+            "grossProfit": 0.08578651349529598,
+            "grossLoss": 0
+          },
+          "dayWinUsd": {
+            "percentage": 100,
+            "wins": 3,
+            "losses": 0
+          },
+          "dayWinSol": {
+            "percentage": 100,
+            "wins": 3,
+            "losses": 0
+          },
+          "avgWinLoss": {
+            "ratioUsd": 60.3107459556053,
+            "avgWinUsd": 3.469332941257884,
+            "avgLossUsd": 0.05752429167119999,
+            "ratioSol": 0.04289325674764799,
+            "avgWinSol": 0.04289325674764799,
+            "avgLossSol": 0
+          }
+        },
+        "calendar": {
+          "2026-09-18": {
+            "feeWinRateSol": 0,
+            "feeWinRateUsd": 0,
+            "feesSol": 0,
+            "feesUsd": 0,
+            "pnlUsd": 0.3653526619916079,
+            "pnlSol": 0,
+            "positions": 1,
+            "winRateUsd": 100,
+            "winRateSol": 100
+          },
+          "2026-09-19": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 0.03752510659343877,
+            "feesUsd": 4.20838841095014,
+            "pnlUsd": 1.8054549882078277,
+            "pnlSol": 0.017650822611486428,
+            "positions": 1,
+            "winRateUsd": 100,
+            "winRateSol": 100
+          },
+          "2026-09-21": {
+            "feeWinRateSol": 50,
+            "feeWinRateUsd": 50,
+            "feesSol": 0.07072014003213951,
+            "feesUsd": 7.904116189046896,
+            "pnlUsd": 8.179666881903017,
+            "pnlSol": 0.06813569088380955,
+            "positions": 2,
+            "winRateUsd": 50,
+            "winRateSol": 100
+          }
+        }
+      }
+    },
+    {
+      "owner": "EkUY7oVxCaR1Lre1mTiQp3v8DW4MA2gTa1s3VLemWwLj",
+      "status": "ok",
+      "fabriq": {
+        "fetchedAt": "2026-09-21T05:02:19.613Z",
+        "month": "2026-09",
+        "stats": {
+          "netPnlUsd": 2.1512280399271617,
+          "netPnlSol": 0.018927900378905238,
+          "totalPositions": 1,
+          "avgAddLiquidityUsd": 89.39498436920243,
+          "avgAddLiquiditySol": 0.79999997,
+          "totalDepositsUsd": 89.39498436920243,
+          "totalDepositsSol": 0.79999997,
+          "totalWithdrawalsUsd": 89.4018865814087,
+          "totalWithdrawalsSol": 0.7997229986633322,
+          "totalFeesUsd": 2.1443258277208903,
+          "totalFeesSol": 0.019204871715573058,
+          "positionWinUsd": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "positionWinSol": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "profitFactorUsd": {
+            "ratio": 2.1512280399271617,
+            "grossProfit": 2.1512280399271617,
+            "grossLoss": 0
+          },
+          "profitFactorSol": {
+            "ratio": 0.018927900378905238,
+            "grossProfit": 0.018927900378905238,
+            "grossLoss": 0
+          },
+          "dayWinUsd": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "dayWinSol": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "avgWinLoss": {
+            "ratioUsd": 2.1512280399271617,
+            "avgWinUsd": 2.1512280399271617,
+            "avgLossUsd": 0,
+            "ratioSol": 0.018927900378905238,
+            "avgWinSol": 0.018927900378905238,
+            "avgLossSol": 0
+          }
+        },
+        "calendar": {
+          "2026-09-21": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 0.019204871715573058,
+            "feesUsd": 2.1443258277208903,
+            "pnlUsd": 2.1512280399271617,
+            "pnlSol": 0.018927900378905238,
+            "positions": 1,
+            "winRateUsd": 100,
+            "winRateSol": 100
+          }
+        }
+      }
+    },
+    {
+      "owner": "JoMwefMTGxCQi4rzfykmHvdJcfPt2fwVNYsoAHRp8Ct",
+      "status": "ok",
+      "fabriq": {
+        "fetchedAt": "2026-09-21T05:02:20.664Z",
+        "month": "2026-09",
+        "stats": {
+          "netPnlUsd": -329.33495410794905,
+          "netPnlSol": -3.294324246816565,
+          "totalPositions": 133,
+          "avgAddLiquidityUsd": 22.44859834906179,
+          "avgAddLiquiditySol": 0.21793597647791324,
+          "totalDepositsUsd": 2985.6635804252182,
+          "totalDepositsSol": 28.985484871562463,
+          "totalWithdrawalsUsd": 1818.8813830324918,
+          "totalWithdrawalsSol": 17.601591460464764,
+          "totalFeesUsd": 837.4472432847767,
+          "totalFeesSol": 8.08956916428114,
+          "positionWinUsd": {
+            "percentage": 35.338345864661655,
+            "wins": 47,
+            "losses": 86
+          },
+          "positionWinSol": {
+            "percentage": 35.338345864661655,
+            "wins": 47,
+            "losses": 86
+          },
+          "profitFactorUsd": {
+            "ratio": 0.6902993377065998,
+            "grossProfit": 734.0626882127125,
+            "grossLoss": 1063.3976423206618
+          },
+          "profitFactorSol": {
+            "ratio": 0.6835054439995256,
+            "grossProfit": 7.114462205774508,
+            "grossLoss": 10.408786452591073
+          },
+          "dayWinUsd": {
+            "percentage": 42.857142857142854,
+            "wins": 3,
+            "losses": 4
+          },
+          "dayWinSol": {
+            "percentage": 42.857142857142854,
+            "wins": 3,
+            "losses": 4
+          },
+          "avgWinLoss": {
+            "ratioUsd": 1.2631009158035655,
+            "avgWinUsd": 15.618355068355585,
+            "avgLossUsd": 12.365088864193742,
+            "ratioSol": 1.2506695358289193,
+            "avgWinSol": 0.15137153629307465,
+            "avgLossSol": 0.12103240061152411
+          }
+        },
+        "calendar": {
+          "2026-09-15": {
+            "feeWinRateSol": 98.64864864864865,
+            "feeWinRateUsd": 98.64864864864865,
+            "feesSol": 0.5253890786588487,
+            "feesUsd": 52.51586444053511,
+            "pnlUsd": -48.79319495557441,
+            "pnlSol": -0.4705796214263508,
+            "positions": 74,
+            "winRateUsd": 45.94594594594595,
+            "winRateSol": 45.94594594594595
+          },
+          "2026-09-16": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 3.3145128959946533,
+            "feesUsd": 322.38618647935544,
+            "pnlUsd": 43.1970715467936,
+            "pnlSol": 0.4954772804281202,
+            "positions": 32,
+            "winRateUsd": 21.875,
+            "winRateSol": 21.875
+          },
+          "2026-09-17": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 0.18091286535068482,
+            "feesUsd": 17.822561016808514,
+            "pnlUsd": -97.83955117872914,
+            "pnlSol": -1.0046856059300047,
+            "positions": 2,
+            "winRateUsd": 0,
+            "winRateSol": 0
+          },
+          "2026-09-18": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 0.8852945294064842,
+            "feesUsd": 89.61763872330982,
+            "pnlUsd": -340.0653401343428,
+            "pnlSol": -3.370660996428407,
+            "positions": 7,
+            "winRateUsd": 0,
+            "winRateSol": 0
+          },
+          "2026-09-19": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 0.4211161990152128,
+            "feesUsd": 47.57606099479591,
+            "pnlUsd": -138.41205287458087,
+            "pnlSol": -1.2306450272718092,
+            "positions": 8,
+            "winRateUsd": 12.5,
+            "winRateSol": 12.5
+          },
+          "2026-09-20": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 0.5820563603119964,
+            "feesUsd": 64.97370343135431,
+            "pnlUsd": 45.28317810262146,
+            "pnlSol": 0.41462853227581953,
+            "positions": 7,
+            "winRateUsd": 57.14285714285714,
+            "winRateSol": 57.14285714285714
+          },
+          "2026-09-21": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 2.1802872355432603,
+            "feesUsd": 242.55522819861747,
+            "pnlUsd": 207.2949353858631,
+            "pnlSol": 1.872141191536067,
+            "positions": 3,
+            "winRateUsd": 33.33333333333333,
+            "winRateSol": 33.33333333333333
+          }
+        }
+      }
+    },
+    {
+      "owner": "7ScTG1q7rj7bwTFCdzHTYto9brrafoihX1hfhkvjgXR5",
+      "status": "ok",
+      "fabriq": {
+        "fetchedAt": "2026-09-21T05:02:21.634Z",
+        "month": "2026-09",
+        "stats": {
+          "netPnlUsd": 30.160160723638505,
+          "netPnlSol": 0.23505127628268885,
+          "totalPositions": 8,
+          "avgAddLiquidityUsd": 238.27374465364932,
+          "avgAddLiquiditySol": 2.1438226788444825,
+          "totalDepositsUsd": 1906.1899572291945,
+          "totalDepositsSol": 17.15058143075586,
+          "totalWithdrawalsUsd": 1852.519325024627,
+          "totalWithdrawalsSol": 16.633095744100036,
+          "totalFeesUsd": 83.83079292820604,
+          "totalFeesSol": 0.7525369629385165,
+          "positionWinUsd": {
+            "percentage": 62.5,
+            "wins": 5,
+            "losses": 3
+          },
+          "positionWinSol": {
+            "percentage": 62.5,
+            "wins": 5,
+            "losses": 3
+          },
+          "profitFactorUsd": {
+            "ratio": 2.530597060856092,
+            "grossProfit": 49.864994539776475,
+            "grossLoss": 19.70483381613797
+          },
+          "profitFactorSol": {
+            "ratio": 2.342166848000949,
+            "grossProfit": 0.4101794852924548,
+            "grossLoss": 0.1751282090097659
+          },
+          "dayWinUsd": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "dayWinSol": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "avgWinLoss": {
+            "ratioUsd": 1.518358236513655,
+            "avgWinUsd": 9.972998907955295,
+            "avgLossUsd": 6.568277938712657,
+            "ratioSol": 1.4053001088005694,
+            "avgWinSol": 0.08203589705849096,
+            "avgLossSol": 0.05837606966992196
+          }
+        },
+        "calendar": {
+          "2026-09-21": {
+            "feeWinRateSol": 87.5,
+            "feeWinRateUsd": 87.5,
+            "feesSol": 0.7525369629385165,
+            "feesUsd": 83.83079292820604,
+            "pnlUsd": 30.160160723638505,
+            "pnlSol": 0.23505127628268885,
+            "positions": 8,
+            "winRateUsd": 62.5,
+            "winRateSol": 62.5
+          }
+        }
+      }
+    },
+    {
+      "owner": "HMyY5Mj8LJfVLsDc72NCsV4qvrm54yMSoyBJkspoDfVU",
+      "status": "ok",
+      "fabriq": {
+        "fetchedAt": "2026-09-21T05:02:22.722Z",
+        "month": "2026-09",
+        "stats": {
+          "netPnlUsd": 580.2452718930543,
+          "netPnlSol": 3.4370187401047674,
+          "totalPositions": 10,
+          "avgAddLiquidityUsd": 2102.152424299415,
+          "avgAddLiquiditySol": 19.262092828547264,
+          "totalDepositsUsd": 21021.52424299415,
+          "totalDepositsSol": 192.62092828547264,
+          "totalWithdrawalsUsd": 20804.517928801633,
+          "totalWithdrawalsSol": 188.82811695705527,
+          "totalFeesUsd": 797.2515860855755,
+          "totalFeesSol": 7.229830068522149,
+          "positionWinUsd": {
+            "percentage": 70,
+            "wins": 7,
+            "losses": 3
+          },
+          "positionWinSol": {
+            "percentage": 40,
+            "wins": 4,
+            "losses": 6
+          },
+          "profitFactorUsd": {
+            "ratio": 2.7782149923478645,
+            "grossProfit": 906.5529874336414,
+            "grossLoss": 326.30771554058714
+          },
+          "profitFactorSol": {
+            "ratio": 1.7312922222816498,
+            "grossProfit": 8.13694393468866,
+            "grossLoss": 4.699925194583891
+          },
+          "dayWinUsd": {
+            "percentage": 100,
+            "wins": 2,
+            "losses": 0
+          },
+          "dayWinSol": {
+            "percentage": 50,
+            "wins": 1,
+            "losses": 1
+          },
+          "avgWinLoss": {
+            "ratioUsd": 1.190663568149085,
+            "avgWinUsd": 129.50756963337736,
+            "avgLossUsd": 108.76923851352905,
+            "ratioSol": 2.5969383334224747,
+            "avgWinSol": 2.034235983672165,
+            "avgLossSol": 0.7833208657639817
+          }
+        },
+        "calendar": {
+          "2026-09-20": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 0.01572157379829595,
+            "feesUsd": 1.7322944256334631,
+            "pnlUsd": 2.429446819179475,
+            "pnlSol": -1.7170683498769517,
+            "positions": 2,
+            "winRateUsd": 100,
+            "winRateSol": 0
+          },
+          "2026-09-21": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 7.214108494723853,
+            "feesUsd": 795.519291659942,
+            "pnlUsd": 577.8158250738749,
+            "pnlSol": 5.1540870899817195,
+            "positions": 8,
+            "winRateUsd": 62.5,
+            "winRateSol": 50
+          }
+        }
+      }
+    },
+    {
+      "owner": "9FwbcwLpyEq4ypfDQTBmAuTsS7jCVACNb6C1YamfuC3G",
+      "status": "ok",
+      "fabriq": {
+        "fetchedAt": "2026-09-21T05:02:55.274Z",
+        "month": "2026-09",
+        "stats": {
+          "netPnlUsd": 4.670894203200355,
+          "netPnlSol": 0.03972778005081111,
+          "totalPositions": 7,
+          "avgAddLiquidityUsd": 4.285945864856094,
+          "avgAddLiquiditySol": 0.038744838221690205,
+          "totalDepositsUsd": 30.001621053992658,
+          "totalDepositsSol": 0.2712138675518314,
+          "totalWithdrawalsUsd": 31.78644730003104,
+          "totalWithdrawalsSol": 0.2849837679812363,
+          "totalFeesUsd": 2.8860679571619716,
+          "totalFeesSol": 0.02595787962140617,
+          "positionWinUsd": {
+            "percentage": 100,
+            "wins": 7,
+            "losses": 0
+          },
+          "positionWinSol": {
+            "percentage": 100,
+            "wins": 7,
+            "losses": 0
+          },
+          "profitFactorUsd": {
+            "ratio": 4.670894203200355,
+            "grossProfit": 4.670894203200355,
+            "grossLoss": 0
+          },
+          "profitFactorSol": {
+            "ratio": 0.03972778005081111,
+            "grossProfit": 0.03972778005081111,
+            "grossLoss": 0
+          },
+          "dayWinUsd": {
+            "percentage": 100,
+            "wins": 2,
+            "losses": 0
+          },
+          "dayWinSol": {
+            "percentage": 100,
+            "wins": 2,
+            "losses": 0
+          },
+          "avgWinLoss": {
+            "ratioUsd": 0.7784823672000591,
+            "avgWinUsd": 0.7784823672000591,
+            "avgLossUsd": 0,
+            "ratioSol": 0.009931945012702777,
+            "avgWinSol": 0.009931945012702777,
+            "avgLossSol": 0
+          }
+        },
+        "calendar": {
+          "2026-09-20": {
+            "feeWinRateSol": 0,
+            "feeWinRateUsd": 0,
+            "feesSol": 0,
+            "feesUsd": 0,
+            "pnlUsd": 0.005899134363326439,
+            "pnlSol": 0.00006493746423940987,
+            "positions": 1,
+            "winRateUsd": 100,
+            "winRateSol": 100
+          },
+          "2026-09-21": {
+            "feeWinRateSol": 50,
+            "feeWinRateUsd": 50,
+            "feesSol": 0.02595787962140617,
+            "feesUsd": 2.8860679571619716,
+            "pnlUsd": 4.664995068837029,
+            "pnlSol": 0.0396628425865717,
+            "positions": 6,
+            "winRateUsd": 100,
+            "winRateSol": 100
+          }
+        }
+      }
+    },
+    {
+      "owner": "4HoK1UuBHM2tBCCAwMBwU1ppd62MmsJT9h9NqD9bHRvG",
+      "status": "ok",
+      "fabriq": {
+        "fetchedAt": "2026-09-21T05:02:56.339Z",
+        "month": "2026-09",
+        "stats": {
+          "netPnlUsd": 677.3417790206101,
+          "netPnlSol": 2.4611014428662714,
+          "totalPositions": 39,
+          "avgAddLiquidityUsd": 3706.0494818061984,
+          "avgAddLiquiditySol": 34.09525518830705,
+          "totalDepositsUsd": 144535.92979044173,
+          "totalDepositsSol": 1329.714952343975,
+          "totalWithdrawalsUsd": 144409.84230163464,
+          "totalWithdrawalsSol": 1324.9338629082777,
+          "totalFeesUsd": 803.4292678277195,
+          "totalFeesSol": 7.242190878563245,
+          "positionWinUsd": {
+            "percentage": 64.1025641025641,
+            "wins": 25,
+            "losses": 14
+          },
+          "positionWinSol": {
+            "percentage": 56.41025641025641,
+            "wins": 22,
+            "losses": 17
+          },
+          "profitFactorUsd": {
+            "ratio": 17.4950101156735,
+            "grossProfit": 718.4052142213561,
+            "grossLoss": 41.063435200746085
+          },
+          "profitFactorSol": {
+            "ratio": 1.6583709440969927,
+            "grossProfit": 6.199269818814065,
+            "grossLoss": 3.7381683759477937
+          },
+          "dayWinUsd": {
+            "percentage": 80,
+            "wins": 4,
+            "losses": 1
+          },
+          "dayWinSol": {
+            "percentage": 40,
+            "wins": 2,
+            "losses": 3
+          },
+          "avgWinLoss": {
+            "ratioUsd": 10.20542256747621,
+            "avgWinUsd": 29.933550592556504,
+            "avgLossUsd": 2.933102514339006,
+            "ratioSol": 1.2814684568022217,
+            "avgWinSol": 0.2817849917642757,
+            "avgLossSol": 0.21989225740869375
+          }
+        },
+        "calendar": {
+          "2026-09-17": {
+            "feeWinRateSol": 85.71428571428571,
+            "feeWinRateUsd": 85.71428571428571,
+            "feesSol": 0.2612018228098522,
+            "feesUsd": 26.351186363676778,
+            "pnlUsd": 11.38789952254831,
+            "pnlSol": -0.26773499138224643,
+            "positions": 7,
+            "winRateUsd": 57.14285714285714,
+            "winRateSol": 42.857142857142854
+          },
+          "2026-09-18": {
+            "feeWinRateSol": 83.33333333333334,
+            "feeWinRateUsd": 83.33333333333334,
+            "feesSol": 0.8232791125692288,
+            "feesUsd": 87.22758298026481,
+            "pnlUsd": 100.0063832606661,
+            "pnlSol": 0.6888329414721746,
+            "positions": 6,
+            "winRateUsd": 83.33333333333334,
+            "winRateSol": 83.33333333333334
+          },
+          "2026-09-19": {
+            "feeWinRateSol": 60,
+            "feeWinRateUsd": 60,
+            "feesSol": 1.3976082098717748,
+            "feesUsd": 158.58995261201994,
+            "pnlUsd": 161.0548361291785,
+            "pnlSol": -2.4574711291329194,
+            "positions": 5,
+            "winRateUsd": 60,
+            "winRateSol": 20
+          },
+          "2026-09-20": {
+            "feeWinRateSol": 50,
+            "feeWinRateUsd": 50,
+            "feesSol": 0.0808472776511094,
+            "feesUsd": 8.747968,
+            "pnlUsd": -13.262357465661353,
+            "pnlSol": -0.0833981128477177,
+            "positions": 4,
+            "winRateUsd": 25,
+            "winRateSol": 25
+          },
+          "2026-09-21": {
+            "feeWinRateSol": 76.47058823529412,
+            "feeWinRateUsd": 76.47058823529412,
+            "feesSol": 4.6792544556612805,
+            "feesUsd": 522.5125778717579,
+            "pnlUsd": 418.1550175738786,
+            "pnlSol": 4.580872734756981,
+            "positions": 17,
+            "winRateUsd": 70.58823529411765,
+            "winRateSol": 70.58823529411765
+          }
+        }
+      }
+    },
+    {
+      "owner": "Gt5bweUBSrGWnsyyW2eF7hg3jL5TyRoGQRzqJW4up7rz",
+      "status": "ok",
+      "fabriq": {
+        "fetchedAt": "2026-09-21T05:02:57.296Z",
+        "month": "2026-09",
+        "stats": {
+          "netPnlUsd": -16.057057258978247,
+          "netPnlSol": 1.1802814719411747,
+          "totalPositions": 12,
+          "avgAddLiquidityUsd": 421.25666199577375,
+          "avgAddLiquiditySol": 4.428410031720886,
+          "totalDepositsUsd": 5055.079943949285,
+          "totalDepositsSol": 53.14092038065063,
+          "totalWithdrawalsUsd": 5020.833053879582,
+          "totalWithdrawalsSol": 54.11426019341103,
+          "totalFeesUsd": 18.189832810724862,
+          "totalFeesSol": 0.20694165918076693,
+          "positionWinUsd": {
+            "percentage": 66.66666666666666,
+            "wins": 8,
+            "losses": 4
+          },
+          "positionWinSol": {
+            "percentage": 83.33333333333334,
+            "wins": 10,
+            "losses": 2
+          },
+          "profitFactorUsd": {
+            "ratio": 0.6605694046899527,
+            "grossProfit": 31.24880579768343,
+            "grossLoss": 47.30586305666168
+          },
+          "profitFactorSol": {
+            "ratio": 6.0068897382298925,
+            "grossProfit": 1.4160129407069408,
+            "grossLoss": 0.23573146876576612
+          },
+          "dayWinUsd": {
+            "percentage": 87.5,
+            "wins": 7,
+            "losses": 1
+          },
+          "dayWinSol": {
+            "percentage": 75,
+            "wins": 6,
+            "losses": 2
+          },
+          "avgWinLoss": {
+            "ratioUsd": 0.33028470234497637,
+            "avgWinUsd": 3.906100724710429,
+            "avgLossUsd": 11.82646576416542,
+            "ratioSol": 1.3348643862733094,
+            "avgWinSol": 0.1573347711896601,
+            "avgLossSol": 0.11786573438288306
+          }
+        },
+        "calendar": {
+          "2026-09-21": {
+            "feeWinRateSol": 80,
+            "feeWinRateUsd": 80,
+            "feesSol": 0.0314243617104176,
+            "feesUsd": 3.5145761251903456,
+            "pnlUsd": 5.870178171421799,
+            "pnlSol": 0.031417038710417344,
+            "positions": 5,
+            "winRateUsd": 40,
+            "winRateSol": 100
+          }
+        }
+      }
+    },
+    {
+      "owner": "8mAZJL3XYpzGtGHuytFRVXDLj22hv2LJ65WgjFEqCiBu",
+      "status": "ok",
+      "fabriq": {
+        "fetchedAt": "2026-09-21T05:02:58.594Z",
+        "month": "2026-09",
+        "stats": {
+          "netPnlUsd": 6.342150986090132,
+          "netPnlSol": 0.024852484224412663,
+          "totalPositions": 2,
+          "avgAddLiquidityUsd": 414.77025547612004,
+          "avgAddLiquiditySol": 3.7451506239677954,
+          "totalDepositsUsd": 829.5405109522401,
+          "totalDepositsSol": 7.490301247935591,
+          "totalWithdrawalsUsd": 833.9672659279752,
+          "totalWithdrawalsSol": 7.4979331795141,
+          "totalFeesUsd": 1.9153960103549903,
+          "totalFeesSol": 0.017220552645902786,
+          "positionWinUsd": {
+            "percentage": 100,
+            "wins": 2,
+            "losses": 0
+          },
+          "positionWinSol": {
+            "percentage": 50,
+            "wins": 1,
+            "losses": 1
+          },
+          "profitFactorUsd": {
+            "ratio": 6.342150986090132,
+            "grossProfit": 6.342150986090132,
+            "grossLoss": 0
+          },
+          "profitFactorSol": {
+            "ratio": 2.1672439390853837,
+            "grossProfit": 0.046144078373863806,
+            "grossLoss": 0.021291594149451143
+          },
+          "dayWinUsd": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "dayWinSol": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "avgWinLoss": {
+            "ratioUsd": 3.171075493045066,
+            "avgWinUsd": 3.171075493045066,
+            "avgLossUsd": 0,
+            "ratioSol": 2.1672439390853837,
+            "avgWinSol": 0.046144078373863806,
+            "avgLossSol": 0.021291594149451143
+          }
+        },
+        "calendar": {
+          "2026-09-21": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 0.017220552645902786,
+            "feesUsd": 1.9153960103549903,
+            "pnlUsd": 6.342150986090132,
+            "pnlSol": 0.024852484224412663,
+            "positions": 2,
+            "winRateUsd": 100,
+            "winRateSol": 50
+          }
+        }
+      }
+    },
+    {
+      "owner": "6DwC5wjNFPBjcWTxHbsFxztuMhkTzgz5pdHvVjYDtG9p",
+      "status": "ok",
+      "fabriq": {
+        "fetchedAt": "2026-09-21T05:02:59.698Z",
+        "month": "2026-09",
+        "stats": {
+          "netPnlUsd": 2.4642062865491994,
+          "netPnlSol": -0.03905006432210323,
+          "totalPositions": 66,
+          "avgAddLiquidityUsd": 357.95976990426846,
+          "avgAddLiquiditySol": 3.23472228276215,
+          "totalDepositsUsd": 23625.344813681717,
+          "totalDepositsSol": 213.49167066230189,
+          "totalWithdrawalsUsd": 23623.320128938445,
+          "totalWithdrawalsSol": 213.4118596313672,
+          "totalFeesUsd": 4.488891029819887,
+          "totalFeesSol": 0.04076096661258794,
+          "positionWinUsd": {
+            "percentage": 69.6969696969697,
+            "wins": 46,
+            "losses": 20
+          },
+          "positionWinSol": {
+            "percentage": 45.45454545454545,
+            "wins": 30,
+            "losses": 36
+          },
+          "profitFactorUsd": {
+            "ratio": 1.4311979508596766,
+            "grossProfit": 8.178997559643904,
+            "grossLoss": 5.714791273094704
+          },
+          "profitFactorSol": {
+            "ratio": 0.6496652227073811,
+            "grossProfit": 0.07241493102857666,
+            "grossLoss": 0.11146499535067989
+          },
+          "dayWinUsd": {
+            "percentage": 100,
+            "wins": 2,
+            "losses": 0
+          },
+          "dayWinSol": {
+            "percentage": 0,
+            "wins": 0,
+            "losses": 2
+          },
+          "avgWinLoss": {
+            "ratioUsd": 0.6222599786346421,
+            "avgWinUsd": 0.17780429477486748,
+            "avgLossUsd": 0.2857395636547352,
+            "ratioSol": 0.7795982672488575,
+            "avgWinSol": 0.0024138310342858888,
+            "avgLossSol": 0.003096249870852219
+          }
+        },
+        "calendar": {
+          "2026-09-20": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 0.01339421646503844,
+            "feesUsd": 1.4568198412409181,
+            "pnlUsd": 1.667800157407214,
+            "pnlSol": -0.03243621529705143,
+            "positions": 21,
+            "winRateUsd": 47.61904761904761,
+            "winRateSol": 52.38095238095239
+          },
+          "2026-09-21": {
+            "feeWinRateSol": 93.33333333333333,
+            "feeWinRateUsd": 93.33333333333333,
+            "feesSol": 0.02736675014754951,
+            "feesUsd": 3.032071188578968,
+            "pnlUsd": 0.7964061291419853,
+            "pnlSol": -0.006613849025051799,
+            "positions": 45,
+            "winRateUsd": 80,
+            "winRateSol": 42.22222222222222
+          }
+        }
+      }
+    },
+    {
+      "owner": "JBNQ1pcsHVcbWmsXmkBdZQPCCWhdRVuiYJb4q5ivsNE3",
+      "status": "ok",
+      "fabriq": {
+        "fetchedAt": "2026-09-21T05:03:00.675Z",
+        "month": "2026-09",
+        "stats": {
+          "netPnlUsd": 5.8413257330150685,
+          "netPnlSol": 0.04721001341419234,
+          "totalPositions": 1,
+          "avgAddLiquidityUsd": 44.364348696132936,
+          "avgAddLiquiditySol": 0.40470699062075843,
+          "totalDepositsUsd": 44.364348696132936,
+          "totalDepositsSol": 0.40470699062075843,
+          "totalWithdrawalsUsd": 46.56930599325731,
+          "totalWithdrawalsSol": 0.419184912537323,
+          "totalFeesUsd": 3.636368435890698,
+          "totalFeesSol": 0.03273209149762779,
+          "positionWinUsd": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "positionWinSol": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "profitFactorUsd": {
+            "ratio": 5.8413257330150685,
+            "grossProfit": 5.8413257330150685,
+            "grossLoss": 0
+          },
+          "profitFactorSol": {
+            "ratio": 0.04721001341419234,
+            "grossProfit": 0.04721001341419234,
+            "grossLoss": 0
+          },
+          "dayWinUsd": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "dayWinSol": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "avgWinLoss": {
+            "ratioUsd": 5.8413257330150685,
+            "avgWinUsd": 5.8413257330150685,
+            "avgLossUsd": 0,
+            "ratioSol": 0.04721001341419234,
+            "avgWinSol": 0.04721001341419234,
+            "avgLossSol": 0
+          }
+        },
+        "calendar": {
+          "2026-09-21": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 0.03273209149762779,
+            "feesUsd": 3.636368435890698,
+            "pnlUsd": 5.8413257330150685,
+            "pnlSol": 0.04721001341419234,
+            "positions": 1,
+            "winRateUsd": 100,
+            "winRateSol": 100
+          }
+        }
+      }
+    },
+    {
+      "owner": "AmfyL1XodkBAZJUkB3DsZtF5ryfwVaysZYtfWauNRguV",
+      "status": "ok",
+      "fabriq": {
+        "fetchedAt": "2026-09-21T05:03:01.671Z",
+        "month": "2026-09",
+        "stats": {
+          "netPnlUsd": 70.3036552303807,
+          "netPnlSol": 0.6282714124691479,
+          "totalPositions": 12,
+          "avgAddLiquidityUsd": 42.951048215384844,
+          "avgAddLiquiditySol": 0.39314195500700944,
+          "totalDepositsUsd": 515.4125785846181,
+          "totalDepositsSol": 4.717703460084113,
+          "totalWithdrawalsUsd": 525.433715238873,
+          "totalWithdrawalsSol": 4.798043654717837,
+          "totalFeesUsd": 60.28251857612559,
+          "totalFeesSol": 0.5479312178354242,
+          "positionWinUsd": {
+            "percentage": 66.66666666666666,
+            "wins": 8,
+            "losses": 4
+          },
+          "positionWinSol": {
+            "percentage": 58.333333333333336,
+            "wins": 7,
+            "losses": 5
+          },
+          "profitFactorUsd": {
+            "ratio": 154.96509914611127,
+            "grossProfit": 70.76027595559884,
+            "grossLoss": 0.45662072521814356
+          },
+          "profitFactorSol": {
+            "ratio": 177.306764771137,
+            "grossProfit": 0.6318349252662019,
+            "grossLoss": 0.0035635127970540664
+          },
+          "dayWinUsd": {
+            "percentage": 100,
+            "wins": 2,
+            "losses": 0
+          },
+          "dayWinSol": {
+            "percentage": 100,
+            "wins": 2,
+            "losses": 0
+          },
+          "avgWinLoss": {
+            "ratioUsd": 77.48254957305564,
+            "avgWinUsd": 8.845034494449855,
+            "avgLossUsd": 0.11415518130453589,
+            "ratioSol": 126.64768912224072,
+            "avgWinSol": 0.09026213218088598,
+            "avgLossSol": 0.0007127025594108133
+          }
+        },
+        "calendar": {
+          "2026-09-20": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 0.06458511949290918,
+            "feesUsd": 7.0416722416289845,
+            "pnlUsd": 2.6102555680409214,
+            "pnlSol": 0.03893911175821581,
+            "positions": 10,
+            "winRateUsd": 60,
+            "winRateSol": 60
+          },
+          "2026-09-21": {
+            "feeWinRateSol": 50,
+            "feeWinRateUsd": 50,
+            "feesSol": 0.48334609834251513,
+            "feesUsd": 53.240846334496595,
+            "pnlUsd": 67.69339966233977,
+            "pnlSol": 0.589332300710932,
+            "positions": 2,
+            "winRateUsd": 100,
+            "winRateSol": 50
+          }
+        }
+      }
+    },
+    {
+      "owner": "EafSgQv67fRnz8Tt9kDC61eetweeHfP8KBovmp24tfkT",
+      "status": "ok",
+      "fabriq": {
+        "fetchedAt": "2026-09-21T05:03:02.669Z",
+        "month": "2026-09",
+        "stats": {
+          "netPnlUsd": 13491.395558900631,
+          "netPnlSol": 130.82360560165634,
+          "totalPositions": 19,
+          "avgAddLiquidityUsd": 15559.011840185267,
+          "avgAddLiquiditySol": 145.15040579956226,
+          "totalDepositsUsd": 295621.2249635201,
+          "totalDepositsSol": 2757.857710191683,
+          "totalWithdrawalsUsd": 293257.47273912653,
+          "totalWithdrawalsSol": 2731.301604604436,
+          "totalFeesUsd": 15855.14778329423,
+          "totalFeesSol": 157.3797111889039,
+          "positionWinUsd": {
+            "percentage": 68.42105263157895,
+            "wins": 13,
+            "losses": 6
+          },
+          "positionWinSol": {
+            "percentage": 63.1578947368421,
+            "wins": 12,
+            "losses": 7
+          },
+          "profitFactorUsd": {
+            "ratio": 9.543810513539439,
+            "grossProfit": 15070.479685066666,
+            "grossLoss": 1579.0841261660375
+          },
+          "profitFactorSol": {
+            "ratio": 8.601360052647323,
+            "grossProfit": 148.03415801537793,
+            "grossLoss": 17.2105524137216
+          },
+          "dayWinUsd": {
+            "percentage": 60,
+            "wins": 3,
+            "losses": 2
+          },
+          "dayWinSol": {
+            "percentage": 60,
+            "wins": 3,
+            "losses": 2
+          },
+          "avgWinLoss": {
+            "ratioUsd": 4.404835621633587,
+            "avgWinUsd": 1159.2676680820512,
+            "avgLossUsd": 263.1806876943396,
+            "ratioSol": 5.017460030710938,
+            "avgWinSol": 12.336179834614827,
+            "avgLossSol": 2.4586503448173715
+          }
+        },
+        "calendar": {
+          "2026-09-15": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 127.63376354961186,
+            "feesUsd": 12718.447334294227,
+            "pnlUsd": 12447.810714714886,
+            "pnlSol": 125.41072664261439,
+            "positions": 2,
+            "winRateUsd": 100,
+            "winRateSol": 100
+          },
+          "2026-09-16": {
+            "feeWinRateSol": 66.66666666666666,
+            "feeWinRateUsd": 66.66666666666666,
+            "feesSol": 13.87376015346596,
+            "feesUsd": 1355.211452,
+            "pnlUsd": -260.18808499256056,
+            "pnlSol": -2.8134074290413302,
+            "positions": 6,
+            "winRateUsd": 66.66666666666666,
+            "winRateSol": 66.66666666666666
+          },
+          "2026-09-18": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 5.934690043689532,
+            "feesUsd": 661.479283,
+            "pnlUsd": 501.0667240680614,
+            "pnlSol": 2.323130407980784,
+            "positions": 3,
+            "winRateUsd": 66.66666666666666,
+            "winRateSol": 33.33333333333333
+          },
+          "2026-09-19": {
+            "feeWinRateSol": 0,
+            "feeWinRateUsd": 0,
+            "feesSol": 0,
+            "feesUsd": 0,
+            "pnlUsd": -336.58899533022486,
+            "pnlSol": -3.028376767519383,
+            "positions": 3,
+            "winRateUsd": 33.33333333333333,
+            "winRateSol": 33.33333333333333
+          },
+          "2026-09-21": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 9.937497442136559,
+            "feesUsd": 1120.009714,
+            "pnlUsd": 1139.2952004404685,
+            "pnlSol": 8.931532747621882,
+            "positions": 5,
+            "winRateUsd": 80,
+            "winRateSol": 80
+          }
+        }
+      }
+    },
+    {
+      "owner": "DvStMLb1Cgtii4bAS5peCV9Kv7Q7bKuHJBdPZMw2ytra",
+      "status": "ok",
+      "fabriq": {
+        "fetchedAt": "2026-09-21T05:03:03.703Z",
+        "month": "2026-09",
+        "stats": {
+          "netPnlUsd": 40.81714244005403,
+          "netPnlSol": 0.10775156692538146,
+          "totalPositions": 3,
+          "avgAddLiquidityUsd": 216.88978491473765,
+          "avgAddLiquiditySol": 1.9999999636666665,
+          "totalDepositsUsd": 650.6693547442129,
+          "totalDepositsSol": 5.999999891,
+          "totalWithdrawalsUsd": 676.734490950116,
+          "totalWithdrawalsSol": 5.977480617279849,
+          "totalFeesUsd": 14.752006234150942,
+          "totalFeesSol": 0.13027084064553232,
+          "positionWinUsd": {
+            "percentage": 100,
+            "wins": 3,
+            "losses": 0
+          },
+          "positionWinSol": {
+            "percentage": 100,
+            "wins": 3,
+            "losses": 0
+          },
+          "profitFactorUsd": {
+            "ratio": 40.81714244005403,
+            "grossProfit": 40.81714244005403,
+            "grossLoss": 0
+          },
+          "profitFactorSol": {
+            "ratio": 0.10775156692538146,
+            "grossProfit": 0.10775156692538146,
+            "grossLoss": 0
+          },
+          "dayWinUsd": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "dayWinSol": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "avgWinLoss": {
+            "ratioUsd": 13.605714146684676,
+            "avgWinUsd": 13.605714146684676,
+            "avgLossUsd": 0,
+            "ratioSol": 0.035917188975127155,
+            "avgWinSol": 0.035917188975127155,
+            "avgLossSol": 0
+          }
+        },
+        "calendar": {
+          "2026-09-21": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 0.13027084064553232,
+            "feesUsd": 14.752006234150942,
+            "pnlUsd": 40.81714244005403,
+            "pnlSol": 0.10775156692538146,
+            "positions": 3,
+            "winRateUsd": 100,
+            "winRateSol": 100
+          }
+        }
+      }
+    },
+    {
+      "owner": "BvXVaMgtzTPYeWHMpc6H2vnFGPDtkf7vGBCDitkTHu7g",
+      "status": "ok",
+      "fabriq": {
+        "fetchedAt": "2026-09-21T05:03:04.701Z",
+        "month": "2026-09",
+        "stats": {
+          "netPnlUsd": 6.462245237298024,
+          "netPnlSol": 0.06045471982145062,
+          "totalPositions": 1,
+          "avgAddLiquidityUsd": 31.155146312211752,
+          "avgAddLiquiditySol": 0.2739360103615628,
+          "totalDepositsUsd": 31.155146312211752,
+          "totalDepositsSol": 0.2739360103615628,
+          "totalWithdrawalsUsd": 32.286399813945565,
+          "totalWithdrawalsSol": 0.287012111,
+          "totalFeesUsd": 5.330991735564209,
+          "totalFeesSol": 0.04737861918301338,
+          "positionWinUsd": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "positionWinSol": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "profitFactorUsd": {
+            "ratio": 6.462245237298024,
+            "grossProfit": 6.462245237298024,
+            "grossLoss": 0
+          },
+          "profitFactorSol": {
+            "ratio": 0.06045471982145062,
+            "grossProfit": 0.06045471982145062,
+            "grossLoss": 0
+          },
+          "dayWinUsd": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "dayWinSol": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "avgWinLoss": {
+            "ratioUsd": 6.462245237298024,
+            "avgWinUsd": 6.462245237298024,
+            "avgLossUsd": 0,
+            "ratioSol": 0.06045471982145062,
+            "avgWinSol": 0.06045471982145062,
+            "avgLossSol": 0
+          }
+        },
+        "calendar": {
+          "2026-09-21": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 0.04737861918301338,
+            "feesUsd": 5.330991735564209,
+            "pnlUsd": 6.462245237298024,
+            "pnlSol": 0.06045471982145062,
+            "positions": 1,
+            "winRateUsd": 100,
+            "winRateSol": 100
+          }
+        }
+      }
+    },
+    {
+      "owner": "FB1yFKvxMtA7X2DFeCJJzCD74LfEcFz8Hazhtmt8z7FJ",
+      "status": "ok",
+      "fabriq": {
+        "fetchedAt": "2026-09-21T05:03:05.671Z",
+        "month": "2026-09",
+        "stats": {
+          "netPnlUsd": 2.014626770037152,
+          "netPnlSol": 0.016214973934840185,
+          "totalPositions": 2,
+          "avgAddLiquidityUsd": 10.988139142267332,
+          "avgAddLiquiditySol": 0.099999987,
+          "totalDepositsUsd": 21.976278284534665,
+          "totalDepositsSol": 0.199999974,
+          "totalWithdrawalsUsd": 22.178317403453413,
+          "totalWithdrawalsSol": 0.200014044,
+          "totalFeesUsd": 1.8125876511184038,
+          "totalFeesSol": 0.01620090393484018,
+          "positionWinUsd": {
+            "percentage": 100,
+            "wins": 2,
+            "losses": 0
+          },
+          "positionWinSol": {
+            "percentage": 50,
+            "wins": 1,
+            "losses": 1
+          },
+          "profitFactorUsd": {
+            "ratio": 2.014626770037152,
+            "grossProfit": 2.014626770037152,
+            "grossLoss": 0
+          },
+          "profitFactorSol": {
+            "ratio": 46197.50693561127,
+            "grossProfit": 0.016215324934840195,
+            "grossLoss": 3.5100000000953813e-7
+          },
+          "dayWinUsd": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "dayWinSol": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "avgWinLoss": {
+            "ratioUsd": 1.007313385018576,
+            "avgWinUsd": 1.007313385018576,
+            "avgLossUsd": 0,
+            "ratioSol": 46197.50693561127,
+            "avgWinSol": 0.016215324934840195,
+            "avgLossSol": 3.5100000000953813e-7
+          }
+        },
+        "calendar": {
+          "2026-09-21": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 0.01620090393484018,
+            "feesUsd": 1.8125876511184038,
+            "pnlUsd": 2.014626770037152,
+            "pnlSol": 0.016214973934840185,
+            "positions": 2,
+            "winRateUsd": 100,
+            "winRateSol": 50
+          }
+        }
+      }
+    },
+    {
+      "owner": "CRdBMp2hvwy3fsWNKivGZYgJR37iuv4qbZd1xojuGavb",
+      "status": "ok",
+      "fabriq": {
+        "fetchedAt": "2026-09-21T05:03:06.665Z",
+        "month": "2026-09",
+        "stats": {
+          "netPnlUsd": 3.136221828720199,
+          "netPnlSol": 0.021828298110159183,
+          "totalPositions": 5,
+          "avgAddLiquidityUsd": 52.499037561630644,
+          "avgAddLiquiditySol": 0.46964809594995477,
+          "totalDepositsUsd": 262.4951878081532,
+          "totalDepositsSol": 2.348240479749774,
+          "totalWithdrawalsUsd": 260.45654821243227,
+          "totalWithdrawalsSol": 2.3239019290064333,
+          "totalFeesUsd": 5.174861424441156,
+          "totalFeesSol": 0.04616684885349973,
+          "positionWinUsd": {
+            "percentage": 80,
+            "wins": 4,
+            "losses": 1
+          },
+          "positionWinSol": {
+            "percentage": 80,
+            "wins": 4,
+            "losses": 1
+          },
+          "profitFactorUsd": {
+            "ratio": 2.84176458799152,
+            "grossProfit": 4.839057168898126,
+            "grossLoss": 1.702835340177927
+          },
+          "profitFactorSol": {
+            "ratio": 2.3590254355716165,
+            "grossProfit": 0.03789002700707128,
+            "grossLoss": 0.016061728896912097
+          },
+          "dayWinUsd": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "dayWinSol": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "avgWinLoss": {
+            "ratioUsd": 0.71044114699788,
+            "avgWinUsd": 1.2097642922245315,
+            "avgLossUsd": 1.702835340177927,
+            "ratioSol": 0.5897563588929041,
+            "avgWinSol": 0.00947250675176782,
+            "avgLossSol": 0.016061728896912097
+          }
+        },
+        "calendar": {
+          "2026-09-21": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 0.04616684885349973,
+            "feesUsd": 5.174861424441156,
+            "pnlUsd": 3.136221828720199,
+            "pnlSol": 0.021828298110159183,
+            "positions": 5,
+            "winRateUsd": 80,
+            "winRateSol": 80
+          }
+        }
+      }
+    },
+    {
+      "owner": "9yCb4zd7UdkWZjdsUMgEQVbnPh3weD3anbbBD9q44p3z",
+      "status": "ok",
+      "fabriq": {
+        "fetchedAt": "2026-09-21T05:03:07.641Z",
+        "month": "2026-09",
+        "stats": {
+          "netPnlUsd": 24.002711501620922,
+          "netPnlSol": 0.21270012158439355,
+          "totalPositions": 1,
+          "avgAddLiquidityUsd": 189.14939807406245,
+          "avgAddLiquiditySol": 1.7015724211467929,
+          "totalDepositsUsd": 189.14939807406245,
+          "totalDepositsSol": 1.7015724211467929,
+          "totalWithdrawalsUsd": 194.61456067559635,
+          "totalWithdrawalsSol": 1.747764747,
+          "totalFeesUsd": 18.53754890008701,
+          "totalFeesSol": 0.16650779573118643,
+          "positionWinUsd": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "positionWinSol": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "profitFactorUsd": {
+            "ratio": 24.002711501620922,
+            "grossProfit": 24.002711501620922,
+            "grossLoss": 0
+          },
+          "profitFactorSol": {
+            "ratio": 0.21270012158439355,
+            "grossProfit": 0.21270012158439355,
+            "grossLoss": 0
+          },
+          "dayWinUsd": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "dayWinSol": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "avgWinLoss": {
+            "ratioUsd": 24.002711501620922,
+            "avgWinUsd": 24.002711501620922,
+            "avgLossUsd": 0,
+            "ratioSol": 0.21270012158439355,
+            "avgWinSol": 0.21270012158439355,
+            "avgLossSol": 0
+          }
+        },
+        "calendar": {
+          "2026-09-21": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 0.16650779573118643,
+            "feesUsd": 18.53754890008701,
+            "pnlUsd": 24.002711501620922,
+            "pnlSol": 0.21270012158439355,
+            "positions": 1,
+            "winRateUsd": 100,
+            "winRateSol": 100
+          }
+        }
+      }
+    },
+    {
+      "owner": "9ChkBJ5B9yGwY2pPDEc42y3DMpD1RJAiDAGeeq363Qcd",
+      "status": "ok",
+      "fabriq": {
+        "fetchedAt": "2026-09-21T05:03:08.620Z",
+        "month": "2026-09",
+        "stats": {
+          "netPnlUsd": 12.34501453910876,
+          "netPnlSol": 0.10612992785985231,
+          "totalPositions": 4,
+          "avgAddLiquidityUsd": 110.94126851593465,
+          "avgAddLiquiditySol": 0.9999999900000001,
+          "totalDepositsUsd": 443.7650740637386,
+          "totalDepositsSol": 3.9999999600000002,
+          "totalWithdrawalsUsd": 444.1346744248893,
+          "totalWithdrawalsSol": 3.9985526040000003,
+          "totalFeesUsd": 11.975414177958111,
+          "totalFeesSol": 0.1075772838598523,
+          "positionWinUsd": {
+            "percentage": 75,
+            "wins": 3,
+            "losses": 1
+          },
+          "positionWinSol": {
+            "percentage": 50,
+            "wins": 2,
+            "losses": 2
+          },
+          "profitFactorUsd": {
+            "ratio": 218.65911369006915,
+            "grossProfit": 12.401731734772284,
+            "grossLoss": 0.05671719566352351
+          },
+          "profitFactorSol": {
+            "ratio": 603.2854735198532,
+            "grossProfit": 0.10630613985985227,
+            "grossLoss": 0.0001762119999999534
+          },
+          "dayWinUsd": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "dayWinSol": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "avgWinLoss": {
+            "ratioUsd": 72.88637123002304,
+            "avgWinUsd": 4.133910578257428,
+            "avgLossUsd": 0.05671719566352351,
+            "ratioSol": 1206.5709470397064,
+            "avgWinSol": 0.10630613985985227,
+            "avgLossSol": 0.0000881059999999767
+          }
+        },
+        "calendar": {
+          "2026-09-21": {
+            "feeWinRateSol": 50,
+            "feeWinRateUsd": 50,
+            "feesSol": 0.1075772838598523,
+            "feesUsd": 11.975414177958111,
+            "pnlUsd": 12.34501453910876,
+            "pnlSol": 0.10612992785985231,
+            "positions": 4,
+            "winRateUsd": 75,
+            "winRateSol": 50
+          }
+        }
+      }
+    },
+    {
+      "owner": "53wMC1xyXQZdFpNCNTjbY6e4GFrAJwMrGrAo2GRZ9MF5",
+      "status": "ok",
+      "fabriq": {
+        "fetchedAt": "2026-09-21T05:03:09.689Z",
+        "month": "2026-09",
+        "stats": {
+          "netPnlUsd": 12.192646893903026,
+          "netPnlSol": 0.10245436483358923,
+          "totalPositions": 12,
+          "avgAddLiquidityUsd": 26.933846481034454,
+          "avgAddLiquiditySol": 0.24409883386847486,
+          "totalDepositsUsd": 323.20615777241346,
+          "totalDepositsSol": 2.9291860064216984,
+          "totalWithdrawalsUsd": 327.5975147939512,
+          "totalWithdrawalsSol": 2.9612384214610543,
+          "totalFeesUsd": 7.801289872365433,
+          "totalFeesSol": 0.07040194979423228,
+          "positionWinUsd": {
+            "percentage": 83.33333333333334,
+            "wins": 10,
+            "losses": 2
+          },
+          "positionWinSol": {
+            "percentage": 83.33333333333334,
+            "wins": 10,
+            "losses": 2
+          },
+          "profitFactorUsd": {
+            "ratio": 32.82925655324749,
+            "grossProfit": 12.575711037217394,
+            "grossLoss": 0.38306414331436933
+          },
+          "profitFactorSol": {
+            "ratio": 10.508199847856934,
+            "grossProfit": 0.11322973414355189,
+            "grossLoss": 0.01077536930996266
+          },
+          "dayWinUsd": {
+            "percentage": 100,
+            "wins": 3,
+            "losses": 0
+          },
+          "dayWinSol": {
+            "percentage": 100,
+            "wins": 3,
+            "losses": 0
+          },
+          "avgWinLoss": {
+            "ratioUsd": 6.565851310649498,
+            "avgWinUsd": 1.2575711037217394,
+            "avgLossUsd": 0.19153207165718467,
+            "ratioSol": 2.1016399695713868,
+            "avgWinSol": 0.011322973414355189,
+            "avgLossSol": 0.00538768465498133
+          }
+        },
+        "calendar": {
+          "2026-09-19": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 0.003344356324442322,
+            "feesUsd": 0.3734754423739955,
+            "pnlUsd": 0.7185366247241483,
+            "pnlSol": 0.008102250392793914,
+            "positions": 4,
+            "winRateUsd": 75,
+            "winRateSol": 75
+          },
+          "2026-09-20": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 0.014960130990178545,
+            "feesUsd": 1.6429871871944401,
+            "pnlUsd": 1.874203707547804,
+            "pnlSol": 0.01738337356710977,
+            "positions": 5,
+            "winRateUsd": 100,
+            "winRateSol": 100
+          },
+          "2026-09-21": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 0.052097462479611424,
+            "feesUsd": 5.784827242796998,
+            "pnlUsd": 9.599906561631073,
+            "pnlSol": 0.07696874087368555,
+            "positions": 3,
+            "winRateUsd": 66.66666666666666,
+            "winRateSol": 66.66666666666666
+          }
+        }
+      }
+    },
+    {
+      "owner": "2FuPS1KxEL1L4MpdxTPmrmDN6jRGDmsPjAwyzzts5kqZ",
+      "status": "ok",
+      "fabriq": {
+        "fetchedAt": "2026-09-21T05:03:10.666Z",
+        "month": "2026-09",
+        "stats": {
+          "netPnlUsd": 3.2001038735500806,
+          "netPnlSol": 0.029085500499433398,
+          "totalPositions": 1,
+          "avgAddLiquidityUsd": 22.161372709266058,
+          "avgAddLiquiditySol": 0.199999998,
+          "totalDepositsUsd": 22.161372709266058,
+          "totalDepositsSol": 0.199999998,
+          "totalWithdrawalsUsd": 22.14268727741185,
+          "totalWithdrawalsSol": 0.20001512,
+          "totalFeesUsd": 3.2187893054042886,
+          "totalFeesSol": 0.029070378499433426,
+          "positionWinUsd": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "positionWinSol": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "profitFactorUsd": {
+            "ratio": 3.2001038735500806,
+            "grossProfit": 3.2001038735500806,
+            "grossLoss": 0
+          },
+          "profitFactorSol": {
+            "ratio": 0.029085500499433398,
+            "grossProfit": 0.029085500499433398,
+            "grossLoss": 0
+          },
+          "dayWinUsd": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "dayWinSol": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "avgWinLoss": {
+            "ratioUsd": 3.2001038735500806,
+            "avgWinUsd": 3.2001038735500806,
+            "avgLossUsd": 0,
+            "ratioSol": 0.029085500499433398,
+            "avgWinSol": 0.029085500499433398,
+            "avgLossSol": 0
+          }
+        },
+        "calendar": {
+          "2026-09-21": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 0.029070378499433426,
+            "feesUsd": 3.2187893054042886,
+            "pnlUsd": 3.2001038735500806,
+            "pnlSol": 0.029085500499433398,
+            "positions": 1,
+            "winRateUsd": 100,
+            "winRateSol": 100
+          }
+        }
+      }
+    },
+    {
+      "owner": "42hwEMGKqWn9JQy5WgwF7Pm9akWsarp9g8u688S3uVZt",
+      "status": "ok",
+      "fabriq": {
+        "fetchedAt": "2026-09-21T05:03:11.632Z",
+        "month": "2026-09",
+        "stats": {
+          "netPnlUsd": 7.927556242840751,
+          "netPnlSol": 0.06503733940863529,
+          "totalPositions": 1,
+          "avgAddLiquidityUsd": 31.66001312014334,
+          "avgAddLiquiditySol": 0.29299533316846005,
+          "totalDepositsUsd": 31.66001312014334,
+          "totalDepositsSol": 0.29299533316846005,
+          "totalWithdrawalsUsd": 33.697204865473346,
+          "totalWithdrawalsSol": 0.304367283,
+          "totalFeesUsd": 5.89036449751075,
+          "totalFeesSol": 0.05366538957709533,
+          "positionWinUsd": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "positionWinSol": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "profitFactorUsd": {
+            "ratio": 7.927556242840751,
+            "grossProfit": 7.927556242840751,
+            "grossLoss": 0
+          },
+          "profitFactorSol": {
+            "ratio": 0.06503733940863529,
+            "grossProfit": 0.06503733940863529,
+            "grossLoss": 0
+          },
+          "dayWinUsd": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "dayWinSol": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "avgWinLoss": {
+            "ratioUsd": 7.927556242840751,
+            "avgWinUsd": 7.927556242840751,
+            "avgLossUsd": 0,
+            "ratioSol": 0.06503733940863529,
+            "avgWinSol": 0.06503733940863529,
+            "avgLossSol": 0
+          }
+        },
+        "calendar": {
+          "2026-09-21": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 0.05366538957709533,
+            "feesUsd": 5.89036449751075,
+            "pnlUsd": 7.927556242840751,
+            "pnlSol": 0.06503733940863529,
+            "positions": 1,
+            "winRateUsd": 100,
+            "winRateSol": 100
+          }
+        }
+      }
+    },
+    {
+      "owner": "BtwPh8jf1fEB5o49GdTpxdzkwbExjbe655B29YGf7LR1",
+      "status": "ok",
+      "fabriq": {
+        "fetchedAt": "2026-09-21T05:03:12.611Z",
+        "month": "2026-09",
+        "stats": {
+          "netPnlUsd": 6.601731526252873,
+          "netPnlSol": 0.049903553033820644,
+          "totalPositions": 6,
+          "avgAddLiquidityUsd": 18.88378435758865,
+          "avgAddLiquiditySol": 0.17206442582588669,
+          "totalDepositsUsd": 113.30270614553189,
+          "totalDepositsSol": 1.0323865549553202,
+          "totalWithdrawalsUsd": 114.29126967875175,
+          "totalWithdrawalsSol": 1.0316249921384961,
+          "totalFeesUsd": 5.613167993033007,
+          "totalFeesSol": 0.05066511585064468,
+          "positionWinUsd": {
+            "percentage": 66.66666666666666,
+            "wins": 4,
+            "losses": 2
+          },
+          "positionWinSol": {
+            "percentage": 66.66666666666666,
+            "wins": 4,
+            "losses": 2
+          },
+          "profitFactorUsd": {
+            "ratio": 4.591336390230613,
+            "grossProfit": 8.439969666297714,
+            "grossLoss": 1.8382381400448402
+          },
+          "profitFactorSol": {
+            "ratio": 3.6232933421804594,
+            "grossProfit": 0.06892679844500338,
+            "grossLoss": 0.019023245411182735
+          },
+          "dayWinUsd": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "dayWinSol": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "avgWinLoss": {
+            "ratioUsd": 2.2956681951153066,
+            "avgWinUsd": 2.1099924165744284,
+            "avgLossUsd": 0.9191190700224201,
+            "ratioSol": 1.8116466710902297,
+            "avgWinSol": 0.017231699611250845,
+            "avgLossSol": 0.009511622705591367
+          }
+        },
+        "calendar": {
+          "2026-09-21": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 0.05066511585064468,
+            "feesUsd": 5.613167993033007,
+            "pnlUsd": 6.601731526252873,
+            "pnlSol": 0.049903553033820644,
+            "positions": 6,
+            "winRateUsd": 66.66666666666666,
+            "winRateSol": 66.66666666666666
+          }
+        }
+      }
+    },
+    {
+      "owner": "CW8xEs7DpV5avDUremzuQ7npCH8aX7sq9r2ZaP1G7Lyi",
+      "status": "ok",
+      "fabriq": {
+        "fetchedAt": "2026-09-21T05:03:13.628Z",
+        "month": "2026-09",
+        "stats": {
+          "netPnlUsd": 20.583082450042046,
+          "netPnlSol": 0.17487893897914764,
+          "totalPositions": 36,
+          "avgAddLiquidityUsd": 75.57031037280143,
+          "avgAddLiquiditySol": 0.6899999649166667,
+          "totalDepositsUsd": 2720.5311734208512,
+          "totalDepositsSol": 24.839998737000002,
+          "totalWithdrawalsUsd": 2712.7051485720162,
+          "totalWithdrawalsSol": 24.756839812014245,
+          "totalFeesUsd": 28.40910729887701,
+          "totalFeesSol": 0.2580378639649031,
+          "positionWinUsd": {
+            "percentage": 75,
+            "wins": 27,
+            "losses": 9
+          },
+          "positionWinSol": {
+            "percentage": 80.55555555555556,
+            "wins": 29,
+            "losses": 7
+          },
+          "profitFactorUsd": {
+            "ratio": 20.096165322323284,
+            "grossProfit": 21.6609471470962,
+            "grossLoss": 1.0778646970541548
+          },
+          "profitFactorSol": {
+            "ratio": 32.34821890364572,
+            "grossProfit": 0.1804575314828133,
+            "grossLoss": 0.005578592503665644
+          },
+          "dayWinUsd": {
+            "percentage": 100,
+            "wins": 2,
+            "losses": 0
+          },
+          "dayWinSol": {
+            "percentage": 100,
+            "wins": 2,
+            "losses": 0
+          },
+          "avgWinLoss": {
+            "ratioUsd": 6.698721774107762,
+            "avgWinUsd": 0.8022573017443037,
+            "avgLossUsd": 0.11976274411712831,
+            "ratioSol": 8.709135858673848,
+            "avgWinSol": 0.006940674287800512,
+            "avgLossSol": 0.0007969417862379492
+          }
+        },
+        "calendar": {
+          "2026-09-20": {
+            "feeWinRateSol": 91.66666666666666,
+            "feeWinRateUsd": 91.66666666666666,
+            "feesSol": 0.07662390867983886,
+            "feesUsd": 8.355978385344965,
+            "pnlUsd": 5.066261926393981,
+            "pnlSol": 0.03336397810416947,
+            "positions": 24,
+            "winRateUsd": 75,
+            "winRateSol": 79.16666666666666
+          },
+          "2026-09-21": {
+            "feeWinRateSol": 83.33333333333334,
+            "feeWinRateUsd": 83.33333333333334,
+            "feesSol": 0.18141395528506424,
+            "feesUsd": 20.053128913532046,
+            "pnlUsd": 15.516820523648065,
+            "pnlSol": 0.14151496087497817,
+            "positions": 12,
+            "winRateUsd": 75,
+            "winRateSol": 83.33333333333334
+          }
+        }
+      }
+    },
+    {
+      "owner": "BuR1XFUUv7osGmPFqwirAcAAG92JB6yEhnryPWQsdxUM",
+      "status": "ok",
+      "fabriq": {
+        "fetchedAt": "2026-09-21T05:03:14.709Z",
+        "month": "2026-09",
+        "stats": {
+          "netPnlUsd": 5.351653731929464,
+          "netPnlSol": 0.04801215096077909,
+          "totalPositions": 1,
+          "avgAddLiquidityUsd": 38.11195717035487,
+          "avgAddLiquiditySol": 0.3512733141268083,
+          "totalDepositsUsd": 38.11195717035487,
+          "totalDepositsSol": 0.3512733141268083,
+          "totalWithdrawalsUsd": 36.566743413069496,
+          "totalWithdrawalsSol": 0.3363330234035365,
+          "totalFeesUsd": 6.896867489214843,
+          "totalFeesSol": 0.06295244168405084,
+          "positionWinUsd": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "positionWinSol": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "profitFactorUsd": {
+            "ratio": 5.351653731929464,
+            "grossProfit": 5.351653731929464,
+            "grossLoss": 0
+          },
+          "profitFactorSol": {
+            "ratio": 0.04801215096077909,
+            "grossProfit": 0.04801215096077909,
+            "grossLoss": 0
+          },
+          "dayWinUsd": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "dayWinSol": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "avgWinLoss": {
+            "ratioUsd": 5.351653731929464,
+            "avgWinUsd": 5.351653731929464,
+            "avgLossUsd": 0,
+            "ratioSol": 0.04801215096077909,
+            "avgWinSol": 0.04801215096077909,
+            "avgLossSol": 0
+          }
+        },
+        "calendar": {
+          "2026-09-21": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 0.06295244168405084,
+            "feesUsd": 6.896867489214843,
+            "pnlUsd": 5.351653731929464,
+            "pnlSol": 0.04801215096077909,
+            "positions": 1,
+            "winRateUsd": 100,
+            "winRateSol": 100
+          }
+        }
+      }
+    },
+    {
+      "owner": "5bmXyxZSYhBeoeebqkYKyddCzsfiA1dxLaEifqGFSdL5",
+      "status": "ok",
+      "fabriq": {
+        "fetchedAt": "2026-09-21T05:03:15.809Z",
+        "month": "2026-09",
+        "stats": {
+          "netPnlUsd": 5.090860834654308,
+          "netPnlSol": 0.05258946437988432,
+          "totalPositions": 5,
+          "avgAddLiquidityUsd": 128.4747242960069,
+          "avgAddLiquiditySol": 1.1699999664,
+          "totalDepositsUsd": 642.3736214800346,
+          "totalDepositsSol": 5.849999832,
+          "totalWithdrawalsUsd": 641.6831224641294,
+          "totalWithdrawalsSol": 5.849992179,
+          "totalFeesUsd": 5.781359850559581,
+          "totalFeesSol": 0.052597117379884144,
+          "positionWinUsd": {
+            "percentage": 100,
+            "wins": 5,
+            "losses": 0
+          },
+          "positionWinSol": {
+            "percentage": 80,
+            "wins": 4,
+            "losses": 1
+          },
+          "profitFactorUsd": {
+            "ratio": 5.090860834654308,
+            "grossProfit": 5.090860834654308,
+            "grossLoss": 0
+          },
+          "profitFactorSol": {
+            "ratio": 922623.1812410766,
+            "grossProfit": 0.052589521379884374,
+            "grossLoss": 5.7000000053264444e-8
+          },
+          "dayWinUsd": {
+            "percentage": 100,
+            "wins": 2,
+            "losses": 0
+          },
+          "dayWinSol": {
+            "percentage": 50,
+            "wins": 1,
+            "losses": 1
+          },
+          "avgWinLoss": {
+            "ratioUsd": 1.0181721669308614,
+            "avgWinUsd": 1.0181721669308614,
+            "avgLossUsd": 0,
+            "ratioSol": 230655.79531026914,
+            "avgWinSol": 0.013147380344971094,
+            "avgLossSol": 5.7000000053264444e-8
+          }
+        },
+        "calendar": {
+          "2026-09-20": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 5.14e-7,
+            "feesUsd": 0.00005589220303500175,
+            "pnlUsd": 0.018347731697190284,
+            "pnlSol": -5.7000000053264444e-8,
+            "positions": 1,
+            "winRateUsd": 100,
+            "winRateSol": 0
+          },
+          "2026-09-21": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 0.05259660337988414,
+            "feesUsd": 5.7813039583565455,
+            "pnlUsd": 5.072513102957117,
+            "pnlSol": 0.052589521379884374,
+            "positions": 4,
+            "winRateUsd": 100,
+            "winRateSol": 100
+          }
+        }
+      }
+    },
+    {
+      "owner": "79f3GDkNSPw5pkSF5SygerE54DttUYEKMz5vREQehnBH",
+      "status": "ok",
+      "fabriq": {
+        "fetchedAt": "2026-09-21T05:03:16.801Z",
+        "month": "2026-09",
+        "stats": {
+          "netPnlUsd": 4.005000437061213,
+          "netPnlSol": 0.044261220971794635,
+          "totalPositions": 2,
+          "avgAddLiquidityUsd": 42.61321258038807,
+          "avgAddLiquiditySol": 0.382717525,
+          "totalDepositsUsd": 85.22642516077615,
+          "totalDepositsSol": 0.76543505,
+          "totalWithdrawalsUsd": 84.39629038268762,
+          "totalWithdrawalsSol": 0.7654713550000001,
+          "totalFeesUsd": 4.835135215149729,
+          "totalFeesSol": 0.04422491597179462,
+          "positionWinUsd": {
+            "percentage": 50,
+            "wins": 1,
+            "losses": 1
+          },
+          "positionWinSol": {
+            "percentage": 50,
+            "wins": 1,
+            "losses": 1
+          },
+          "profitFactorUsd": {
+            "ratio": 42.38418526016926,
+            "grossProfit": 4.101776546386141,
+            "grossLoss": 0.09677610932492797
+          },
+          "profitFactorSol": {
+            "ratio": 69594.11473571167,
+            "grossProfit": 0.04426185697179463,
+            "grossLoss": 6.359999999983046e-7
+          },
+          "dayWinUsd": {
+            "percentage": 50,
+            "wins": 1,
+            "losses": 1
+          },
+          "dayWinSol": {
+            "percentage": 50,
+            "wins": 1,
+            "losses": 1
+          },
+          "avgWinLoss": {
+            "ratioUsd": 42.38418526016926,
+            "avgWinUsd": 4.101776546386141,
+            "avgLossUsd": 0.09677610932492797,
+            "ratioSol": 69594.11473571167,
+            "avgWinSol": 0.04426185697179463,
+            "avgLossSol": 6.359999999983046e-7
+          }
+        },
+        "calendar": {
+          "2026-09-20": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 0.000004251,
+            "feesUsd": 0.0004725998787699783,
+            "pnlUsd": -0.09677610932492797,
+            "pnlSol": -6.359999999983046e-7,
+            "positions": 1,
+            "winRateUsd": 0,
+            "winRateSol": 0
+          },
+          "2026-09-21": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 0.044220664971794624,
+            "feesUsd": 4.834662615270959,
+            "pnlUsd": 4.101776546386141,
+            "pnlSol": 0.04426185697179463,
+            "positions": 1,
+            "winRateUsd": 100,
+            "winRateSol": 100
+          }
+        }
+      }
+    },
+    {
+      "owner": "Moonxipx3k6qiMy8s2KXZRFffPWt3XwVHJy1vfdj2KS",
+      "status": "ok",
+      "fabriq": {
+        "fetchedAt": "2026-09-21T05:03:17.768Z",
+        "month": "2026-09",
+        "stats": {
+          "netPnlUsd": 646.0443260492884,
+          "netPnlSol": 6.229928027182426,
+          "totalPositions": 2,
+          "avgAddLiquidityUsd": 2113.202805158067,
+          "avgAddLiquiditySol": 18.84063947197913,
+          "totalDepositsUsd": 4226.405610316134,
+          "totalDepositsSol": 37.68127894395826,
+          "totalWithdrawalsUsd": 3950.588620493816,
+          "totalWithdrawalsSol": 35.505906825562484,
+          "totalFeesUsd": 921.8613158716062,
+          "totalFeesSol": 8.40530014557821,
+          "positionWinUsd": {
+            "percentage": 50,
+            "wins": 1,
+            "losses": 1
+          },
+          "positionWinSol": {
+            "percentage": 50,
+            "wins": 1,
+            "losses": 1
+          },
+          "profitFactorUsd": {
+            "ratio": 2.9753845907489365,
+            "grossProfit": 973.0916914457912,
+            "grossLoss": 327.04736539650276
+          },
+          "profitFactorSol": {
+            "ratio": 3.257023334006025,
+            "grossProfit": 8.990168886600053,
+            "grossLoss": 2.7602408594176264
+          },
+          "dayWinUsd": {
+            "percentage": 50,
+            "wins": 1,
+            "losses": 1
+          },
+          "dayWinSol": {
+            "percentage": 50,
+            "wins": 1,
+            "losses": 1
+          },
+          "avgWinLoss": {
+            "ratioUsd": 2.9753845907489365,
+            "avgWinUsd": 973.0916914457912,
+            "avgLossUsd": 327.04736539650276,
+            "ratioSol": 3.257023334006025,
+            "avgWinSol": 8.990168886600053,
+            "avgLossSol": 2.7602408594176264
+          }
+        },
+        "calendar": {
+          "2026-09-19": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 0.4498530980198893,
+            "feesUsd": 51.0720675953671,
+            "pnlUsd": -327.04736539650276,
+            "pnlSol": -2.7602408594176264,
+            "positions": 1,
+            "winRateUsd": 0,
+            "winRateSol": 0
+          },
+          "2026-09-21": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 7.955447047558319,
+            "feesUsd": 870.789248276239,
+            "pnlUsd": 973.0916914457912,
+            "pnlSol": 8.990168886600053,
+            "positions": 1,
+            "winRateUsd": 100,
+            "winRateSol": 100
+          }
+        }
+      }
+    },
+    {
+      "owner": "DehomjrW9ZXpYKQem7kuNpXXvAEaMLgV9ZkX5douq1Uf",
+      "status": "ok",
+      "fabriq": {
+        "fetchedAt": "2026-09-21T05:03:18.748Z",
+        "month": "2026-09",
+        "stats": {
+          "netPnlUsd": 10.05103186615617,
+          "netPnlSol": 0.07430840111717701,
+          "totalPositions": 6,
+          "avgAddLiquidityUsd": 154.9701973638959,
+          "avgAddLiquiditySol": 1.409096278,
+          "totalDepositsUsd": 929.8211841833754,
+          "totalDepositsSol": 8.454577668,
+          "totalWithdrawalsUsd": 921.5665035281194,
+          "totalWithdrawalsSol": 8.36336981975428,
+          "totalFeesUsd": 18.305712521412108,
+          "totalFeesSol": 0.16551624936289705,
+          "positionWinUsd": {
+            "percentage": 100,
+            "wins": 6,
+            "losses": 0
+          },
+          "positionWinSol": {
+            "percentage": 100,
+            "wins": 6,
+            "losses": 0
+          },
+          "profitFactorUsd": {
+            "ratio": 10.05103186615617,
+            "grossProfit": 10.05103186615617,
+            "grossLoss": 0
+          },
+          "profitFactorSol": {
+            "ratio": 0.07430840111717701,
+            "grossProfit": 0.07430840111717701,
+            "grossLoss": 0
+          },
+          "dayWinUsd": {
+            "percentage": 100,
+            "wins": 3,
+            "losses": 0
+          },
+          "dayWinSol": {
+            "percentage": 100,
+            "wins": 3,
+            "losses": 0
+          },
+          "avgWinLoss": {
+            "ratioUsd": 2.010206373231234,
+            "avgWinUsd": 2.010206373231234,
+            "avgLossUsd": 0,
+            "ratioSol": 0.014861680223435403,
+            "avgWinSol": 0.014861680223435403,
+            "avgLossSol": 0
+          }
+        },
+        "calendar": {
+          "2026-09-19": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 0.03559607414397675,
+            "feesUsd": 3.9788630485677356,
+            "pnlUsd": 0.32069355435083935,
+            "pnlSol": 0.007017575700841938,
+            "positions": 1,
+            "winRateUsd": 100,
+            "winRateSol": 100
+          },
+          "2026-09-20": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 0.0003227827242910056,
+            "feesUsd": 0.035019819529533536,
+            "pnlUsd": 0.3535714363065381,
+            "pnlSol": 0.00032286972429096394,
+            "positions": 1,
+            "winRateUsd": 100,
+            "winRateSol": 100
+          },
+          "2026-09-21": {
+            "feeWinRateSol": 75,
+            "feeWinRateUsd": 75,
+            "feesSol": 0.1295973924946293,
+            "feesUsd": 14.291829653314837,
+            "pnlUsd": 9.376766875498793,
+            "pnlSol": 0.06696795569204411,
+            "positions": 4,
+            "winRateUsd": 100,
+            "winRateSol": 100
+          }
+        }
+      }
+    },
+    {
+      "owner": "7p2Jv6kuNY8Fubho1oVrc5DZMHbtvr24FppsunJy9EUQ",
+      "status": "ok",
+      "fabriq": {
+        "fetchedAt": "2026-09-21T05:03:19.769Z",
+        "month": "2026-09",
+        "stats": {
+          "netPnlUsd": 41.93542342563262,
+          "netPnlSol": 0.4860815664690268,
+          "totalPositions": 16,
+          "avgAddLiquidityUsd": 255.2046850886342,
+          "avgAddLiquiditySol": 2.304657035797672,
+          "totalDepositsUsd": 4083.274961418147,
+          "totalDepositsSol": 36.874512572762754,
+          "totalWithdrawalsUsd": 3902.220928387504,
+          "totalWithdrawalsSol": 35.343967119708815,
+          "totalFeesUsd": 222.9894564562752,
+          "totalFeesSol": 2.0166270195229545,
+          "positionWinUsd": {
+            "percentage": 43.75,
+            "wins": 7,
+            "losses": 9
+          },
+          "positionWinSol": {
+            "percentage": 56.25,
+            "wins": 9,
+            "losses": 7
+          },
+          "profitFactorUsd": {
+            "ratio": 1.3905843705599177,
+            "grossProfit": 149.30127466416673,
+            "grossLoss": 107.36585123853412
+          },
+          "profitFactorSol": {
+            "ratio": 1.5116996104638338,
+            "grossProfit": 1.4360169514665149,
+            "grossLoss": 0.9499353849974882
+          },
+          "dayWinUsd": {
+            "percentage": 66.66666666666666,
+            "wins": 2,
+            "losses": 1
+          },
+          "dayWinSol": {
+            "percentage": 100,
+            "wins": 3,
+            "losses": 0
+          },
+          "avgWinLoss": {
+            "ratioUsd": 1.787894190719894,
+            "avgWinUsd": 21.328753523452388,
+            "avgLossUsd": 11.929539026503791,
+            "ratioSol": 1.3227371591558545,
+            "avgWinSol": 0.17950211893331436,
+            "avgLossSol": 0.13570505499964117
+          }
+        },
+        "calendar": {
+          "2026-09-19": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 0.5559419364603526,
+            "feesUsd": 62.239650796231025,
+            "pnlUsd": 3.2373101254117387,
+            "pnlSol": 0.0458769934292933,
+            "positions": 4,
+            "winRateUsd": 25,
+            "winRateSol": 25
+          },
+          "2026-09-20": {
+            "feeWinRateSol": 85.71428571428571,
+            "feeWinRateUsd": 85.71428571428571,
+            "feesSol": 0.05999361229246965,
+            "feesUsd": 6.52402560462813,
+            "pnlUsd": -9.87163809399728,
+            "pnlSol": 0.11889772514825511,
+            "positions": 7,
+            "winRateUsd": 57.14285714285714,
+            "winRateSol": 85.71428571428571
+          },
+          "2026-09-21": {
+            "feeWinRateSol": 80,
+            "feeWinRateUsd": 80,
+            "feesSol": 1.4006914707701323,
+            "feesUsd": 154.22578005541607,
+            "pnlUsd": 48.56975139421816,
+            "pnlSol": 0.32130684789147834,
+            "positions": 5,
+            "winRateUsd": 40,
+            "winRateSol": 40
+          }
+        }
+      }
+    },
+    {
+      "owner": "GHk6JNMgkeigJgni73aHnBNGAAvVwaJPScXkowfTfdgx",
+      "status": "ok",
+      "fabriq": {
+        "fetchedAt": "2026-09-21T05:03:20.782Z",
+        "month": "2026-09",
+        "stats": {
+          "netPnlUsd": 39.235057323380786,
+          "netPnlSol": 0.3446764279602206,
+          "totalPositions": 3,
+          "avgAddLiquidityUsd": 140.37852599704965,
+          "avgAddLiquiditySol": 1.2719293619067393,
+          "totalDepositsUsd": 421.1355779911489,
+          "totalDepositsSol": 3.815788085720218,
+          "totalWithdrawalsUsd": 434.9489002561198,
+          "totalWithdrawalsSol": 3.9309409740345327,
+          "totalFeesUsd": 25.421735058409855,
+          "totalFeesSol": 0.22952353964590558,
+          "positionWinUsd": {
+            "percentage": 66.66666666666666,
+            "wins": 2,
+            "losses": 1
+          },
+          "positionWinSol": {
+            "percentage": 66.66666666666666,
+            "wins": 2,
+            "losses": 1
+          },
+          "profitFactorUsd": {
+            "ratio": 6.917541588604273,
+            "grossProfit": 45.86535416809377,
+            "grossLoss": 6.630296844712987
+          },
+          "profitFactorSol": {
+            "ratio": 7.012297221342294,
+            "grossProfit": 0.4020050022590256,
+            "grossLoss": 0.057328574298805
+          },
+          "dayWinUsd": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "dayWinSol": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "avgWinLoss": {
+            "ratioUsd": 3.4587707943021364,
+            "avgWinUsd": 22.932677084046887,
+            "avgLossUsd": 6.630296844712987,
+            "ratioSol": 3.506148610671147,
+            "avgWinSol": 0.2010025011295128,
+            "avgLossSol": 0.057328574298805
+          }
+        },
+        "calendar": {
+          "2026-09-21": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 0.22952353964590558,
+            "feesUsd": 25.421735058409855,
+            "pnlUsd": 39.235057323380786,
+            "pnlSol": 0.3446764279602206,
+            "positions": 3,
+            "winRateUsd": 66.66666666666666,
+            "winRateSol": 66.66666666666666
+          }
+        }
+      }
+    },
+    {
+      "owner": "D96kmD2FjJUvihSPAzQzh75ieKKBszx3hVsv6sjq25Ua",
+      "status": "ok",
+      "fabriq": {
+        "fetchedAt": "2026-09-21T05:03:21.805Z",
+        "month": "2026-09",
+        "stats": {
+          "netPnlUsd": 12.796156257897792,
+          "netPnlSol": 0.08090526108985152,
+          "totalPositions": 5,
+          "avgAddLiquidityUsd": 771.9623766871526,
+          "avgAddLiquiditySol": 6.999999969399999,
+          "totalDepositsUsd": 3859.8118834357633,
+          "totalDepositsSol": 34.999999847,
+          "totalWithdrawalsUsd": 3863.527872242027,
+          "totalWithdrawalsSol": 34.998617936,
+          "totalFeesUsd": 9.080167451633992,
+          "totalFeesSol": 0.08228717208985173,
+          "positionWinUsd": {
+            "percentage": 60,
+            "wins": 3,
+            "losses": 2
+          },
+          "positionWinSol": {
+            "percentage": 80,
+            "wins": 4,
+            "losses": 1
+          },
+          "profitFactorUsd": {
+            "ratio": 6.800110625857148,
+            "grossProfit": 15.002348015836333,
+            "grossLoss": 2.206191757938541
+          },
+          "profitFactorSol": {
+            "ratio": 55644.23319640389,
+            "grossProfit": 0.08090671508985192,
+            "grossLoss": 0.0000014540000004004128
+          },
+          "dayWinUsd": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "dayWinSol": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "avgWinLoss": {
+            "ratioUsd": 4.533407083904765,
+            "avgWinUsd": 5.000782671945444,
+            "avgLossUsd": 1.1030958789692704,
+            "ratioSol": 13911.058299100972,
+            "avgWinSol": 0.02022667877246298,
+            "avgLossSol": 0.0000014540000004004128
+          }
+        },
+        "calendar": {
+          "2026-09-21": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 0.08228717208985173,
+            "feesUsd": 9.080167451633992,
+            "pnlUsd": 12.796156257897792,
+            "pnlSol": 0.08090526108985152,
+            "positions": 5,
+            "winRateUsd": 60,
+            "winRateSol": 80
+          }
+        }
+      }
+    },
+    {
+      "owner": "381HuN5VWFJhCpziDaozrzyQh8G3cuJp2jhZJZLAAtad",
+      "status": "ok",
+      "fabriq": {
+        "fetchedAt": "2026-09-21T05:03:22.808Z",
+        "month": "2026-09",
+        "stats": {
+          "netPnlUsd": 128.13649902916222,
+          "netPnlSol": 0.015665324641791267,
+          "totalPositions": 20,
+          "avgAddLiquidityUsd": 203.6794166382022,
+          "avgAddLiquiditySol": 2.0472454908833875,
+          "totalDepositsUsd": 4073.5883327640445,
+          "totalDepositsSol": 40.94490981766775,
+          "totalWithdrawalsUsd": 4047.781291854226,
+          "totalWithdrawalsSol": 39.45237787966532,
+          "totalFeesUsd": 153.94353993898085,
+          "totalFeesSol": 1.5081972626442126,
+          "positionWinUsd": {
+            "percentage": 75,
+            "wins": 15,
+            "losses": 5
+          },
+          "positionWinSol": {
+            "percentage": 45,
+            "wins": 9,
+            "losses": 11
+          },
+          "profitFactorUsd": {
+            "ratio": 3.6157691842997544,
+            "grossProfit": 177.12266332770085,
+            "grossLoss": 48.986164298538654
+          },
+          "profitFactorSol": {
+            "ratio": 1.010612383894984,
+            "grossProfit": 1.4918015817551256,
+            "grossLoss": 1.476136257113334
+          },
+          "dayWinUsd": {
+            "percentage": 66.66666666666666,
+            "wins": 8,
+            "losses": 4
+          },
+          "dayWinSol": {
+            "percentage": 50,
+            "wins": 6,
+            "losses": 6
+          },
+          "avgWinLoss": {
+            "ratioUsd": 1.2052563947665849,
+            "avgWinUsd": 11.808177555180057,
+            "avgLossUsd": 9.79723285970773,
+            "ratioSol": 1.2351929136494249,
+            "avgWinSol": 0.16575573130612506,
+            "avgLossSol": 0.13419420519212127
+          }
+        },
+        "calendar": {
+          "2026-09-07": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 0.10458534452236994,
+            "feesUsd": 10.76684495092742,
+            "pnlUsd": 29.490806517504296,
+            "pnlSol": 0.0841436024609794,
+            "positions": 3,
+            "winRateUsd": 100,
+            "winRateSol": 66.66666666666666
+          },
+          "2026-09-13": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 0.01276870021146919,
+            "feesUsd": 1.3202614328591689,
+            "pnlUsd": -8.707108352275391,
+            "pnlSol": -0.07502767273568012,
+            "positions": 1,
+            "winRateUsd": 0,
+            "winRateSol": 0
+          },
+          "2026-09-15": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 0.13581115487939419,
+            "feesUsd": 13.904488552430696,
+            "pnlUsd": -3.6791766350353896,
+            "pnlSol": 0.09816598529456577,
+            "positions": 1,
+            "winRateUsd": 0,
+            "winRateSol": 100
+          },
+          "2026-09-16": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 0.12135697645378335,
+            "feesUsd": 12.434835738621116,
+            "pnlUsd": -31.409205699143115,
+            "pnlSol": -0.3242209429263059,
+            "positions": 1,
+            "winRateUsd": 0,
+            "winRateSol": 0
+          },
+          "2026-09-17": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 0.7535956362327141,
+            "feesUsd": 76.71802277957819,
+            "pnlUsd": 97.63162075083756,
+            "pnlSol": 1.1309370632543687,
+            "positions": 3,
+            "winRateUsd": 100,
+            "winRateSol": 100
+          },
+          "2026-09-19": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 0.29476578218254434,
+            "feesUsd": 31.01619336597605,
+            "pnlUsd": 25.39019244945166,
+            "pnlSol": -0.7365169514660799,
+            "positions": 3,
+            "winRateUsd": 100,
+            "winRateSol": 0
+          },
+          "2026-09-20": {
+            "feeWinRateSol": 50,
+            "feeWinRateUsd": 50,
+            "feesSol": 0.006224271579959781,
+            "feesUsd": 0.6729718989950293,
+            "pnlUsd": -5.190673612084751,
+            "pnlSol": 0.02358191377235097,
+            "positions": 2,
+            "winRateUsd": 0,
+            "winRateSol": 50
+          },
+          "2026-09-21": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 0.015888405314812313,
+            "feesUsd": 1.753472613724743,
+            "pnlUsd": 8.025298762468992,
+            "pnlSol": 0.059490746105340886,
+            "positions": 1,
+            "winRateUsd": 100,
+            "winRateSol": 100
+          }
+        }
+      }
+    },
+    {
+      "owner": "5NrjyePr2yKRFKATG85TrLCW3W2vA4F1LoRhZquMbwis",
+      "status": "ok",
+      "fabriq": {
+        "fetchedAt": "2026-09-21T05:03:23.780Z",
+        "month": "2026-09",
+        "stats": {
+          "netPnlUsd": 28.249588118864864,
+          "netPnlSol": 0.2221251760543117,
+          "totalPositions": 1,
+          "avgAddLiquidityUsd": 184.9950952269064,
+          "avgAddLiquiditySol": 1.7077132599318656,
+          "totalDepositsUsd": 184.9950952269064,
+          "totalDepositsSol": 1.7077132599318656,
+          "totalWithdrawalsUsd": 195.02652456940456,
+          "totalWithdrawalsSol": 1.764966315903712,
+          "totalFeesUsd": 18.21815877636668,
+          "totalFeesSol": 0.16487212008246543,
+          "positionWinUsd": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "positionWinSol": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "profitFactorUsd": {
+            "ratio": 28.249588118864864,
+            "grossProfit": 28.249588118864864,
+            "grossLoss": 0
+          },
+          "profitFactorSol": {
+            "ratio": 0.2221251760543117,
+            "grossProfit": 0.2221251760543117,
+            "grossLoss": 0
+          },
+          "dayWinUsd": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "dayWinSol": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "avgWinLoss": {
+            "ratioUsd": 28.249588118864864,
+            "avgWinUsd": 28.249588118864864,
+            "avgLossUsd": 0,
+            "ratioSol": 0.2221251760543117,
+            "avgWinSol": 0.2221251760543117,
+            "avgLossSol": 0
+          }
+        },
+        "calendar": {
+          "2026-09-21": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 0.16487212008246543,
+            "feesUsd": 18.21815877636668,
+            "pnlUsd": 28.249588118864864,
+            "pnlSol": 0.2221251760543117,
+            "positions": 1,
+            "winRateUsd": 100,
+            "winRateSol": 100
+          }
+        }
+      }
+    },
+    {
+      "owner": "EH36G8PdsGMcCQCLuUftQeFRCkd2Bt6uXirZXrAUog6H",
+      "status": "ok",
+      "fabriq": {
+        "fetchedAt": "2026-09-21T05:03:24.751Z",
+        "month": "2026-09",
+        "stats": {
+          "netPnlUsd": 152.97191625067742,
+          "netPnlSol": 1.3609253160372987,
+          "totalPositions": 2,
+          "avgAddLiquidityUsd": 220.05669737808262,
+          "avgAddLiquiditySol": 1.99999999,
+          "totalDepositsUsd": 440.11339475616523,
+          "totalDepositsSol": 3.99999998,
+          "totalWithdrawalsUsd": 433.8802971223222,
+          "totalWithdrawalsSol": 3.9220811652846557,
+          "totalFeesUsd": 159.20501388452044,
+          "totalFeesSol": 1.4388441307526432,
+          "positionWinUsd": {
+            "percentage": 100,
+            "wins": 2,
+            "losses": 0
+          },
+          "positionWinSol": {
+            "percentage": 100,
+            "wins": 2,
+            "losses": 0
+          },
+          "profitFactorUsd": {
+            "ratio": 152.97191625067742,
+            "grossProfit": 152.97191625067742,
+            "grossLoss": 0
+          },
+          "profitFactorSol": {
+            "ratio": 1.3609253160372987,
+            "grossProfit": 1.3609253160372987,
+            "grossLoss": 0
+          },
+          "dayWinUsd": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "dayWinSol": {
+            "percentage": 100,
+            "wins": 1,
+            "losses": 0
+          },
+          "avgWinLoss": {
+            "ratioUsd": 76.48595812533871,
+            "avgWinUsd": 76.48595812533871,
+            "avgLossUsd": 0,
+            "ratioSol": 0.6804626580186494,
+            "avgWinSol": 0.6804626580186494,
+            "avgLossSol": 0
+          }
+        },
+        "calendar": {
+          "2026-09-21": {
+            "feeWinRateSol": 100,
+            "feeWinRateUsd": 100,
+            "feesSol": 1.4388441307526432,
+            "feesUsd": 159.20501388452044,
+            "pnlUsd": 152.97191625067742,
+            "pnlSol": 1.3609253160372987,
+            "positions": 2,
+            "winRateUsd": 100,
+            "winRateSol": 100
+          }
+        }
+      }
+    }
+  ],
+  "failures": []
+}

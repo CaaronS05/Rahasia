@@ -76,6 +76,29 @@ export type Wallet = {
   total_pnl_native_30d: number;
   total_lp_7d: number;
   total_lp_30d: number;
+
+  fabriq?: {
+    fetchedAt?: string;
+    month?: string;
+
+    stats?: {
+      dayWinUsd?: {
+        percentage?: number;
+        wins?: number;
+        losses?: number;
+      };
+
+      dayWinSol?: {
+        percentage?: number;
+        wins?: number;
+        losses?: number;
+      };
+
+      [key: string]: any;
+    };
+
+    calendar?: any;
+  };
 };
 
 export type WalletDataset = {
@@ -84,6 +107,7 @@ export type WalletDataset = {
     scanFinishedAt?: string;
     uniqueWallets?: number;
     pageCount?: number;
+    publishedAt?: string;
   };
   wallets: Wallet[];
 };

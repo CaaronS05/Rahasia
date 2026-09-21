@@ -1,35 +1,34 @@
-import type { PnlPoint } from "../types";
+type Props = {
+  values: number[];
+};
 
-export function Sparkline({ points }: { points: PnlPoint[] }) {
-  const values = points.map((p) => p.cumulative_pnl_native);
-  if (values.length < 2) return <span className="muted">—</span>;
+export function Sparkline({ values }: Props) {
+  if (values.length < 2) return <span className="sparkline-empty">—</span>;
 
-  const width = 54;
-  const height = 20;
+  const width = 62;
+  const height = 22;
   const min = Math.min(...values);
   const max = Math.max(...values);
-  const range = max - min || 1;
+  const span = max - min || 1;
 
-  const coords = values
-    .map((v, i) => {
-      const x = (i / (values.length - 1)) * width;
-      const y = height - ((v - min) / range) * (height - 3) - 1.5;
+  const points = values
+    .map((value, index) => {
+      const x = (index / (values.length - 1)) * width;
+      const y = height - ((value - min) / span) * height;
       return `${x},${y}`;
     })
     .join(" ");
 
-  const positive = values.at(-1)! >= values[0];
+  const positive = values[values.length - 1] >= values[0];
 
   return (
-    <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} aria-hidden="true">
-      <polyline
-        points={coords}
-        fill="none"
-        stroke={positive ? "#3ce88b" : "#ff5d6f"}
-        strokeWidth="1.7"
-        strokeLinejoin="round"
-        strokeLinecap="round"
-      />
+    <svg
+      className={`sparkline ${positive ? "positive" : "negative"}`}
+      viewBox={`0 0 ${width} ${height}`}
+      preserveAspectRatio="none"
+      aria-hidden="true"
+    >
+      <polyline points={points} fill="none" vectorEffect="non-scaling-stroke" />
     </svg>
   );
 }

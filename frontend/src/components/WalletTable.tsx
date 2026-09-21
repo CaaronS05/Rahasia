@@ -1,171 +1,205 @@
 import {
-  ArrowDown,
-  ArrowUp,
-  ArrowUpDown,
   Check,
-  ChevronLeft,
-  ChevronRight,
-  Columns3,
+  ChevronDown,
   Copy,
-  Download,
+  SlidersHorizontal,
+  Star,
 } from "lucide-react";
 import { useMemo, useState } from "react";
-import { csvEscape, duration, fmt, pct, shortWallet, timeAgo } from "../lib/format";
-import type { SortKey, Wallet } from "../types";
+import { fmt, shortWallet, timeAgo, walletAge } from "../lib/format";
+import type { Wallet } from "../types";
 import { Sparkline } from "./Sparkline";
 
-type ColumnKey =
+export type WalletSortKey =
   | "wallet"
-  | "pnl"
+  | "pnl7"
   | "win"
-  | "lp"
-  | "pools"
+  | "winDays"
+  | "loseDays"
+  | "pnl30"
+  | "pnlAll"
+  | "positions"
+  | "walletAge"
   | "age"
-  | "inflow"
+  | "ev"
+  | "invested"
+  | "monthly"
   | "fees"
-  | "last"
-  | "trend";
+  | "last";
 
-const columnLabels: Record<ColumnKey, string> = {
+type ColumnKey = WalletSortKey;
+
+type Props = {
+  wallets: Wallet[];
+  sortKey: WalletSortKey;
+  sortDir: "asc" | "desc";
+  onSort: (key: WalletSortKey) => void;
+  onOpenWallet: (wallet: Wallet) => void;
+  trackedOwners?: Set<string>;
+  onToggleTrack?: (owner: string) => void;
+};
+
+const labels: Record<ColumnKey, string> = {
   wallet: "Wallet",
-  pnl: "PnL 7D (SOL)",
+  pnl7: "7D PnL",
   win: "Win Rate",
-  lp: "Total LP 7D",
-  pools: "Pools",
+  winDays: "Win Days",
+  loseDays: "Lose Days",
+  pnl30: "30D PnL",
+  pnlAll: "All-Time PnL",
+  positions: "Positions",
+  walletAge: "Wallet Age",
   age: "Avg Age",
-  inflow: "Avg Inflow (SOL)",
-  fees: "Fees (SOL)",
-  last: "Last Activity",
-  trend: "Trend",
+  ev: "EV",
+  invested: "Avg Invested",
+  monthly: "Monthly PnL",
+  fees: "Fees",
+  last: "Last Active",
 };
 
-const columnSortKeys: Partial<Record<ColumnKey, SortKey>> = {
-  wallet: "owner",
-  pnl: "total_pnl_native_7d",
-  win: "win_rate_native",
-  lp: "total_lp_7d",
-  pools: "total_pool",
-  age: "avg_age_hour",
-  inflow: "avg_inflow_native",
-  fees: "total_fee_native",
-  last: "last_activity",
+const defaultVisible: Record<ColumnKey, boolean> = {
+  wallet: true,
+  pnl7: true,
+  win: true,
+  winDays: true,
+  loseDays: true,
+  pnl30: true,
+  pnlAll: true,
+  positions: true,
+  walletAge: true,
+  age: true,
+  ev: true,
+  invested: true,
+  monthly: true,
+  fees: true,
+  last: false,
 };
+
+function signed(value: number, digits = 2) {
+  return `${value >= 0 ? "+" : ""}${fmt(value, digits)}`;
+}
+
+function duration(hours: number) {
+  if (!Number.isFinite(hours)) return "—";
+  if (hours < 1) return `${Math.max(1, Math.round(hours * 60))}m`;
+  if (hours < 24) return `${fmt(hours, 1)}h`;
+  return `${fmt(hours / 24, 1)}d`;
+}
+
+function getDayStats(wallet: Wallet) {
+  const stats =
+    wallet.fabriq?.stats;
+
+  const dayStats =
+    stats?.dayWinUsd ??
+    stats?.dayWinSol;
+
+  return {
+    wins:
+      Number(dayStats?.wins) || 0,
+
+    losses:
+      Number(dayStats?.losses) || 0,
+  };
+}
 
 export function WalletTable({
   wallets,
-  totalUnfiltered,
-  selected,
-  onSelect,
   sortKey,
   sortDir,
   onSort,
-}: {
-  wallets: Wallet[];
-  totalUnfiltered: number;
-  selected?: string;
-  onSelect: (wallet: Wallet) => void;
-  sortKey: SortKey;
-  sortDir: "asc" | "desc";
-  onSort: (key: SortKey) => void;
-}) {
+  onOpenWallet,
+  trackedOwners = new Set(),
+  onToggleTrack,
+}: Props) {
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(50);
   const [columnsOpen, setColumnsOpen] = useState(false);
-  const [visible, setVisible] = useState<Record<ColumnKey, boolean>>({
-    wallet: true,
-    pnl: true,
-    win: true,
-    lp: true,
-    pools: true,
-    age: true,
-    inflow: true,
-    fees: true,
-    last: true,
-    trend: true,
-  });
+  const [visible, setVisible] = useState(defaultVisible);
+  const [copiedWallet, setCopiedWallet] = useState<string | null>(null);
+  const pageSize = 25;
 
   const pageCount = Math.max(1, Math.ceil(wallets.length / pageSize));
   const safePage = Math.min(page, pageCount);
   const rows = useMemo(
     () => wallets.slice((safePage - 1) * pageSize, safePage * pageSize),
-    [wallets, safePage, pageSize]
+    [safePage, wallets],
   );
 
-  const exportCsv = () => {
-    const header = [
-      "wallet",
-      "pnl_7d_sol",
-      "win_rate",
-      "total_lp_7d",
-      "total_pools",
-      "avg_age_hour",
-      "avg_inflow_sol",
-      "fees_sol",
-      "first_activity",
-      "last_activity",
-    ];
-    const body = wallets.map((w) => [
-      w.owner,
-      w.total_pnl_native_7d,
-      w.win_rate_native,
-      w.total_lp_7d,
-      w.total_pool,
-      w.avg_age_hour,
-      w.avg_inflow_native,
-      w.total_fee_native,
-      w.first_activity,
-      w.last_activity,
-    ]);
-    const csv = [header, ...body]
-      .map((row) => row.map(csvEscape).join(","))
-      .join("\n");
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "soltrace-wallets-filtered.csv";
-    a.click();
-    URL.revokeObjectURL(url);
-  };
+  const visibleColumns = (Object.keys(visible) as ColumnKey[]).filter(
+    (key) => visible[key],
+  );
 
-  const sortIcon = (key?: SortKey) => {
-    if (!key) return null;
-    if (sortKey !== key) return <ArrowUpDown size={12} />;
-    return sortDir === "asc" ? <ArrowUp size={12} /> : <ArrowDown size={12} />;
-  };
+  function header(key: ColumnKey) {
+    return (
+      <button className="table-sort" onClick={() => onSort(key)}>
+        {labels[key].toUpperCase()}
+        <span className={sortKey === key ? "active-sort" : ""}>
+          {sortKey === key ? (sortDir === "asc" ? "↑" : "↓") : "↕"}
+        </span>
+      </button>
+    );
+  }
 
-  const toggleColumn = (key: ColumnKey) =>
-    setVisible((prev) => ({ ...prev, [key]: !prev[key] }));
+  async function handleCopyWallet(
+    event: React.MouseEvent,
+    address: string,
+  ) {
+    event.stopPropagation();
+
+    try {
+      await navigator.clipboard.writeText(address);
+
+      setCopiedWallet(address);
+
+      window.setTimeout(() => {
+        setCopiedWallet((current) =>
+          current === address ? null : current,
+        );
+      }, 1500);
+    } catch (error) {
+      console.error("Failed to copy wallet:", error);
+    }
+  }
 
   return (
-    <section className="table-card">
+    <section className="wallet-table-card">
       <div className="table-toolbar">
-        <div className="view-pills">
-          <button className="pill active">Table</button>
-          <span>{wallets.length.toLocaleString()} wallets</span>
+        <div>
+          <strong>{wallets.length.toLocaleString()} wallets</strong>
+          <span>on Solana</span>
         </div>
 
-        <div className="toolbar-actions">
+        <div className="table-toolbar-right">
+          <span>Values in SOL</span>
           <div className="columns-wrap">
-            <button className="btn ghost" onClick={() => setColumnsOpen((v) => !v)}>
-              <Columns3 size={14} />
+            <button
+              className="columns-button"
+              onClick={() => setColumnsOpen((current) => !current)}
+            >
+              <SlidersHorizontal size={14} />
               Columns
+              <ChevronDown size={13} />
             </button>
+
             {columnsOpen ? (
               <div className="columns-menu">
-                {(Object.keys(columnLabels) as ColumnKey[]).map((key) => (
-                  <button key={key} onClick={() => toggleColumn(key)}>
-                    <span>{columnLabels[key]}</span>
-                    {visible[key] ? <Check size={14} /> : null}
+                {(Object.keys(labels) as ColumnKey[]).map((key) => (
+                  <button
+                    key={key}
+                    onClick={() =>
+                      setVisible((current) => ({
+                        ...current,
+                        [key]: !current[key],
+                      }))
+                    }
+                  >
+                    <span>{labels[key]}</span>
+                    {visible[key] ? <Check size={13} /> : <span />}
                   </button>
                 ))}
               </div>
             ) : null}
           </div>
-          <button className="btn ghost" onClick={exportCsv}>
-            <Download size={14} />
-            Export
-          </button>
         </div>
       </div>
 
@@ -174,60 +208,218 @@ export function WalletTable({
           <thead>
             <tr>
               <th className="rank-col">#</th>
-              {(Object.keys(columnLabels) as ColumnKey[]).map((col) => {
-                if (!visible[col]) return null;
-                const key = columnSortKeys[col];
-                return (
-                  <th
-                    key={col}
-                    className={key ? "sortable" : ""}
-                    onClick={() => key && onSort(key)}
-                  >
-                    <span>{columnLabels[col]} {sortIcon(key)}</span>
-                  </th>
-                );
-              })}
+              {visible.wallet ? <th>{header("wallet")}</th> : null}
+              {visible.pnl7 ? <th>{header("pnl7")}</th> : null}
+              {visible.win ? <th>{header("win")}</th> : null}
+              {visible.winDays ? (
+                <th>{header("winDays")}</th>
+              ) : null}
+
+              {visible.loseDays ? (
+                <th>{header("loseDays")}</th>
+              ) : null}
+              {visible.pnl30 ? <th>{header("pnl30")}</th> : null}
+              {visible.pnlAll ? <th>{header("pnlAll")}</th> : null}
+              {visible.positions ? <th>{header("positions")}</th> : null}
+              {visible.walletAge ? <th>{header("walletAge")}</th> : null}
+              {visible.age ? <th>{header("age")}</th> : null}
+              {visible.ev ? <th>{header("ev")}</th> : null}
+              {visible.invested ? <th>{header("invested")}</th> : null}
+              {visible.monthly ? <th>{header("monthly")}</th> : null}
+              {visible.fees ? <th>{header("fees")}</th> : null}
+              {visible.last ? <th>{header("last")}</th> : null}
             </tr>
           </thead>
+
           <tbody>
-            {rows.map((w, index) => {
-              const pnlPositive = w.total_pnl_native_7d >= 0;
+            {rows.map((wallet, index) => {
+              const chart = wallet.pnl_chart ?? [];
+              const sparkValues = chart
+
+                .map((point) => point.cumulative_pnl_native)
+                .filter(Number.isFinite);
+
+
+              const dayStats =
+                getDayStats(wallet);
+
               return (
                 <tr
-                  key={w.owner}
-                  className={selected === w.owner ? "selected" : ""}
-                  onClick={() => onSelect(w)}
+                  key={wallet.owner}
+                  className="wallet-row"
+                  onClick={() => onOpenWallet(wallet)}
                 >
-                  <td className="rank-col">{(safePage - 1) * pageSize + index + 1}</td>
-                  {visible.wallet && (
+                  <td className="rank-col">
+                    {(safePage - 1) * pageSize + index + 1}
+                  </td>
+
+                  {visible.wallet ? (
                     <td>
                       <div className="wallet-cell">
-                        <strong>{shortWallet(w.owner, 6, 4)}</strong>
                         <button
-                          className="icon-btn"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            navigator.clipboard.writeText(w.owner);
+                          className={`track-wallet-button ${trackedOwners.has(wallet.owner) ? "tracked" : ""
+                            }`}
+                          title={
+                            trackedOwners.has(wallet.owner)
+                              ? "Remove from Track"
+                              : "Add to Track"
+                          }
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onToggleTrack?.(wallet.owner);
                           }}
                         >
-                          <Copy size={12} />
+                          <Star
+                            size={13}
+                            fill={
+                              trackedOwners.has(wallet.owner)
+                                ? "currentColor"
+                                : "none"
+                            }
+                          />
+                        </button>
+                        <strong>{shortWallet(wallet.owner)}</strong>
+                        <button
+                          className={`copy-wallet ${copiedWallet === wallet.owner ? "copied" : ""
+                            }`}
+                          title={
+                            copiedWallet === wallet.owner
+                              ? "Copied"
+                              : "Copy wallet"
+                          }
+                          onClick={(event) =>
+                            handleCopyWallet(event, wallet.owner)
+                          }
+                        >
+                          <span className="copy-wallet-icon">
+                            {copiedWallet === wallet.owner ? (
+                              <Check size={12} />
+                            ) : (
+                              <Copy size={12} />
+                            )}
+                          </span>
+
+                          {copiedWallet === wallet.owner ? (
+                            <span className="copy-wallet-text">
+                              Copied
+                            </span>
+                          ) : null}
                         </button>
                       </div>
                     </td>
-                  )}
-                  {visible.pnl && (
-                    <td className={pnlPositive ? "positive" : "negative"}>
-                      {pnlPositive ? "+" : ""}{fmt(w.total_pnl_native_7d, 3)}
+                  ) : null}
+
+                  {visible.pnl7 ? (
+                    <td>
+                      <div className="pnl-cell">
+                        <Sparkline values={sparkValues.slice(-14)} />
+                        <strong
+                          className={
+                            wallet.total_pnl_native_7d >= 0 ? "positive" : "negative"
+                          }
+                        >
+                          {signed(wallet.total_pnl_native_7d)}
+                        </strong>
+                      </div>
                     </td>
-                  )}
-                  {visible.win && <td>{pct(w.win_rate_native)}</td>}
-                  {visible.lp && <td>{w.total_lp_7d.toLocaleString()}</td>}
-                  {visible.pools && <td>{w.total_pool.toLocaleString()}</td>}
-                  {visible.age && <td>{duration(w.avg_age_hour)}</td>}
-                  {visible.inflow && <td>{fmt(w.avg_inflow_native, 2)}</td>}
-                  {visible.fees && <td>{fmt(w.total_fee_native, 2)}</td>}
-                  {visible.last && <td className="muted">{timeAgo(w.last_activity)}</td>}
-                  {visible.trend && <td><Sparkline points={w.pnl_chart} /></td>}
+                  ) : null}
+
+                  {visible.win ? (
+                    <td>
+                      <div className="win-rate-cell">
+                        <span>{fmt(wallet.win_rate_native * 100, 1)}%</span>
+                        <div className="win-rate-bar">
+                          <span
+                            style={{
+                              width: `${Math.max(
+                                0,
+                                Math.min(100, wallet.win_rate_native * 100),
+                              )}%`,
+                            }}
+                          />
+                        </div>
+                      </div>
+                    </td>
+                  ) : null}
+
+                  {visible.winDays ? (
+                    <td className="day-stat win-day-stat">
+                      {dayStats.wins}
+                    </td>
+                  ) : null}
+
+                  {visible.loseDays ? (
+                    <td className="day-stat lose-day-stat">
+                      {dayStats.losses}
+                    </td>
+                  ) : null}
+
+                  {visible.pnl30 ? (
+                    <td
+                      className={
+                        wallet.total_pnl_native_30d >= 0 ? "positive" : "negative"
+                      }
+                    >
+                      {signed(wallet.total_pnl_native_30d)}
+                    </td>
+                  ) : null}
+
+                  {visible.pnlAll ? (
+                    <td
+                      className={wallet.total_pnl_native >= 0 ? "positive" : "negative"}
+                    >
+                      <strong>{signed(wallet.total_pnl_native)}</strong>
+                    </td>
+                  ) : null}
+
+                  {visible.positions ? (
+                    <td className="numeric">
+                      <strong>{wallet.total_lp}</strong>
+                      <small>
+                        {wallet.total_lp_7d} in 7D · {wallet.total_pool} pools
+                      </small>
+                    </td>
+                  ) : null}
+
+                  {visible.walletAge ? (
+                    <td className="numeric">{walletAge(wallet.first_activity)}</td>
+                  ) : null}
+
+                  {visible.age ? (
+                    <td className="numeric">{duration(wallet.avg_age_hour)}</td>
+                  ) : null}
+
+                  {visible.ev ? (
+                    <td
+                      className={
+                        wallet.expected_value_native >= 0 ? "positive" : "negative"
+                      }
+                    >
+                      {signed(wallet.expected_value_native)}
+                    </td>
+                  ) : null}
+
+                  {visible.invested ? (
+                    <td className="numeric">{fmt(wallet.avg_inflow_native, 2)}</td>
+                  ) : null}
+
+                  {visible.monthly ? (
+                    <td
+                      className={
+                        wallet.avg_monthly_pnl_native >= 0 ? "positive" : "negative"
+                      }
+                    >
+                      {signed(wallet.avg_monthly_pnl_native)}
+                    </td>
+                  ) : null}
+
+                  {visible.fees ? (
+                    <td className="numeric">{fmt(wallet.total_fee_native, 2)}</td>
+                  ) : null}
+
+                  {visible.last ? (
+                    <td className="numeric">{timeAgo(wallet.last_activity)}</td>
+                  ) : null}
                 </tr>
               );
             })}
@@ -235,42 +427,26 @@ export function WalletTable({
         </table>
       </div>
 
-      <div className="pagination">
+      <footer className="table-pagination">
         <span>
-          Showing {wallets.length ? (safePage - 1) * pageSize + 1 : 0}–
-          {Math.min(safePage * pageSize, wallets.length)} of {wallets.length} filtered
-          <span className="subtle"> · {totalUnfiltered} total</span>
+          Page {safePage} of {pageCount}
         </span>
 
-        <div className="pagination-controls">
-          <select
-            value={pageSize}
-            onChange={(e) => {
-              setPageSize(Number(e.target.value));
-              setPage(1);
-            }}
-          >
-            <option value={25}>25 / page</option>
-            <option value={50}>50 / page</option>
-            <option value={100}>100 / page</option>
-          </select>
+        <div>
           <button
-            className="icon-btn bordered"
             disabled={safePage <= 1}
-            onClick={() => setPage((p) => Math.max(1, p - 1))}
+            onClick={() => setPage((current) => Math.max(1, current - 1))}
           >
-            <ChevronLeft size={15} />
+            Previous
           </button>
-          <span className="page-indicator">{safePage} / {pageCount}</span>
           <button
-            className="icon-btn bordered"
             disabled={safePage >= pageCount}
-            onClick={() => setPage((p) => Math.min(pageCount, p + 1))}
+            onClick={() => setPage((current) => Math.min(pageCount, current + 1))}
           >
-            <ChevronRight size={15} />
+            Next
           </button>
         </div>
-      </div>
+      </footer>
     </section>
   );
 }
