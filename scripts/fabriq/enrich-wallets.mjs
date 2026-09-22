@@ -28,6 +28,24 @@ const DELAY_MS = 500;
 const MAX_RETRIES = 3;
 const STALE_AFTER_HOURS = 24;
 
+const CONCURRENCY =
+    Math.max(
+        1,
+        parseInt(
+            process.env.FABRIQ_CONCURRENCY ?? "2",
+            10
+        ) || 2
+    );
+
+const LIMIT =
+    Math.max(
+        0,
+        parseInt(
+            process.env.FABRIQ_LIMIT ?? "0",
+            10
+        ) || 0
+    );
+
 // ======================================================
 // HELPERS
 // ======================================================
@@ -185,11 +203,23 @@ async function loadCheckpoint() {
     return map;
 }
 
+let checkpointWriteQueue =
+    Promise.resolve();
+
 async function saveCheckpoint(row) {
-    await fs.appendFile(
-        CHECKPOINT,
-        JSON.stringify(row) + "\n"
-    );
+    const line =
+        JSON.stringify(row) + "\n";
+
+    checkpointWriteQueue =
+        checkpointWriteQueue.then(
+            () =>
+                fs.appendFile(
+                    CHECKPOINT,
+                    line
+                )
+        );
+
+    await checkpointWriteQueue;
 }
 
 // ======================================================
@@ -235,31 +265,34 @@ console.log(
 let token = null;
 let tokenExpiresAt = 0;
 
-async function getToken(forceRefresh = false) {
-    if (
-        !forceRefresh &&
-        token &&
-        Date.now() < tokenExpiresAt - 10_000
-    ) {
-        return token;
-    }
+let tokenRefreshPromise =
+    null;
 
-    const result = await page.evaluate(
-        async () => {
-            const response = await fetch(
-                "/auth/verify",
-                {
-                    credentials: "include",
-                    cache: "no-store",
-                }
-            );
+async function refreshTokenFromBrowser() {
+    const result =
+        await page.evaluate(
+            async () => {
+                const response =
+                    await fetch(
+                        "/auth/verify",
+                        {
+                            credentials:
+                                "include",
 
-            return {
-                status: response.status,
-                text: await response.text(),
-            };
-        }
-    );
+                            cache:
+                                "no-store",
+                        }
+                    );
+
+                return {
+                    status:
+                        response.status,
+
+                    text:
+                        await response.text(),
+                };
+            }
+        );
 
     if (result.status !== 200) {
         throw new Error(
@@ -270,7 +303,10 @@ async function getToken(forceRefresh = false) {
         );
     }
 
-    const json = JSON.parse(result.text);
+    const json =
+        JSON.parse(
+            result.text
+        );
 
     if (!json.token) {
         throw new Error(
@@ -278,19 +314,23 @@ async function getToken(forceRefresh = false) {
         );
     }
 
-    token = json.token;
+    token =
+        json.token;
 
     tokenExpiresAt =
         decodeJwtExpiry(token) ||
         Date.now() + 45_000;
 
-    const secondsLeft = Math.max(
-        0,
-        Math.floor(
-            (tokenExpiresAt - Date.now()) /
-            1000
-        )
-    );
+    const secondsLeft =
+        Math.max(
+            0,
+            Math.floor(
+                (
+                    tokenExpiresAt -
+                    Date.now()
+                ) / 1000
+            )
+        );
 
     console.log(
         `[AUTH] JWT refreshed (${secondsLeft}s)`
@@ -298,6 +338,34 @@ async function getToken(forceRefresh = false) {
 
     return token;
 }
+
+async function getToken(
+    forceRefresh = false
+) {
+    if (
+        !forceRefresh &&
+        token &&
+        Date.now() <
+        tokenExpiresAt - 10_000
+    ) {
+        return token;
+    }
+
+    if (!tokenRefreshPromise) {
+        tokenRefreshPromise =
+            refreshTokenFromBrowser()
+                .finally(
+                    () => {
+                        tokenRefreshPromise =
+                            null;
+                    }
+                );
+    }
+
+    return tokenRefreshPromise;
+}
+
+
 
 // ======================================================
 // FABRIQ API
@@ -481,17 +549,7 @@ const CALENDAR_MONTHS = [
 async function fetchWallet(wallet) {
     const statsUrl =
         `https://apinew.fabriq.trade/portfolio/stats/${wallet}` +
-        `?timezone=${encodeURIComponent(
-            TIMEZONE
-        )}` +
-        `&sources=wallet&sources=hawkfi`;
-
-    const calendarUrl =
-        `https://apinew.fabriq.trade/portfolio/calendar/${wallet}` +
-        `?month=${MONTH}` +
-        `&timezone=${encodeURIComponent(
-            TIMEZONE
-        )}` +
+        `?timezone=${encodeURIComponent(TIMEZONE)}` +
         `&sources=wallet&sources=hawkfi`;
 
     const statsResponse =
@@ -512,9 +570,7 @@ async function fetchWallet(wallet) {
         const calendarUrl =
             `https://apinew.fabriq.trade/portfolio/calendar/${wallet}` +
             `?month=${month}` +
-            `&timezone=${encodeURIComponent(
-                TIMEZONE
-            )}` +
+            `&timezone=${encodeURIComponent(TIMEZONE)}` +
             `&sources=wallet&sources=hawkfi`;
 
         const calendarResponse =
@@ -558,13 +614,14 @@ async function fetchWallet(wallet) {
 
             calendars,
 
-            // Temporary backward compatibility
-            // untuk Portfolio UI lama.
+            // compatibility UI lama
             month:
                 CURRENT_MONTH,
 
             calendar:
-                calendars[CURRENT_MONTH],
+                calendars[
+                CURRENT_MONTH
+                ],
         },
     };
 }
@@ -612,15 +669,23 @@ const walletsNeedingRefresh =
         .map(getWalletOwner)
         .filter(Boolean);
 
-const wallets = [
+const refreshCandidates = [
     ...new Set(
         walletsNeedingRefresh
     ),
 ];
 
+const wallets =
+    LIMIT > 0
+        ? refreshCandidates.slice(
+            0,
+            LIMIT
+        )
+        : refreshCandidates;
+
 const freshWallets =
     allWallets.length -
-    wallets.length;
+    refreshCandidates.length;
 
 console.log(
     `\n[DATASET] ${allWallets.length} total wallets`
@@ -631,7 +696,17 @@ console.log(
 );
 
 console.log(
-    `[STALE/MISSING] ${wallets.length} wallets need Fabriq`
+    `[STALE/MISSING] ${refreshCandidates.length} wallets need Fabriq`
+);
+
+if (LIMIT > 0) {
+    console.log(
+        `[RUN LIMIT] ${wallets.length}/${refreshCandidates.length} wallets`
+    );
+}
+
+console.log(
+    `[WORKERS] ${CONCURRENCY}`
 );
 
 console.log(
@@ -670,94 +745,147 @@ let success = alreadyDone;
 let failed = 0;
 let skipped = 0;
 
-const startedAt = Date.now();
+const startedAt =
+    Date.now();
 
-for (
-    let i = 0;
-    i < wallets.length;
-    i++
+let nextIndex = 0;
+
+async function runWorker(
+    workerId
 ) {
-    const wallet = wallets[i];
+    while (true) {
+        const i =
+            nextIndex++;
 
-    const existing =
-        checkpoint.get(wallet);
+        if (
+            i >= wallets.length
+        ) {
+            return;
+        }
 
-    if (
-        existing?.status === "ok" &&
-        existing?.fabriq?.stats &&
-        hasRequiredCalendars(existing) &&
-        isFabriqFresh(existing)
-    ) {
-        skipped++;
+        const wallet =
+            wallets[i];
+
+        const existing =
+            checkpoint.get(
+                wallet
+            );
+
+        if (
+            existing?.status ===
+            "ok" &&
+            existing?.fabriq?.stats &&
+            hasRequiredCalendars(
+                existing
+            ) &&
+            isFabriqFresh(
+                existing
+            )
+        ) {
+            skipped++;
+
+            console.log(
+                `[W${workerId}] [${i + 1}/${wallets.length}] SKIP ${wallet}`
+            );
+
+            continue;
+        }
 
         console.log(
-            `[${i + 1}/${wallets.length}] SKIP ${wallet}`
+            `\n[W${workerId}] [${i + 1}/${wallets.length}] ${wallet}`
         );
 
-        continue;
-    }
+        try {
+            const result =
+                await fetchWallet(
+                    wallet
+                );
 
-    console.log(
-        `\n[${i + 1}/${wallets.length}] ${wallet}`
-    );
+            checkpoint.set(
+                wallet,
+                result
+            );
 
-    try {
-        const result =
-            await fetchWallet(wallet);
+            await saveCheckpoint(
+                result
+            );
 
-        checkpoint.set(
-            wallet,
-            result
-        );
+            success++;
 
-        await saveCheckpoint(
-            result
-        );
-
-        success++;
-
-        console.log(
-            `[OK] positions=${result.fabriq.stats.totalPositions ?? "?"}` +
-            ` pnlSOL=${result.fabriq.stats.netPnlSol?.toFixed?.(4) ?? "?"}` +
-            ` days=${Object.values(result.fabriq.calendars)
-                .reduce(
-                    (total, calendar) =>
+            console.log(
+                `[W${workerId}] [OK]` +
+                ` positions=${result.fabriq.stats.totalPositions ?? "?"}` +
+                ` pnlSOL=${result.fabriq.stats.netPnlSol?.toFixed?.(4) ?? "?"}` +
+                ` days=${Object.values(
+                    result.fabriq.calendars
+                ).reduce(
+                    (
+                        total,
+                        calendar
+                    ) =>
                         total +
-                        Object.keys(calendar).length,
+                        Object.keys(
+                            calendar
+                        ).length,
                     0
                 )}`
-        );
-    } catch (error) {
-        failed++;
+            );
+        } catch (error) {
+            failed++;
 
-        const failure = {
-            owner: wallet,
+            const failure = {
+                owner:
+                    wallet,
 
-            status: "error",
+                status:
+                    "error",
 
-            failedAt:
-                new Date().toISOString(),
+                failedAt:
+                    new Date()
+                        .toISOString(),
 
-            error:
-                error.message,
-        };
+                error:
+                    error.message,
+            };
 
-        checkpoint.set(
-            wallet,
-            failure
-        );
+            checkpoint.set(
+                wallet,
+                failure
+            );
 
-        await saveCheckpoint(
-            failure
-        );
+            await saveCheckpoint(
+                failure
+            );
 
-        console.error(
-            `[FAIL] ${error.message}`
+            console.error(
+                `[W${workerId}] [FAIL] ${error.message}`
+            );
+        }
+
+        await sleep(
+            DELAY_MS
         );
     }
-
-    await sleep(DELAY_MS);
 }
+
+const workerCount =
+    Math.min(
+        CONCURRENCY,
+        wallets.length
+    );
+
+await Promise.all(
+    Array.from(
+        {
+            length:
+                workerCount,
+        },
+        (_, index) =>
+            runWorker(
+                index + 1
+            )
+    )
+);
 
 // ======================================================
 // BUILD FINAL OUTPUT
@@ -783,7 +911,7 @@ const output = {
 
     sourceDataset: DATASET,
 
-    month: MONTH,
+    months: CALENDAR_MONTHS,
 
     totalWallets:
         wallets.length,
