@@ -2,6 +2,13 @@ import { Search, Star } from "lucide-react";
 import { useMemo, useState } from "react";
 import { WalletTable, type WalletSortKey } from "../components/WalletTable";
 import type { Wallet } from "../types";
+import {
+  walletAllTimePnl,
+  walletMonthlyPnl,
+  walletPnl30d,
+  walletPnl7d,
+  walletWinRatePercent,
+} from "../lib/walletMetrics";
 
 type Props = {
   wallets: Wallet[];
@@ -13,8 +20,10 @@ type Props = {
 function sortValue(wallet: Wallet, key: WalletSortKey): string | number {
   switch (key) {
     case "wallet": return wallet.owner;
-    case "pnl7": return wallet.total_pnl_native_7d;
-    case "win": return wallet.win_rate_native;
+    case "pnl7":
+      return walletPnl7d(wallet);
+    case "win":
+      return walletWinRatePercent(wallet);
     case "winDays": {
       const dayStats =
         wallet.fabriq?.stats?.dayWinUsd ??
@@ -34,14 +43,17 @@ function sortValue(wallet: Wallet, key: WalletSortKey): string | number {
         dayStats?.losses ?? 0,
       );
     }
-    case "pnl30": return wallet.total_pnl_native_30d;
-    case "pnlAll": return wallet.total_pnl_native;
+    case "pnl30":
+      return walletPnl30d(wallet);
+    case "pnlAll":
+      return walletAllTimePnl(wallet);
     case "positions": return wallet.total_lp;
     case "walletAge": return Date.now() - new Date(wallet.first_activity).getTime();
     case "age": return wallet.avg_age_hour;
     case "ev": return wallet.expected_value_native;
     case "invested": return wallet.avg_inflow_native;
-    case "monthly": return wallet.avg_monthly_pnl_native;
+    case "monthly":
+      return walletMonthlyPnl(wallet);
     case "fees": return wallet.total_fee_native;
     case "last": return new Date(wallet.last_activity).getTime();
   }

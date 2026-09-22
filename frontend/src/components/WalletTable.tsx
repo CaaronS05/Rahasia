@@ -9,6 +9,14 @@ import { useMemo, useState } from "react";
 import { fmt, shortWallet, timeAgo, walletAge } from "../lib/format";
 import type { Wallet } from "../types";
 import { Sparkline } from "./Sparkline";
+import {
+  walletAllTimePnl,
+  walletMonthlyPnl,
+  walletPnl30d,
+  walletPnl7d,
+  walletSparkline7d,
+  walletWinRatePercent,
+} from "../lib/walletMetrics";
 
 export type WalletSortKey =
   | "wallet"
@@ -233,11 +241,30 @@ export function WalletTable({
 
           <tbody>
             {rows.map((wallet, index) => {
-              const chart = wallet.pnl_chart ?? [];
-              const sparkValues = chart
+              const pnl7 =
+                walletPnl7d(
+                  wallet,
+                );
 
-                .map((point) => point.cumulative_pnl_native)
-                .filter(Number.isFinite);
+              const pnl30 =
+                walletPnl30d(
+                  wallet,
+                );
+
+              const pnlAll =
+                walletAllTimePnl(
+                  wallet,
+                );
+
+              const monthlyPnl =
+                walletMonthlyPnl(
+                  wallet,
+                );
+
+              const sparkValues =
+                walletSparkline7d(
+                  wallet,
+                );
 
 
               const dayStats =
@@ -315,22 +342,20 @@ export function WalletTable({
                         <Sparkline values={sparkValues.slice(-14)} />
                         <strong
                           className={
-                            wallet.total_pnl_native_7d >= 0 ? "positive" : "negative"
+                            pnl7 >= 0 ? "positive" : "negative"
                           }
                         >
-                          {signed(wallet.total_pnl_native_7d)}
+                          {signed(pnl7)}
                         </strong>
                       </div>
                     </td>
                   ) : null}
 
                   {visible.win ? (() => {
-                    const positionWin =
-                      wallet.fabriq?.stats?.positionWinUsd ??
-                      wallet.fabriq?.stats?.positionWinSol;
-
                     const winRate =
-                      Number(positionWin?.percentage) || 0;
+                      walletWinRatePercent(
+                        wallet,
+                      );
 
                     return (
                       <td>
@@ -369,18 +394,18 @@ export function WalletTable({
                   {visible.pnl30 ? (
                     <td
                       className={
-                        wallet.total_pnl_native_30d >= 0 ? "positive" : "negative"
+                        pnl30 >= 0 ? "positive" : "negative"
                       }
                     >
-                      {signed(wallet.total_pnl_native_30d)}
+                      {signed(pnl30)}
                     </td>
                   ) : null}
 
                   {visible.pnlAll ? (
                     <td
-                      className={wallet.total_pnl_native >= 0 ? "positive" : "negative"}
+                      className={pnlAll >= 0 ? "positive" : "negative"}
                     >
-                      <strong>{signed(wallet.total_pnl_native)}</strong>
+                      <strong>{signed(pnlAll)}</strong>
                     </td>
                   ) : null}
 
@@ -418,10 +443,10 @@ export function WalletTable({
                   {visible.monthly ? (
                     <td
                       className={
-                        wallet.avg_monthly_pnl_native >= 0 ? "positive" : "negative"
+                        monthlyPnl >= 0 ? "positive" : "negative"
                       }
                     >
-                      {signed(wallet.avg_monthly_pnl_native)}
+                      {signed(monthlyPnl)}
                     </td>
                   ) : null}
 

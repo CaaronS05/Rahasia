@@ -28,6 +28,13 @@ const DELAY_MS = 500;
 const MAX_RETRIES = 3;
 const STALE_AFTER_HOURS = 24;
 
+const REFRESH_BEFORE =
+    process.env.FABRIQ_REFRESH_BEFORE
+        ? Date.parse(
+            process.env.FABRIQ_REFRESH_BEFORE
+        )
+        : null;
+
 const CONCURRENCY =
     Math.max(
         1,
@@ -110,6 +117,16 @@ function isFabriqFresh(row) {
         Date.parse(fetchedAt);
 
     if (!Number.isFinite(timestamp)) {
+        return false;
+    }
+
+    if (
+        Number.isFinite(
+            REFRESH_BEFORE
+        ) &&
+        timestamp <
+        REFRESH_BEFORE
+    ) {
         return false;
     }
 
@@ -894,7 +911,7 @@ await Promise.all(
 const successfulResults = [];
 const failures = [];
 
-for (const wallet of wallets) {
+for (const wallet of allWallets) {
     const row =
         checkpoint.get(wallet);
 
@@ -914,7 +931,7 @@ const output = {
     months: CALENDAR_MONTHS,
 
     totalWallets:
-        wallets.length,
+        allWallets.length,
 
     success:
         successfulResults.length,
@@ -958,7 +975,7 @@ console.log(
 );
 
 console.log(
-    `Total   : ${wallets.length}`
+    `Total   : ${allWallets.length}`
 );
 
 console.log(

@@ -9,6 +9,7 @@
     "refresh:lpagent": "node scripts/lpagent/scrape-smart-lp.mjs && node --experimental-strip-types scripts/pipeline/merge-wallets.ts data/raw/lpagent/smart-lp-latest.json",
     "merge:wallets": "node --experimental-strip-types scripts/pipeline/merge-wallets.ts",
     "enrich:fabriq": "node scripts/fabriq/enrich-wallets.mjs",
+    "control": "node scripts/control/server.mjs",
     "merge:fabriq": "node --experimental-strip-types scripts/pipeline/merge-fabriq.ts",
     "publish:wallets": "node --experimental-strip-types scripts/pipeline/publish-wallets.ts",
     "pipeline": "node scripts/pipeline/run-pipeline.mjs"

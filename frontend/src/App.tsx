@@ -4,16 +4,25 @@ import {
   Search,
   SlidersHorizontal,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { FabriqControlModal } from "./components/FabriqControlModal";
 import { Filters, defaultFilters, type FilterState } from "./components/Filters";
 import { Sidebar } from "./components/Sidebar";
 import { WalletTable, type WalletSortKey } from "./components/WalletTable";
 import { compact, fmt } from "./lib/format";
+import { getFabriqStatus, subscribeFabriqEvents } from "./lib/fabriqControl";
 import { loadWalletDataset } from "./lib/walletData";
 import { loadTrackedWallets, saveTrackedWallets } from "./lib/trackedWallets";
 import { PortfolioPage } from "./pages/PortfolioPage";
 import { TrackPage } from "./pages/TrackPage";
 import type { Wallet } from "./types";
+import {
+  walletAllTimePnl,
+  walletMonthlyPnl,
+  walletPnl30d,
+  walletPnl7d,
+  walletWinRatePercent,
+} from "./lib/walletMetrics";
 
 type Timeframe = "7d" | "30d" | "all";
 type Page = "explore" | "track" | "portfolio";
@@ -75,10 +84,25 @@ function navigate(path: string) {
   window.dispatchEvent(new PopStateEvent("popstate"));
 }
 
-function walletPnl(wallet: Wallet, timeframe: Timeframe) {
-  if (timeframe === "30d") return wallet.total_pnl_native_30d;
-  if (timeframe === "all") return wallet.total_pnl_native;
-  return wallet.total_pnl_native_7d;
+function walletPnl(
+  wallet: Wallet,
+  timeframe: Timeframe,
+) {
+  if (timeframe === "30d") {
+    return walletPnl30d(
+      wallet,
+    );
+  }
+
+  if (timeframe === "all") {
+    return walletAllTimePnl(
+      wallet,
+    );
+  }
+
+  return walletPnl7d(
+    wallet,
+  );
 }
 
 export default function App() {
@@ -98,6 +122,21 @@ export default function App() {
   const [trackedOwners, setTrackedOwners] = useState<Set<string>>(
     () => new Set(loadTrackedWallets()),
   );
+  const [fabriqModalOpen, setFabriqModalOpen] = useState(false);
+  const [fabriqRunning, setFabriqRunning] = useState(false);
+
+  const refreshDataset = useCallback(() => {
+    return loadWalletDataset()
+      .then((dataset) => {
+        setWallets(dataset.wallets);
+        setDataUpdatedAt(dataset.meta?.publishedAt ?? null);
+      })
+      .catch((err) => {
+        console.error("Failed to load wallet dataset:", err);
+        setError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => setLoading(false));
+  }, []);
 
   useEffect(() => {
     const onPopState = () => setRoute(routeFromLocation());
@@ -106,17 +145,31 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    loadWalletDataset()
-      .then((dataset) => {
-        setWallets(dataset.wallets);
+    refreshDataset();
+  }, [refreshDataset]);
 
-        setDataUpdatedAt(
-          dataset.meta?.publishedAt ?? null,
-        );
+  useEffect(() => {
+    let mounted = true;
+
+    getFabriqStatus()
+      .then((s) => {
+        if (mounted) setFabriqRunning(s.running);
       })
-      .catch((err) => setError(err instanceof Error ? err.message : String(err)))
-      .finally(() => setLoading(false));
-  }, []);
+      .catch(() => {});
+
+    const unsubscribe = subscribeFabriqEvents((event) => {
+      if (!mounted) return;
+      setFabriqRunning(event.state.running);
+      if (event.state.status === "completed") {
+        refreshDataset();
+      }
+    });
+
+    return () => {
+      mounted = false;
+      unsubscribe();
+    };
+  }, [refreshDataset]);
 
   useEffect(() => {
     saveTrackedWallets([...trackedOwners]);
@@ -142,9 +195,22 @@ export default function App() {
 
     return wallets.filter((wallet) => {
       if (search && !wallet.owner.toLowerCase().includes(search)) return false;
-      if (minPnl !== null && wallet.total_pnl_native_7d < minPnl) return false;
+      if (
+        minPnl !== null &&
+        walletPnl7d(wallet) <
+        minPnl
+      ) {
+        return false;
+      }
       if (minLp !== null && wallet.total_lp_7d < minLp) return false;
-      if (minWin !== null && wallet.win_rate_native * 100 < minWin) return false;
+      if (
+        minWin !== null &&
+        walletWinRatePercent(
+          wallet,
+        ) < minWin
+      ) {
+        return false;
+      }
       if (minPools !== null && wallet.total_pool < minPools) return false;
 
       const firstActivity = new Date(wallet.first_activity).getTime();
@@ -164,15 +230,10 @@ export default function App() {
           return wallet.owner;
         case "pnl7":
           return wallet.total_pnl_native_7d;
-        case "win": {
-          const positionWin =
-            wallet.fabriq?.stats?.positionWinUsd ??
-            wallet.fabriq?.stats?.positionWinSol;
-
-          return Number(
-            positionWin?.percentage ?? 0,
+        case "win":
+          return walletWinRatePercent(
+            wallet,
           );
-        }
         case "winDays": {
           const dayStats =
             wallet.fabriq?.stats?.dayWinUsd ??
@@ -192,10 +253,13 @@ export default function App() {
             dayStats?.losses ?? 0,
           );
         }
+
+        case "pnl7":
+          return walletPnl7d(wallet);
         case "pnl30":
-          return wallet.total_pnl_native_30d;
+          return walletPnl30d(wallet);
         case "pnlAll":
-          return wallet.total_pnl_native;
+          return walletAllTimePnl(wallet);
         case "positions":
           return wallet.total_lp;
         case "walletAge":
@@ -207,7 +271,7 @@ export default function App() {
         case "invested":
           return wallet.avg_inflow_native;
         case "monthly":
-          return wallet.avg_monthly_pnl_native;
+          return walletMonthlyPnl(wallet);
         case "fees":
           return wallet.total_fee_native;
         case "last":
@@ -236,7 +300,14 @@ export default function App() {
     const fees = filtered.reduce((sum, wallet) => sum + wallet.total_fee_native, 0);
     const avgWin =
       filtered.length > 0
-        ? filtered.reduce((sum, wallet) => sum + wallet.win_rate_native, 0) /
+        ? filtered.reduce(
+          (sum, wallet) =>
+            sum +
+            walletWinRatePercent(
+              wallet,
+            ),
+          0,
+        ) /
         filtered.length
         : 0;
 
@@ -346,8 +417,17 @@ export default function App() {
               Solana
             </button>
 
-            <button className="icon-btn bordered" onClick={() => window.location.reload()}>
-              <RefreshCw size={15} />
+            <button
+              className={`icon-btn bordered ${fabriqRunning ? "fabriq-active" : ""}`}
+              onClick={() => setFabriqModalOpen(true)}
+              title={
+                fabriqRunning
+                  ? "Fabriq update is running — click to view progress"
+                  : "Update Fabriq wallet data"
+              }
+            >
+              <RefreshCw size={15} className={fabriqRunning ? "spin" : ""} />
+              {fabriqRunning && <span className="fabriq-active-dot" />}
             </button>
           </div>
         </header>
@@ -470,7 +550,7 @@ export default function App() {
 
                   <div className="metric-card">
                     <span className="metric-label">AVG WIN RATE</span>
-                    <strong className="positive">{fmt(stats.avgWin * 100, 1)}%</strong>
+                    <strong className="positive">{fmt(stats.avgWin, 1)}%</strong>
                     <small>Average native position win rate</small>
                   </div>
 
@@ -503,6 +583,14 @@ export default function App() {
           </div>
         )}
       </main>
+
+      <FabriqControlModal
+        isOpen={fabriqModalOpen}
+        onClose={() => setFabriqModalOpen(false)}
+        walletCount={wallets.length}
+        lastUpdated={dataUpdatedAt}
+        onDatasetRefreshed={refreshDataset}
+      />
     </div>
   );
 }

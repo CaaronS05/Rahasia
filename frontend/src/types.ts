@@ -18,6 +18,30 @@ export type PnlPoint = {
   cumulative_pnl_native: number;
 };
 
+export type FabriqDailyPoint = {
+  date: string;
+  pnlSol: number;
+  pnlUsd: number;
+  feesSol: number;
+  feesUsd: number;
+  positions: number;
+  winRateSol: number;
+  winRateUsd: number;
+};
+
+export type FabriqDerived = {
+  asOfDate: string;
+  currentMonth: string;
+
+  pnl7dSol: number;
+  pnl30dSol: number;
+  monthlyPnlSol: number;
+
+  allTimePnlSol: number | null;
+
+  daily: FabriqDailyPoint[];
+};
+
 export type Wallet = {
   owner: string;
   chain: string;
@@ -98,7 +122,14 @@ export type Wallet = {
     };
 
     calendar?: any;
+
+    calendars?: Record<
+      string,
+      Record<string, any>
+    >;
   };
+
+  fabriqDerived?: FabriqDerived;
 };
 
 export type WalletDataset = {
@@ -108,6 +139,7 @@ export type WalletDataset = {
     uniqueWallets?: number;
     pageCount?: number;
     publishedAt?: string;
+    derivedAsOfDate?: string;
   };
   wallets: Wallet[];
 };
