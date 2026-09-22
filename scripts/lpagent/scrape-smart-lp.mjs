@@ -26,6 +26,18 @@ const JITTER_MS = 500;
 
 const MAX_RETRIES = 5;
 
+const CONCURRENCY =
+    Math.max(
+        1,
+        parseInt(
+            process.env.LPAGENT_CONCURRENCY ??
+            "3",
+            10
+        ) || 3
+    );
+
+const WORKER_STAGGER_MS = 250;
+
 // ======================================================
 // HELPERS
 // ======================================================
@@ -203,6 +215,9 @@ async function loadCheckpoint(
     };
 }
 
+let checkpointWriteQueue =
+    Promise.resolve();
+
 async function savePageCheckpoint({
     filterSignature,
     page,
@@ -224,11 +239,22 @@ async function savePageCheckpoint({
         rows,
     };
 
-    await fs.appendFile(
-        CHECKPOINT,
+    const line =
         JSON.stringify(record) +
-        "\n"
-    );
+        "\n";
+
+    checkpointWriteQueue =
+        checkpointWriteQueue
+            .catch(() => { })
+            .then(
+                () =>
+                    fs.appendFile(
+                        CHECKPOINT,
+                        line
+                    )
+            );
+
+    await checkpointWriteQueue;
 }
 
 // ======================================================
@@ -796,34 +822,18 @@ console.log(
     `[RESUME] starting at page ${pageNumber}`
 );
 
+console.log(
+    `[WORKERS] ${CONCURRENCY}`
+);
+
 // ======================================================
-// PAGINATION
+// PAGE FETCH
 // ======================================================
 
-while (true) {
-    if (
-        totalPages &&
-        pageNumber > totalPages
-    ) {
-        break;
-    }
-
-    // Kalau ada gap aneh,
-    // skip page yang sudah checkpoint.
-    if (
-        checkpoint.pages.has(
-            pageNumber
-        )
-    ) {
-        console.log(
-            `[PAGE ${pageNumber}] SKIP checkpoint`
-        );
-
-        pageNumber++;
-
-        continue;
-    }
-
+async function fetchAndSavePage(
+    pageNumber,
+    workerId
+) {
     const url =
         new URL(baseUrl);
 
@@ -837,7 +847,7 @@ while (true) {
     );
 
     console.log(
-        `[PAGE ${pageNumber}${totalPages ? `/${totalPages}` : ""}] fetching`
+        `[W${workerId}] [PAGE ${pageNumber}${totalPages ? `/${totalPages}` : ""}] fetching`
     );
 
     const response =
@@ -847,7 +857,7 @@ while (true) {
         );
 
     console.log(
-        `status=${response.status}`
+        `[W${workerId}] status=${response.status}`
     );
 
     const json =
@@ -867,7 +877,8 @@ while (true) {
         if (
             Number.isInteger(
                 detectedTotal
-            )
+            ) &&
+            detectedTotal > 0
         ) {
             totalPages =
                 detectedTotal;
@@ -875,7 +886,7 @@ while (true) {
     }
 
     console.log(
-        `rows=${rows.length}`
+        `[W${workerId}] rows=${rows.length}`
     );
 
     // ----------------------------------
@@ -889,7 +900,9 @@ while (true) {
         const owner =
             getWalletOwner(row);
 
-        if (!owner) continue;
+        if (!owner) {
+            continue;
+        }
 
         walletMap.set(
             owner,
@@ -898,7 +911,7 @@ while (true) {
     }
 
     // ----------------------------------
-    // SAVE CHECKPOINT IMMEDIATELY
+    // CHECKPOINT
     // ----------------------------------
 
     await savePageCheckpoint({
@@ -925,39 +938,173 @@ while (true) {
     );
 
     console.log(
-        `[CHECKPOINT] page ${pageNumber} saved`
+        `[W${workerId}] [CHECKPOINT] page ${pageNumber} saved`
     );
 
     console.log(
         `[TOTAL] ${walletMap.size} unique wallets`
     );
 
-    // ----------------------------------
-    // FINISH CONDITIONS
-    // ----------------------------------
+    return rows;
+}
 
-    if (
-        totalPages &&
-        pageNumber >= totalPages
+// ======================================================
+// DISCOVER TOTAL PAGES
+// ======================================================
+
+if (!totalPages) {
+    const discoveryPage =
+        getFirstMissingPage();
+
+    console.log(
+        `[DISCOVERY] fetching page ${discoveryPage} to detect pagination`
+    );
+
+    const discoveryRows =
+        await fetchAndSavePage(
+            discoveryPage,
+            1
+        );
+
+    // Fallback untuk API yang tidak memberikan totalPages.
+    if (!totalPages) {
+        console.log(
+            "[WORKERS] totalPages unavailable → sequential fallback"
+        );
+
+        let nextPage =
+            discoveryPage + 1;
+
+        let previousRows =
+            discoveryRows;
+
+        while (
+            previousRows.length >
+            0
+        ) {
+            await politeDelay();
+
+            previousRows =
+                await fetchAndSavePage(
+                    nextPage,
+                    1
+                );
+
+            nextPage++;
+        }
+    }
+}
+
+// ======================================================
+// PARALLEL PAGE WORKERS
+// ======================================================
+
+if (totalPages) {
+    const missingPages =
+        [];
+
+    for (
+        let page = 1;
+        page <= totalPages;
+        page++
     ) {
-        break;
+        if (
+            !checkpoint.pages.has(
+                page
+            )
+        ) {
+            missingPages.push(
+                page
+            );
+        }
     }
 
-    // Fallback kalau API tidak memberi pagination.
-    if (
-        !totalPages &&
-        rows.length === 0
+    console.log(
+        `[QUEUE] ${missingPages.length} pages remaining`
+    );
+
+    let nextPageIndex =
+        0;
+
+    async function runPageWorker(
+        workerId
     ) {
-        break;
+        // Hindari semua worker request tepat
+        // pada millisecond yang sama.
+        if (
+            workerId > 1
+        ) {
+            await sleep(
+                (
+                    workerId -
+                    1
+                ) *
+                WORKER_STAGGER_MS
+            );
+        }
+
+        while (true) {
+            const index =
+                nextPageIndex++;
+
+            if (
+                index >=
+                missingPages.length
+            ) {
+                return;
+            }
+
+            const page =
+                missingPages[
+                index
+                ];
+
+            try {
+                await fetchAndSavePage(
+                    page,
+                    workerId
+                );
+            } catch (error) {
+                console.error(
+                    `[W${workerId}] [PAGE ${page}] FAIL ${error.message}`
+                );
+
+                throw error;
+            }
+
+            await politeDelay();
+        }
     }
 
-    pageNumber++;
+    const workerCount =
+        Math.min(
+            CONCURRENCY,
+            missingPages.length
+        );
 
-    // ----------------------------------
-    // POLITE DELAY
-    // ----------------------------------
+    if (
+        workerCount > 0
+    ) {
+        console.log(
+            `[WORKERS] Starting ${workerCount} page workers`
+        );
 
-    await politeDelay();
+        await Promise.all(
+            Array.from(
+                {
+                    length:
+                        workerCount,
+                },
+                (
+                    _,
+                    index
+                ) =>
+                    runPageWorker(
+                        index + 1
+                    )
+            )
+        );
+    }
 }
 
 // ======================================================

@@ -13,7 +13,7 @@ import {
   Terminal,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   type FabriqMode,
   type FabriqState,
@@ -110,7 +110,7 @@ export function FabriqControlModal({
           .then((s) => {
             if (isMounted) setState(s);
           })
-          .catch(() => {});
+          .catch(() => { });
       },
     );
 
@@ -186,18 +186,25 @@ export function FabriqControlModal({
     }
   };
 
-  const stageBadgeText = useMemo(() => {
-    if (!state) return "Idle";
-    if (state.status === "stopping") return "Stopping Process...";
-    if (state.status === "stopped") return "Update Paused";
-    if (state.status === "completed") return "Completed";
-    if (state.status === "error") return "Failed";
+  let stageBadgeText = "Idle";
 
-    if (state.stage === "enrich") return "Enriching Wallets...";
-    if (state.stage === "merge") return "Merging Master Data...";
-    if (state.stage === "publish") return "Publishing Frontend...";
-    return "Running";
-  }, [state]);
+  if (state?.status === "stopping") {
+    stageBadgeText = "Stopping Process...";
+  } else if (state?.status === "stopped") {
+    stageBadgeText = "Update Paused";
+  } else if (state?.status === "completed") {
+    stageBadgeText = "Completed";
+  } else if (state?.status === "error") {
+    stageBadgeText = "Failed";
+  } else if (state?.stage === "enrich") {
+    stageBadgeText = "Enriching Wallets...";
+  } else if (state?.stage === "merge") {
+    stageBadgeText = "Merging Master Data...";
+  } else if (state?.stage === "publish") {
+    stageBadgeText = "Publishing Frontend...";
+  } else if (state?.status === "running") {
+    stageBadgeText = "Running";
+  }
 
   return (
     <div className="fabriq-modal-backdrop" onClick={onClose}>
@@ -408,17 +415,34 @@ export function FabriqControlModal({
 
               <div className="fabriq-config-group">
                 <label className="config-label">Adjust Workers Before Resuming</label>
-                <div className="worker-buttons">
-                  {[1, 2, 5, 10].map((count) => (
-                    <button
-                      key={count}
-                      type="button"
-                      className={`worker-btn ${concurrency === count ? "active" : ""}`}
-                      onClick={() => setConcurrency(count)}
-                    >
-                      {count}
-                    </button>
-                  ))}
+                <div className="worker-input-wrap">
+                  <input
+                    type="number"
+                    min={1}
+                    step={1}
+                    value={concurrency}
+                    className="worker-number-input"
+                    onChange={(event) => {
+                      const value =
+                        event.currentTarget
+                          .valueAsNumber;
+
+                      if (
+                        Number.isFinite(value)
+                      ) {
+                        setConcurrency(
+                          Math.max(
+                            1,
+                            Math.floor(value),
+                          ),
+                        );
+                      }
+                    }}
+                  />
+
+                  <span className="worker-limit-hint">
+                    Min 1 · Max 10
+                  </span>
                 </div>
               </div>
 
@@ -591,17 +615,34 @@ export function FabriqControlModal({
                   </label>
                   <span className="config-hint">Simultaneous browser workers</span>
                 </div>
-                <div className="worker-buttons">
-                  {[1, 2, 5, 10].map((count) => (
-                    <button
-                      key={count}
-                      type="button"
-                      className={`worker-btn ${concurrency === count ? "active" : ""}`}
-                      onClick={() => setConcurrency(count)}
-                    >
-                      {count} {count === 10 ? "(Recommended)" : ""}
-                    </button>
-                  ))}
+                <div className="worker-input-wrap">
+                  <input
+                    type="number"
+                    min={1}
+                    step={1}
+                    value={concurrency}
+                    className="worker-number-input"
+                    onChange={(event) => {
+                      const value =
+                        event.currentTarget
+                          .valueAsNumber;
+
+                      if (
+                        Number.isFinite(value)
+                      ) {
+                        setConcurrency(
+                          Math.max(
+                            1,
+                            Math.floor(value),
+                          ),
+                        );
+                      }
+                    }}
+                  />
+
+                  <span className="worker-limit-hint">
+                    Min 1 · No worker limit
+                  </span>
                 </div>
               </div>
 
