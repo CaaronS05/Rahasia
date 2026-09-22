@@ -2393,3 +2393,187 @@ button {
   color: var(--muted);
   font-size: 10px;
 }
+
+/* Wide modal for 2-card layout & 5-step pipeline */
+.fabriq-modal-dialog.modal-wide {
+  width: 660px;
+  max-width: 95vw;
+}
+
+/* 5-stage pipeline stepper */
+.fabriq-stepper.stepper-5 {
+  padding: 8px 12px;
+  gap: 4px;
+}
+
+.stepper-5 .step-label {
+  font-size: 10px;
+}
+
+.stepper-5 .step-circle {
+  width: 20px;
+  height: 20px;
+  font-size: 9.5px;
+}
+
+.stepper-5 .step-connector {
+  margin: 0 4px;
+}
+
+/* 2-Card Update Grid in Idle View */
+.update-cards-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+@media (max-width: 640px) {
+  .update-cards-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.update-card {
+  background: #151513;
+  border: 1px solid #282723;
+  border-radius: 10px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.update-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.update-card-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.source-tag {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.source-tag.source-lp {
+  background: rgba(85, 214, 157, 0.12);
+  color: var(--green);
+  border: 1px solid rgba(85, 214, 157, 0.28);
+}
+
+.source-tag.source-fabriq {
+  background: rgba(147, 197, 253, 0.12);
+  color: #93c5fd;
+  border: 1px solid rgba(147, 197, 253, 0.28);
+}
+
+.update-card-desc {
+  font-size: 11.5px;
+  color: var(--muted);
+  line-height: 1.45;
+  flex: 1;
+}
+
+.warning-callout {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  background: rgba(245, 166, 35, 0.08);
+  border: 1px solid rgba(245, 166, 35, 0.25);
+  border-radius: 7px;
+  padding: 8px 10px;
+  color: #f5a623;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.warning-callout svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.update-card-inputs {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: #11110f;
+  border: 1px solid #201f1c;
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+.worker-input-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.input-row-label {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--muted-2);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.worker-input-row .worker-number-input {
+  width: 76px;
+  height: 32px;
+  padding: 0 8px;
+  font-size: 13px;
+  text-align: right;
+}
+
+.mode-options.compact {
+  gap: 6px;
+}
+
+.mode-options.compact .mode-option-card {
+  padding: 8px 10px;
+  gap: 8px;
+}
+
+.mode-options.compact .mode-title {
+  font-size: 12px;
+}
+
+.mode-options.compact .mode-desc {
+  font-size: 10px;
+}
+
+.w-full {
+  width: 100%;
+}
+
+.text-green {
+  color: var(--green) !important;
+}
+
+.text-amber {
+  color: #f5a623 !important;
+}
+
+.text-red {
+  color: var(--red) !important;
+}
+
+.text-muted {
+  color: var(--muted) !important;
+}
+
+.text-text {
+  color: var(--text) !important;
+}

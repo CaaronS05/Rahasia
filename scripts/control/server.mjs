@@ -46,7 +46,8 @@ let state = {
 let lpAgentState = {
     status: "idle",
     stage: "idle",
-    concurrency: 3,
+    concurrency: 5,
+    fabriqConcurrency: 10,
 
     startedAt: null,
     finishedAt: null,
@@ -54,20 +55,214 @@ let lpAgentState = {
     exitCode: null,
     error: null,
 
+    // LP Agent scrape progress
+    completedPages: 0,
+    totalPages: 0,
+    wallets: 0,
+    progressPercent: 0,
+
+    // merge-wallets result
+    inputRows: 0,
+    uniqueIncoming: 0,
+    updatedExisting: 0,
+    addedNew: 0,
+    masterWallets: 0,
+
+    // Fabriq auto-enrichment result
+    fabriqTotal: 0,
+    fabriqCompleted: 0,
+    fabriqSuccess: 0,
+    fabriqFailed: 0,
+    fabriqSkipped: 0,
+
+    runtimeSeconds: 0,
     logs: [],
 };
 
 function lpAgentPublicState() {
+    const isRunning =
+        Boolean(lpAgentChild) ||
+        lpAgentState.status === "running" ||
+        lpAgentState.status === "stopping";
+
+    let runtimeSeconds = lpAgentState.runtimeSeconds;
+    if (isRunning && lpAgentState.startedAt) {
+        const start = Date.parse(lpAgentState.startedAt);
+        if (Number.isFinite(start)) {
+            runtimeSeconds = Math.max(0, Math.floor((Date.now() - start) / 1000));
+        }
+    }
+
     return {
         ...lpAgentState,
-
-        running:
-            Boolean(lpAgentChild) ||
-            lpAgentState.status ===
-            "running" ||
-            lpAgentState.status ===
-            "stopping",
+        runtimeSeconds,
+        running: isRunning,
     };
+}
+
+let lpAgentBaseCompletedPages = 0;
+let lpAgentSavedPagesThisRun = new Set();
+
+function syncLpAgentProgress() {
+    if (lpAgentState.totalPages > 0) {
+        lpAgentState.progressPercent = Math.min(
+            100,
+            Math.round(
+                (lpAgentState.completedPages / lpAgentState.totalPages) * 100
+            )
+        );
+    } else {
+        lpAgentState.progressPercent = 0;
+    }
+}
+
+function parseLpAgentLine(line) {
+    // A. [CHECKPOINT] 2 completed pages found
+    const cpMatch = line.match(/\[CHECKPOINT\]\s+(\d+)\s+completed pages found/i);
+    if (cpMatch) {
+        lpAgentBaseCompletedPages = Number.parseInt(cpMatch[1], 10);
+        lpAgentState.completedPages = lpAgentBaseCompletedPages;
+        syncLpAgentProgress();
+        return;
+    }
+
+    // B. [CHECKPOINT] known total pages: 48
+    const knownTotalMatch = line.match(/\[CHECKPOINT\]\s+known total pages:\s*(\d+)/i);
+    if (knownTotalMatch) {
+        lpAgentState.totalPages = Number.parseInt(knownTotalMatch[1], 10);
+        syncLpAgentProgress();
+        return;
+    }
+
+    // C. [W3] [PAGE 12/48] fetching
+    const pageSlashMatch = line.match(/\[PAGE\s+(\d+)\/(\d+)\]\s+fetching/i);
+    if (pageSlashMatch) {
+        lpAgentState.totalPages = Number.parseInt(pageSlashMatch[2], 10);
+        syncLpAgentProgress();
+        return;
+    }
+
+    // E. [W2] [CHECKPOINT] page 17 saved or [CHECKPOINT] page 1 saved
+    const pageSavedMatch = line.match(/\[CHECKPOINT\]\s+page\s+(\d+)\s+saved/i);
+    if (pageSavedMatch) {
+        const pageNum = Number.parseInt(pageSavedMatch[1], 10);
+        if (!lpAgentSavedPagesThisRun.has(pageNum)) {
+            lpAgentSavedPagesThisRun.add(pageNum);
+            lpAgentState.completedPages =
+                lpAgentBaseCompletedPages + lpAgentSavedPagesThisRun.size;
+            if (lpAgentState.totalPages > 0) {
+                lpAgentState.completedPages = Math.min(
+                    lpAgentState.totalPages,
+                    lpAgentState.completedPages
+                );
+            }
+            syncLpAgentProgress();
+        }
+        return;
+    }
+
+    // F. [TOTAL] 570 unique wallets
+    const totalWalletsMatch = line.match(/\[TOTAL\]\s+(\d+)\s+unique wallets/i);
+    if (totalWalletsMatch) {
+        lpAgentState.wallets = Number.parseInt(totalWalletsMatch[1], 10);
+        return;
+    }
+
+    // G. Final pages: Pages   : 48/48
+    const finalPagesMatch = line.match(/^Pages\s*:\s*(\d+)\/(\d+)/i);
+    if (finalPagesMatch) {
+        lpAgentState.completedPages = Number.parseInt(finalPagesMatch[1], 10);
+        lpAgentState.totalPages = Number.parseInt(finalPagesMatch[2], 10);
+        lpAgentState.progressPercent = 100;
+        return;
+    }
+
+    // H. Final wallet count: Wallets : 570
+    const finalWalletsMatch = line.match(/^Wallets\s*:\s*(\d+)$/i);
+    if (finalWalletsMatch) {
+        lpAgentState.wallets = Number.parseInt(finalWalletsMatch[1], 10);
+        return;
+    }
+}
+
+function parseMergeWalletsLine(line) {
+    const inputMatch = line.match(/^Input rows\s*:\s*(\d+)/i);
+    if (inputMatch) {
+        lpAgentState.inputRows = Number.parseInt(inputMatch[1], 10);
+        return;
+    }
+    const incomingMatch = line.match(/^Unique incoming\s*:\s*(\d+)/i);
+    if (incomingMatch) {
+        lpAgentState.uniqueIncoming = Number.parseInt(incomingMatch[1], 10);
+        return;
+    }
+    const updatedMatch = line.match(/^Updated existing\s*:\s*(\d+)/i);
+    if (updatedMatch) {
+        lpAgentState.updatedExisting = Number.parseInt(updatedMatch[1], 10);
+        return;
+    }
+    const addedMatch = line.match(/^Added new\s*:\s*(\d+)/i);
+    if (addedMatch) {
+        lpAgentState.addedNew = Number.parseInt(addedMatch[1], 10);
+        return;
+    }
+    const masterMatch = line.match(/^Master wallets\s*:\s*(\d+)/i);
+    if (masterMatch) {
+        lpAgentState.masterWallets = Number.parseInt(masterMatch[1], 10);
+        return;
+    }
+}
+
+function parseLpPipelineFabriqLine(line) {
+    const datasetMatch = line.match(/\[DATASET\]\s+(\d+)\s+total wallets/i);
+    if (datasetMatch) {
+        lpAgentState.fabriqTotal = Number.parseInt(datasetMatch[1], 10);
+        return;
+    }
+
+    const okMatch = line.match(/\[W\d+\]\s+\[OK\]/i);
+    if (okMatch) {
+        lpAgentState.fabriqSuccess++;
+        lpAgentState.fabriqCompleted = Math.min(
+            lpAgentState.fabriqTotal || 999999,
+            lpAgentState.fabriqCompleted + 1
+        );
+        return;
+    }
+
+    const failMatch = line.match(/\[W\d+\]\s+\[FAIL\]/i);
+    if (failMatch) {
+        lpAgentState.fabriqFailed++;
+        lpAgentState.fabriqCompleted = Math.min(
+            lpAgentState.fabriqTotal || 999999,
+            lpAgentState.fabriqCompleted + 1
+        );
+        return;
+    }
+
+    const totalMatch = line.match(/^Total\s*:\s*(\d+)$/i);
+    if (totalMatch) {
+        lpAgentState.fabriqTotal = Number.parseInt(totalMatch[1], 10);
+        return;
+    }
+
+    const successMatch = line.match(/^Success\s*:\s*(\d+)$/i);
+    if (successMatch) {
+        lpAgentState.fabriqSuccess = Number.parseInt(successMatch[1], 10);
+        return;
+    }
+
+    const failedMatch = line.match(/^Failed\s*:\s*(\d+)$/i);
+    if (failedMatch) {
+        lpAgentState.fabriqFailed = Number.parseInt(failedMatch[1], 10);
+        return;
+    }
+
+    const skippedMatch = line.match(/^Skipped\s*:\s*(\d+)$/i);
+    if (skippedMatch) {
+        lpAgentState.fabriqSkipped = Number.parseInt(skippedMatch[1], 10);
+        return;
+    }
 }
 
 function addLpAgentLog(line) {
@@ -696,215 +891,365 @@ async function startPipeline({ mode, concurrency, resume }) {
     }
 }
 
+function runLpAgentChildProcess(command, args, env, lineParser = null) {
+    return new Promise((resolve, reject) => {
+        lpAgentChild = spawn(command, args, {
+            cwd: ROOT,
+            env: {
+                ...process.env,
+                ...env,
+            },
+            stdio: ["ignore", "pipe", "pipe"],
+        });
+
+        let stdoutBuffer = "";
+        let stderrBuffer = "";
+
+        function consumeBuffer(buffer, chunk, onLine) {
+            buffer += String(chunk);
+            const lines = buffer.split("\n");
+            const remainder = lines.pop() ?? "";
+            for (const line of lines) {
+                const trimmed = line.trimEnd();
+                if (trimmed) {
+                    onLine(trimmed);
+                }
+            }
+            return remainder;
+        }
+
+        lpAgentChild.stdout.on("data", (chunk) => {
+            stdoutBuffer = consumeBuffer(stdoutBuffer, chunk, (line) => {
+                addLpAgentLog(line);
+                if (lineParser) lineParser(line);
+            });
+        });
+
+        lpAgentChild.stderr.on("data", (chunk) => {
+            stderrBuffer = consumeBuffer(stderrBuffer, chunk, (line) => {
+                addLpAgentLog(line);
+                if (lineParser) lineParser(line);
+            });
+        });
+
+        lpAgentChild.on("error", (error) => {
+            lpAgentChild = null;
+            reject(error);
+        });
+
+        lpAgentChild.on("exit", (code, signal) => {
+            if (stdoutBuffer.trim()) {
+                const trimmed = stdoutBuffer.trimEnd();
+                addLpAgentLog(trimmed);
+                if (lineParser) lineParser(trimmed);
+                stdoutBuffer = "";
+            }
+            if (stderrBuffer.trim()) {
+                const trimmed = stderrBuffer.trimEnd();
+                addLpAgentLog(trimmed);
+                if (lineParser) lineParser(trimmed);
+                stderrBuffer = "";
+            }
+
+            lpAgentChild = null;
+            resolve({ code, signal });
+        });
+    });
+}
+
 async function startLpAgentRefresh({
     concurrency,
+    fabriqConcurrency,
 } = {}) {
     if (
         lpAgentChild ||
         currentChild ||
         state.status === "running" ||
         state.status === "stopping" ||
-        lpAgentState.status ===
-        "running" ||
-        lpAgentState.status ===
-        "stopping"
+        lpAgentState.status === "running" ||
+        lpAgentState.status === "stopping"
     ) {
-        throw new Error(
-            "Another update process is already running",
-        );
+        throw new Error("Another update process is already running");
     }
 
-    const safeConcurrency =
-        sanitizeConcurrency(
-            concurrency ?? 3,
-        );
+    const safeConcurrency = sanitizeConcurrency(concurrency ?? 5);
+    const safeFabriqConcurrency = sanitizeConcurrency(fabriqConcurrency ?? 10);
+
+    lpAgentBaseCompletedPages = 0;
+    lpAgentSavedPagesThisRun = new Set();
 
     lpAgentState = {
         status: "running",
         stage: "scrape",
         concurrency: safeConcurrency,
+        fabriqConcurrency: safeFabriqConcurrency,
 
-        startedAt:
-            new Date()
-                .toISOString(),
+        startedAt: new Date().toISOString(),
+        finishedAt: null,
 
-        finishedAt:
-            null,
+        exitCode: null,
+        error: null,
 
-        exitCode:
-            null,
+        completedPages: 0,
+        totalPages: 0,
+        wallets: 0,
+        progressPercent: 0,
 
-        error:
-            null,
+        inputRows: 0,
+        uniqueIncoming: 0,
+        updatedExisting: 0,
+        addedNew: 0,
+        masterWallets: 0,
 
-        logs:
-            [],
+        fabriqTotal: 0,
+        fabriqCompleted: 0,
+        fabriqSuccess: 0,
+        fabriqFailed: 0,
+        fabriqSkipped: 0,
+
+        runtimeSeconds: 0,
+        logs: [],
     };
 
     addLpAgentLog(
-        `[CONTROL] Starting LP Agent wallet scan workers=${safeConcurrency}`,
-    );
-
-    return new Promise(
-        (resolve) => {
-            lpAgentChild =
-                spawn(
-                    process.execPath,
-                    [
-                        "scripts/lpagent/scrape-smart-lp.mjs",
-                    ],
-                    {
-                        cwd: ROOT,
-
-                        env: {
-                            ...process.env,
-
-                            LPAGENT_CONCURRENCY:
-                                String(
-                                    safeConcurrency,
-                                ),
-                        },
-
-                        stdio: [
-                            "ignore",
-                            "pipe",
-                            "pipe",
-                        ],
-                    },
-                );
-
-            const handleChunk =
-                (chunk) => {
-                    String(chunk)
-                        .split("\n")
-                        .forEach(
-                            (
-                                line,
-                            ) => {
-                                if (
-                                    line.trim()
-                                ) {
-                                    addLpAgentLog(
-                                        line,
-                                    );
-                                }
-                            },
-                        );
-                };
-
-            lpAgentChild.stdout.on(
-                "data",
-                handleChunk,
-            );
-
-            lpAgentChild.stderr.on(
-                "data",
-                handleChunk,
-            );
-
-            lpAgentChild.on(
-                "error",
-                (error) => {
-                    lpAgentState.status =
-                        "error";
-
-                    lpAgentState.stage =
-                        "error";
-
-                    lpAgentState.error =
-                        error.message;
-
-                    lpAgentState.finishedAt =
-                        new Date()
-                            .toISOString();
-
-                    lpAgentChild =
-                        null;
-
-                    resolve(
-                        lpAgentPublicState(),
-                    );
-                },
-            );
-
-            lpAgentChild.on(
-                "exit",
-                (
-                    code,
-                    signal,
-                ) => {
-                    lpAgentChild =
-                        null;
-
-                    lpAgentState.exitCode =
-                        code;
-
-                    lpAgentState.finishedAt =
-                        new Date()
-                            .toISOString();
-
-                    if (
-                        lpAgentState.status ===
-                        "stopping"
-                    ) {
-                        lpAgentState.status =
-                            "stopped";
-
-                        lpAgentState.stage =
-                            "stopped";
-                    } else if (
-                        code === 0
-                    ) {
-                        lpAgentState.status =
-                            "completed";
-
-                        lpAgentState.stage =
-                            "completed";
-                    } else {
-                        lpAgentState.status =
-                            "error";
-
-                        lpAgentState.stage =
-                            "error";
-
-                        lpAgentState.error =
-                            `LP Agent exited code=${code} signal=${signal ?? "none"}`;
-                    }
-
-                    addLpAgentLog(
-                        `[CONTROL] LP Agent ended status=${lpAgentState.status}`,
-                    );
-
-                    resolve(
-                        lpAgentPublicState(),
-                    );
-                },
-            );
-        },
-    );
-}
-
-function stopLpAgentRefresh() {
-    if (!lpAgentChild) {
-        return false;
-    }
-
-    lpAgentState.status =
-        "stopping";
-
-    addLpAgentLog(
-        "[CONTROL] Stopping LP Agent scan...",
+        `[CONTROL] Starting LP Agent pipeline: LP workers=${safeConcurrency}, Fabriq workers=${safeFabriqConcurrency}`
     );
 
     try {
-        lpAgentChild.kill(
-            "SIGTERM",
+        // ----------------------------------------------------
+        // 1. Stage: scrape
+        // ----------------------------------------------------
+        lpAgentState.stage = "scrape";
+        const scrapeResult = await runLpAgentChildProcess(
+            process.execPath,
+            ["scripts/lpagent/scrape-smart-lp.mjs"],
+            {
+                LPAGENT_CONCURRENCY: String(safeConcurrency),
+            },
+            parseLpAgentLine
         );
+
+        if (lpAgentState.status === "stopping") {
+            lpAgentState.status = "stopped";
+            lpAgentState.stage = "stopped";
+            lpAgentState.finishedAt = new Date().toISOString();
+            addLpAgentLog("[CONTROL] LP Agent scrape stopped by user.");
+            return;
+        }
+
+        if (scrapeResult.code !== 0) {
+            lpAgentState.status = "error";
+            lpAgentState.stage = "error";
+            lpAgentState.exitCode = scrapeResult.code;
+            lpAgentState.error = `LP Agent scrape failed with exit code ${scrapeResult.code}`;
+            lpAgentState.finishedAt = new Date().toISOString();
+            addLpAgentLog(`[CONTROL] ${lpAgentState.error}`);
+            return;
+        }
+
+        // ----------------------------------------------------
+        // 2. Stage: merge_wallets
+        // ----------------------------------------------------
+        lpAgentState.stage = "merge_wallets";
+        addLpAgentLog("[CONTROL] Scrape succeeded. Merging Smart LP wallets into master dataset...");
+
+        const mergeResult = await runLpAgentChildProcess(
+            process.execPath,
+            [
+                "--experimental-strip-types",
+                "scripts/pipeline/merge-wallets.ts",
+                "data/raw/lpagent/smart-lp-latest.json",
+            ],
+            {},
+            parseMergeWalletsLine
+        );
+
+        if (lpAgentState.status === "stopping") {
+            lpAgentState.status = "stopped";
+            lpAgentState.stage = "stopped";
+            lpAgentState.finishedAt = new Date().toISOString();
+            addLpAgentLog("[CONTROL] Pipeline stopped by user during wallet merge.");
+            return;
+        }
+
+        if (mergeResult.code !== 0) {
+            lpAgentState.status = "error";
+            lpAgentState.stage = "error";
+            lpAgentState.exitCode = mergeResult.code;
+            lpAgentState.error = `Wallet merge failed with exit code ${mergeResult.code}`;
+            lpAgentState.finishedAt = new Date().toISOString();
+            addLpAgentLog(`[CONTROL] ${lpAgentState.error}`);
+            return;
+        }
+
+        // ----------------------------------------------------
+        // 3. Stage: fabriq_enrich
+        // ----------------------------------------------------
+        lpAgentState.stage = "fabriq_enrich";
+        addLpAgentLog(
+            `[CONTROL] Wallet merge succeeded. Enriching missing/stale Fabriq data (workers=${safeFabriqConcurrency})...`
+        );
+
+        const enrichResult = await runLpAgentChildProcess(
+            process.execPath,
+            ["scripts/fabriq/enrich-wallets.mjs"],
+            {
+                FABRIQ_CONCURRENCY: String(safeFabriqConcurrency),
+            },
+            parseLpPipelineFabriqLine
+        );
+
+        if (lpAgentState.status === "stopping") {
+            lpAgentState.status = "stopped";
+            lpAgentState.stage = "stopped";
+            lpAgentState.finishedAt = new Date().toISOString();
+            addLpAgentLog("[CONTROL] Pipeline stopped by user during Fabriq enrichment.");
+            return;
+        }
+
+        if (enrichResult.code !== 0) {
+            lpAgentState.status = "error";
+            lpAgentState.stage = "error";
+            lpAgentState.exitCode = enrichResult.code;
+            lpAgentState.error = `Fabriq enrichment failed with exit code ${enrichResult.code}`;
+            lpAgentState.finishedAt = new Date().toISOString();
+            addLpAgentLog(`[CONTROL] ${lpAgentState.error}`);
+            return;
+        }
+
+        // Safety gate: If fabriqFailed > 0, do NOT proceed to merge or publish!
+        if (lpAgentState.fabriqFailed > 0) {
+            lpAgentState.status = "error";
+            lpAgentState.stage = "error";
+            lpAgentState.error = `Fabriq enrichment completed with ${lpAgentState.fabriqFailed} failed wallets; merge/publish aborted.`;
+            lpAgentState.finishedAt = new Date().toISOString();
+            addLpAgentLog(`[CONTROL] ${lpAgentState.error}`);
+            return;
+        }
+
+        if (lpAgentState.fabriqTotal > 0) {
+            lpAgentState.fabriqCompleted = lpAgentState.fabriqTotal;
+        }
+
+        // ----------------------------------------------------
+        // 4. Stage: fabriq_merge
+        // ----------------------------------------------------
+        lpAgentState.stage = "fabriq_merge";
+        addLpAgentLog("[CONTROL] Fabriq enrichment succeeded. Running merge:fabriq...");
+
+        const fabriqMergeResult = await runLpAgentChildProcess(
+            process.execPath,
+            [
+                "--experimental-strip-types",
+                "scripts/pipeline/merge-fabriq.ts",
+            ],
+            {},
+            null
+        );
+
+        if (lpAgentState.status === "stopping") {
+            lpAgentState.status = "stopped";
+            lpAgentState.stage = "stopped";
+            lpAgentState.finishedAt = new Date().toISOString();
+            addLpAgentLog("[CONTROL] Pipeline stopped by user during Fabriq merge.");
+            return;
+        }
+
+        if (fabriqMergeResult.code !== 0) {
+            lpAgentState.status = "error";
+            lpAgentState.stage = "error";
+            lpAgentState.exitCode = fabriqMergeResult.code;
+            lpAgentState.error = `Fabriq merge failed with exit code ${fabriqMergeResult.code}`;
+            lpAgentState.finishedAt = new Date().toISOString();
+            addLpAgentLog(`[CONTROL] ${lpAgentState.error}`);
+            return;
+        }
+
+        // ----------------------------------------------------
+        // 5. Stage: publish
+        // ----------------------------------------------------
+        lpAgentState.stage = "publish";
+        addLpAgentLog("[CONTROL] Fabriq merge succeeded. Publishing frontend dataset...");
+
+        const publishResult = await runLpAgentChildProcess(
+            process.execPath,
+            [
+                "--experimental-strip-types",
+                "scripts/pipeline/publish-wallets.ts",
+            ],
+            {},
+            null
+        );
+
+        if (lpAgentState.status === "stopping") {
+            lpAgentState.status = "stopped";
+            lpAgentState.stage = "stopped";
+            lpAgentState.finishedAt = new Date().toISOString();
+            addLpAgentLog("[CONTROL] Pipeline stopped by user during publish.");
+            return;
+        }
+
+        if (publishResult.code !== 0) {
+            lpAgentState.status = "error";
+            lpAgentState.stage = "error";
+            lpAgentState.exitCode = publishResult.code;
+            lpAgentState.error = `Publish failed with exit code ${publishResult.code}`;
+            lpAgentState.finishedAt = new Date().toISOString();
+            addLpAgentLog(`[CONTROL] ${lpAgentState.error}`);
+            return;
+        }
+
+        // ----------------------------------------------------
+        // Final: completed
+        // ----------------------------------------------------
+        lpAgentState.status = "completed";
+        lpAgentState.stage = "completed";
+        lpAgentState.exitCode = 0;
+        lpAgentState.progressPercent = 100;
+        lpAgentState.finishedAt = new Date().toISOString();
+        if (lpAgentState.startedAt) {
+            lpAgentState.runtimeSeconds = Math.max(
+                0,
+                Math.floor((Date.now() - Date.parse(lpAgentState.startedAt)) / 1000)
+            );
+        }
+        addLpAgentLog("[CONTROL] LP Agent wallet pipeline completed successfully.");
     } catch (error) {
-        lpAgentState.error =
-            error instanceof Error
-                ? error.message
-                : String(error);
+        lpAgentState.status = "error";
+        lpAgentState.stage = "error";
+        lpAgentState.error = error instanceof Error ? error.message : String(error);
+        lpAgentState.finishedAt = new Date().toISOString();
+        addLpAgentLog(`[CONTROL] Pipeline exception: ${lpAgentState.error}`);
+    }
+}
+
+function stopLpAgentRefresh() {
+    if (!lpAgentChild && lpAgentState.status !== "running" && lpAgentState.status !== "stopping") {
+        return false;
+    }
+
+    lpAgentState.status = "stopping";
+    addLpAgentLog("[CONTROL] Stopping LP Agent pipeline...");
+
+    if (lpAgentChild) {
+        try {
+            lpAgentChild.kill("SIGTERM");
+        } catch (e) {
+            console.error(e);
+        }
+
+        const targetChild = lpAgentChild;
+        setTimeout(() => {
+            if (lpAgentChild === targetChild) {
+                try {
+                    lpAgentChild.kill("SIGKILL");
+                } catch { }
+            }
+        }, 4000);
+    } else {
+        lpAgentState.status = "stopped";
+        lpAgentState.stage = "stopped";
+        lpAgentState.finishedAt = new Date().toISOString();
     }
 
     return true;
@@ -1016,10 +1361,10 @@ const server = http.createServer(async (request, response) => {
         if (
             lpAgentChild ||
             currentChild ||
-            state.status ===
-            "running" ||
-            state.status ===
-            "stopping"
+            state.status === "running" ||
+            state.status === "stopping" ||
+            lpAgentState.status === "running" ||
+            lpAgentState.status === "stopping"
         ) {
             json(
                 request,
@@ -1031,6 +1376,9 @@ const server = http.createServer(async (request, response) => {
 
                     lpagent:
                         lpAgentPublicState(),
+
+                    fabriq:
+                        publicState(),
                 },
             );
 
@@ -1061,6 +1409,8 @@ const server = http.createServer(async (request, response) => {
         startLpAgentRefresh({
             concurrency:
                 body.concurrency,
+            fabriqConcurrency:
+                body.fabriqConcurrency,
         })
             .catch(
                 (error) => {
@@ -1141,10 +1491,18 @@ const server = http.createServer(async (request, response) => {
     // POST /api/fabriq/refresh
     // ------------------------------------------------------
     if (request.method === "POST" && url.pathname === "/api/fabriq/refresh") {
-        if (currentChild || state.status === "running" || state.status === "stopping") {
+        if (
+            currentChild ||
+            lpAgentChild ||
+            state.status === "running" ||
+            state.status === "stopping" ||
+            lpAgentState.status === "running" ||
+            lpAgentState.status === "stopping"
+        ) {
             json(request, response, 409, {
-                error: "Fabriq refresh is already running",
-                ...publicState(),
+                error: "Another update process is already running",
+                fabriq: publicState(),
+                lpagent: lpAgentPublicState(),
             });
             return;
         }
@@ -1173,10 +1531,18 @@ const server = http.createServer(async (request, response) => {
     // POST /api/fabriq/resume
     // ------------------------------------------------------
     if (request.method === "POST" && url.pathname === "/api/fabriq/resume") {
-        if (currentChild || state.status === "running" || state.status === "stopping") {
+        if (
+            currentChild ||
+            lpAgentChild ||
+            state.status === "running" ||
+            state.status === "stopping" ||
+            lpAgentState.status === "running" ||
+            lpAgentState.status === "stopping"
+        ) {
             json(request, response, 409, {
-                error: "Fabriq update is already running",
-                ...publicState(),
+                error: "Another update process is already running",
+                fabriq: publicState(),
+                lpagent: lpAgentPublicState(),
             });
             return;
         }

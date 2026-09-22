@@ -4,13 +4,14 @@ import {
   Search,
   SlidersHorizontal,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FabriqControlModal } from "./components/FabriqControlModal";
 import { Filters, defaultFilters, type FilterState } from "./components/Filters";
 import { Sidebar } from "./components/Sidebar";
 import { WalletTable, type WalletSortKey } from "./components/WalletTable";
 import { compact, fmt } from "./lib/format";
 import { getFabriqStatus, subscribeFabriqEvents } from "./lib/fabriqControl";
+import { getLpAgentStatus } from "./lib/lpAgentControl";
 import { loadWalletDataset } from "./lib/walletData";
 import { loadTrackedWallets, saveTrackedWallets } from "./lib/trackedWallets";
 import { PortfolioPage } from "./pages/PortfolioPage";
@@ -124,6 +125,10 @@ export default function App() {
   );
   const [fabriqModalOpen, setFabriqModalOpen] = useState(false);
   const [fabriqRunning, setFabriqRunning] = useState(false);
+  const [lpAgentRunning, setLpAgentRunning] = useState(false);
+  const prevLpStatusRef = useRef<string>("idle");
+
+  const dataUpdateRunning = fabriqRunning || lpAgentRunning;
 
   const refreshDataset = useCallback(() => {
     return loadWalletDataset()
@@ -165,9 +170,33 @@ export default function App() {
       }
     });
 
+    const checkLpStatus = async () => {
+      try {
+        const s = await getLpAgentStatus();
+        if (!mounted) return;
+        setLpAgentRunning(s.running);
+
+        if (prevLpStatusRef.current !== s.status) {
+          if (
+            (prevLpStatusRef.current === "running" || prevLpStatusRef.current === "stopping") &&
+            s.status === "completed"
+          ) {
+            refreshDataset();
+          }
+          prevLpStatusRef.current = s.status;
+        }
+      } catch {
+        // Control server might not be running yet, ignore
+      }
+    };
+
+    checkLpStatus();
+    const interval = setInterval(checkLpStatus, 2500);
+
     return () => {
       mounted = false;
       unsubscribe();
+      clearInterval(interval);
     };
   }, [refreshDataset]);
 
@@ -418,16 +447,16 @@ export default function App() {
             </button>
 
             <button
-              className={`icon-btn bordered ${fabriqRunning ? "fabriq-active" : ""}`}
+              className={`icon-btn bordered ${dataUpdateRunning ? "fabriq-active" : ""}`}
               onClick={() => setFabriqModalOpen(true)}
               title={
-                fabriqRunning
-                  ? "Fabriq update is running — click to view progress"
-                  : "Update Fabriq wallet data"
+                dataUpdateRunning
+                  ? "Update pipeline is running — click to view progress"
+                  : "Update wallet data"
               }
             >
-              <RefreshCw size={15} className={fabriqRunning ? "spin" : ""} />
-              {fabriqRunning && <span className="fabriq-active-dot" />}
+              <RefreshCw size={15} className={dataUpdateRunning ? "spin" : ""} />
+              {dataUpdateRunning && <span className="fabriq-active-dot" />}
             </button>
           </div>
         </header>

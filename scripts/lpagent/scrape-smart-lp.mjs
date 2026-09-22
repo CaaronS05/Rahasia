@@ -314,7 +314,45 @@ async function fetchPageWithRetry(
         // --------------------------------
 
         if (response.ok) {
-            return response;
+            try {
+                const json =
+                    await response.json();
+
+                return {
+                    status:
+                        response.status,
+
+                    json,
+                };
+            } catch (error) {
+                if (
+                    attempt ===
+                    MAX_RETRIES
+                ) {
+                    throw error;
+                }
+
+                const waitMs =
+                    Math.min(
+                        60_000,
+                        5_000 *
+                        2 ** (attempt - 1)
+                    );
+
+                console.log(
+                    `[BODY] ${error.message}`
+                );
+
+                console.log(
+                    `[RETRY ${attempt}/${MAX_RETRIES}] response body interrupted, waiting ${waitMs / 1000}s`
+                );
+
+                await sleep(
+                    waitMs
+                );
+
+                continue;
+            }
         }
 
         const status =
@@ -850,18 +888,18 @@ async function fetchAndSavePage(
         `[W${workerId}] [PAGE ${pageNumber}${totalPages ? `/${totalPages}` : ""}] fetching`
     );
 
-    const response =
+    const {
+        status,
+        json,
+    } =
         await fetchPageWithRetry(
             url.toString(),
             headers
         );
 
     console.log(
-        `[W${workerId}] status=${response.status}`
+        `[W${workerId}] status=${status}`
     );
-
-    const json =
-        await response.json();
 
     const rows =
         extractRows(json);
