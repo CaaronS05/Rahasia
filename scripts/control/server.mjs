@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import http from "node:http";
 import { spawn } from "node:child_process";
 import path from "node:path";
@@ -74,6 +75,10 @@ let lpAgentState = {
     fabriqSuccess: 0,
     fabriqFailed: 0,
     fabriqSkipped: 0,
+
+    // Stop mode tracking
+    stopMode: null, // "graceful" | "force" | null
+    checkpointPreserved: true,
 
     runtimeSeconds: 0,
     logs: [],
@@ -1007,6 +1012,9 @@ async function startLpAgentRefresh({
         fabriqFailed: 0,
         fabriqSkipped: 0,
 
+        stopMode: null,
+        checkpointPreserved: true,
+
         runtimeSeconds: 0,
         logs: [],
     };
@@ -1029,11 +1037,19 @@ async function startLpAgentRefresh({
             parseLpAgentLine
         );
 
-        if (lpAgentState.status === "stopping") {
+        if (lpAgentState.status === "stopping" || lpAgentState.status === "stopped") {
+            const wasForce = lpAgentState.stopMode === "force";
+            if (wasForce) {
+                discardLpAgentCheckpoints(lpAgentState.stage);
+            }
             lpAgentState.status = "stopped";
             lpAgentState.stage = "stopped";
             lpAgentState.finishedAt = new Date().toISOString();
-            addLpAgentLog("[CONTROL] LP Agent scrape stopped by user.");
+            if (wasForce) {
+                addLpAgentLog("[CONTROL] LP Agent scrape force-stopped. Checkpoint discarded. Next update will start fresh.");
+            } else {
+                addLpAgentLog("[CONTROL] LP Agent scrape stopped by user. Progress is saved and can be resumed.");
+            }
             return;
         }
 
@@ -1064,11 +1080,19 @@ async function startLpAgentRefresh({
             parseMergeWalletsLine
         );
 
-        if (lpAgentState.status === "stopping") {
+        if (lpAgentState.status === "stopping" || lpAgentState.status === "stopped") {
+            const wasForce = lpAgentState.stopMode === "force";
+            if (wasForce) {
+                discardLpAgentCheckpoints(lpAgentState.stage);
+            }
             lpAgentState.status = "stopped";
             lpAgentState.stage = "stopped";
             lpAgentState.finishedAt = new Date().toISOString();
-            addLpAgentLog("[CONTROL] Pipeline stopped by user during wallet merge.");
+            if (wasForce) {
+                addLpAgentLog("[CONTROL] Pipeline force-stopped during wallet merge. Checkpoint discarded.");
+            } else {
+                addLpAgentLog("[CONTROL] Pipeline stopped by user during wallet merge.");
+            }
             return;
         }
 
@@ -1099,11 +1123,19 @@ async function startLpAgentRefresh({
             parseLpPipelineFabriqLine
         );
 
-        if (lpAgentState.status === "stopping") {
+        if (lpAgentState.status === "stopping" || lpAgentState.status === "stopped") {
+            const wasForce = lpAgentState.stopMode === "force";
+            if (wasForce) {
+                discardLpAgentCheckpoints(lpAgentState.stage);
+            }
             lpAgentState.status = "stopped";
             lpAgentState.stage = "stopped";
             lpAgentState.finishedAt = new Date().toISOString();
-            addLpAgentLog("[CONTROL] Pipeline stopped by user during Fabriq enrichment.");
+            if (wasForce) {
+                addLpAgentLog("[CONTROL] Pipeline force-stopped during Fabriq enrichment. Checkpoint discarded.");
+            } else {
+                addLpAgentLog("[CONTROL] Pipeline stopped by user during Fabriq enrichment.");
+            }
             return;
         }
 
@@ -1147,11 +1179,19 @@ async function startLpAgentRefresh({
             null
         );
 
-        if (lpAgentState.status === "stopping") {
+        if (lpAgentState.status === "stopping" || lpAgentState.status === "stopped") {
+            const wasForce = lpAgentState.stopMode === "force";
+            if (wasForce) {
+                discardLpAgentCheckpoints(lpAgentState.stage);
+            }
             lpAgentState.status = "stopped";
             lpAgentState.stage = "stopped";
             lpAgentState.finishedAt = new Date().toISOString();
-            addLpAgentLog("[CONTROL] Pipeline stopped by user during Fabriq merge.");
+            if (wasForce) {
+                addLpAgentLog("[CONTROL] Pipeline force-stopped during Fabriq merge.");
+            } else {
+                addLpAgentLog("[CONTROL] Pipeline stopped by user during Fabriq merge.");
+            }
             return;
         }
 
@@ -1181,11 +1221,19 @@ async function startLpAgentRefresh({
             null
         );
 
-        if (lpAgentState.status === "stopping") {
+        if (lpAgentState.status === "stopping" || lpAgentState.status === "stopped") {
+            const wasForce = lpAgentState.stopMode === "force";
+            if (wasForce) {
+                discardLpAgentCheckpoints(lpAgentState.stage);
+            }
             lpAgentState.status = "stopped";
             lpAgentState.stage = "stopped";
             lpAgentState.finishedAt = new Date().toISOString();
-            addLpAgentLog("[CONTROL] Pipeline stopped by user during publish.");
+            if (wasForce) {
+                addLpAgentLog("[CONTROL] Pipeline force-stopped during publish.");
+            } else {
+                addLpAgentLog("[CONTROL] Pipeline stopped by user during publish.");
+            }
             return;
         }
 
@@ -1223,13 +1271,39 @@ async function startLpAgentRefresh({
     }
 }
 
+function discardLpAgentCheckpoints(stage) {
+    try {
+        const lpCheckpointPath = path.join(ROOT, "data/checkpoints/lpagent.jsonl");
+        if (fs.existsSync(lpCheckpointPath)) {
+            fs.unlinkSync(lpCheckpointPath);
+            addLpAgentLog("[CONTROL] Discarded checkpoint: data/checkpoints/lpagent.jsonl");
+        }
+    } catch (err) {
+        console.error("Failed to delete lpagent checkpoint:", err);
+    }
+
+    if (stage === "fabriq_enrich") {
+        try {
+            const fabriqCheckpointPath = path.join(ROOT, "data/checkpoints/fabriq.jsonl");
+            if (fs.existsSync(fabriqCheckpointPath)) {
+                fs.unlinkSync(fabriqCheckpointPath);
+                addLpAgentLog("[CONTROL] Discarded checkpoint: data/checkpoints/fabriq.jsonl");
+            }
+        } catch (err) {
+            console.error("Failed to delete fabriq checkpoint:", err);
+        }
+    }
+}
+
 function stopLpAgentRefresh() {
     if (!lpAgentChild && lpAgentState.status !== "running" && lpAgentState.status !== "stopping") {
         return false;
     }
 
     lpAgentState.status = "stopping";
-    addLpAgentLog("[CONTROL] Stopping LP Agent pipeline...");
+    lpAgentState.stopMode = "graceful";
+    lpAgentState.checkpointPreserved = true;
+    addLpAgentLog("[CONTROL] Stopping LP Agent pipeline (preserving checkpoint)...");
 
     if (lpAgentChild) {
         try {
@@ -1250,6 +1324,45 @@ function stopLpAgentRefresh() {
         lpAgentState.status = "stopped";
         lpAgentState.stage = "stopped";
         lpAgentState.finishedAt = new Date().toISOString();
+    }
+
+    return true;
+}
+
+function forceStopLpAgentRefresh() {
+    if (!lpAgentChild && lpAgentState.status !== "running" && lpAgentState.status !== "stopping") {
+        return false;
+    }
+
+    const currentStage = lpAgentState.stage;
+    lpAgentState.status = "stopping";
+    lpAgentState.stopMode = "force";
+    lpAgentState.checkpointPreserved = false;
+    addLpAgentLog("[CONTROL] Force-stopping LP Agent pipeline...");
+
+    discardLpAgentCheckpoints(currentStage);
+
+    if (lpAgentChild) {
+        try {
+            lpAgentChild.kill("SIGTERM");
+        } catch (e) {
+            console.error(e);
+        }
+
+        const targetChild = lpAgentChild;
+        setTimeout(() => {
+            if (lpAgentChild === targetChild) {
+                try {
+                    lpAgentChild.kill("SIGKILL");
+                } catch { }
+            }
+            discardLpAgentCheckpoints(currentStage);
+        }, 1500);
+    } else {
+        lpAgentState.status = "stopped";
+        lpAgentState.stage = "stopped";
+        lpAgentState.finishedAt = new Date().toISOString();
+        discardLpAgentCheckpoints(currentStage);
     }
 
     return true;
@@ -1442,6 +1555,32 @@ const server = http.createServer(async (request, response) => {
     ) {
         const stopped =
             stopLpAgentRefresh();
+
+        json(
+            request,
+            response,
+            stopped ? 202 : 409,
+            {
+                stopped,
+
+                ...lpAgentPublicState(),
+            },
+        );
+
+        return;
+    }
+
+    // ------------------------------------------------------
+    // POST /api/lpagent/force-stop
+    // ------------------------------------------------------
+
+    if (
+        request.method === "POST" &&
+        url.pathname ===
+        "/api/lpagent/force-stop"
+    ) {
+        const stopped =
+            forceStopLpAgentRefresh();
 
         json(
             request,

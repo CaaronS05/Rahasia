@@ -19,9 +19,13 @@ export type LpAgentStage =
   | "stopped"
   | "error";
 
+export type LpAgentStopMode = "graceful" | "force" | null;
+
 export interface LpAgentState {
   status: LpAgentStatus;
   stage: LpAgentStage;
+  stopMode?: LpAgentStopMode;
+  checkpointPreserved?: boolean;
 
   concurrency: number;
   fabriqConcurrency: number;
@@ -98,6 +102,21 @@ export async function stopLpAgentRefresh(): Promise<LpAgentState> {
   const payload = await response.json();
   if (!response.ok && response.status !== 409) {
     throw new Error(payload.error || `Stop failed with status ${response.status}`);
+  }
+  return payload;
+}
+
+export async function forceStopLpAgentRefresh(): Promise<LpAgentState> {
+  const response = await fetch(`${LPAGENT_API_BASE}/api/lpagent/force-stop`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+  });
+
+  const payload = await response.json();
+  if (!response.ok && response.status !== 409) {
+    throw new Error(payload.error || `Force stop failed with status ${response.status}`);
   }
   return payload;
 }

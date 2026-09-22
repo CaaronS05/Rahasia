@@ -1,5 +1,6 @@
 import {
   AlertCircle,
+  AlertOctagon,
   AlertTriangle,
   CheckCircle2,
   ChevronDown,
@@ -30,6 +31,7 @@ import {
   getLpAgentStatus,
   startLpAgentRefresh,
   stopLpAgentRefresh,
+  forceStopLpAgentRefresh,
 } from "../lib/lpAgentControl";
 
 interface FabriqControlModalProps {
@@ -79,9 +81,21 @@ export function FabriqControlModal({
   const [lpFabriqConcurrency, setLpFabriqConcurrency] = useState<number>(10);
 
   // UI State
-  const [showLogs, setShowLogs] = useState(false);
-  const [actionLoading, setActionLoading] = useState(false);
-  const [actionError, setActionError] = useState<string | null>(null);
+  const [showLogs, setShowLogs] =
+    useState(false);
+
+  const [actionLoading, setActionLoading] =
+    useState(false);
+
+  const [actionError, setActionError] =
+    useState<string | null>(null);
+
+  const [
+    configureNewRun,
+    setConfigureNewRun,
+  ] = useState(false);
+
+  const [showForceStopConfirm, setShowForceStopConfirm] = useState(false);
 
   const logsEndRef = useRef<HTMLDivElement>(null);
   const prevFabriqStatusRef = useRef<string | null>(null);
@@ -103,7 +117,7 @@ export function FabriqControlModal({
           }
         }
       })
-      .catch(() => {});
+      .catch(() => { });
 
     const unsubscribe = subscribeFabriqEvents(
       (event) => {
@@ -123,7 +137,7 @@ export function FabriqControlModal({
           .then((s) => {
             if (isMounted) setState(s);
           })
-          .catch(() => {});
+          .catch(() => { });
       }
     );
 
@@ -151,7 +165,7 @@ export function FabriqControlModal({
           }
           prevLpStatusRef.current = s.status;
         })
-        .catch(() => {});
+        .catch(() => { });
     };
 
     fetchLpStatus();
@@ -197,55 +211,211 @@ export function FabriqControlModal({
   // Active view determination
   let currentView: "idle" | "lp_running" | "lp_stopped" | "lp_completed" | "lp_error" | "fabriq_running" | "fabriq_stopped" | "fabriq_completed" | "fabriq_error" = "idle";
 
-  if (isLpRunning) currentView = "lp_running";
-  else if (isLpStopping) currentView = "lp_running";
-  else if (isLpStopped) currentView = "lp_stopped";
-  else if (isLpCompleted) currentView = "lp_completed";
-  else if (isLpError) currentView = "lp_error";
-  else if (isFabriqRunning) currentView = "fabriq_running";
-  else if (isFabriqStopping) currentView = "fabriq_running";
-  else if (isFabriqStopped) currentView = "fabriq_stopped";
-  else if (isFabriqCompleted) currentView = "fabriq_completed";
-  else if (isFabriqError) currentView = "fabriq_error";
+  if (
+    isLpRunning ||
+    isLpStopping
+  ) {
+    currentView = "lp_running";
+  } else if (
+    isFabriqRunning ||
+    isFabriqStopping
+  ) {
+    currentView =
+      "fabriq_running";
+  } else if (
+    configureNewRun
+  ) {
+    currentView = "idle";
+  } else {
+    const lpFinishedAt =
+      lpAgentState?.finishedAt
+        ? Date.parse(
+          lpAgentState.finishedAt,
+        )
+        : 0;
 
-  // Header Title & Badge
-  let modalTitle = "Update Wallet Data";
-  let stageBadgeText = "Idle";
+    const fabriqFinishedAt =
+      state?.finishedAt
+        ? Date.parse(
+          state.finishedAt,
+        )
+        : 0;
 
-  if (isLpRunning) {
-    modalTitle = "Updating Wallet List";
-    if (isLpStopping) stageBadgeText = "Stopping LP Agent...";
-    else if (lpAgentState?.stage === "scrape") stageBadgeText = "Scraping LP Agent...";
-    else if (lpAgentState?.stage === "merge_wallets") stageBadgeText = "Merging Wallets...";
-    else if (lpAgentState?.stage === "fabriq_enrich") stageBadgeText = "Enriching Fabriq...";
-    else if (lpAgentState?.stage === "fabriq_merge") stageBadgeText = "Merging Fabriq...";
-    else if (lpAgentState?.stage === "publish") stageBadgeText = "Publishing Frontend...";
-    else stageBadgeText = "Running";
-  } else if (isLpStopped) {
-    modalTitle = "Update Wallet List";
-    stageBadgeText = "Stopped";
-  } else if (isLpCompleted) {
-    modalTitle = "Wallet List Updated";
-    stageBadgeText = "Completed";
-  } else if (isLpError) {
-    modalTitle = "Update Failed";
-    stageBadgeText = "Failed";
-  } else if (isFabriqRunning) {
-    modalTitle = "Updating Fabriq";
-    if (isFabriqStopping) stageBadgeText = "Stopping Fabriq...";
-    else if (state?.stage === "enrich") stageBadgeText = "Enriching Wallets...";
-    else if (state?.stage === "merge") stageBadgeText = "Merging Master...";
-    else if (state?.stage === "publish") stageBadgeText = "Publishing...";
-    else stageBadgeText = "Running";
-  } else if (isFabriqStopped) {
-    modalTitle = "Update Wallet Data";
-    stageBadgeText = "Stopped";
-  } else if (isFabriqCompleted) {
-    modalTitle = "Update Completed";
-    stageBadgeText = "Completed";
-  } else if (isFabriqError) {
-    modalTitle = "Update Failed";
-    stageBadgeText = "Failed";
+    const lpTerminalView =
+      isLpStopped
+        ? "lp_stopped"
+        : isLpCompleted
+          ? "lp_completed"
+          : isLpError
+            ? "lp_error"
+            : null;
+
+    const fabriqTerminalView =
+      isFabriqStopped
+        ? "fabriq_stopped"
+        : isFabriqCompleted
+          ? "fabriq_completed"
+          : isFabriqError
+            ? "fabriq_error"
+            : null;
+
+    if (
+      lpTerminalView &&
+      fabriqTerminalView
+    ) {
+      currentView =
+        lpFinishedAt >=
+          fabriqFinishedAt
+          ? lpTerminalView
+          : fabriqTerminalView;
+    } else if (
+      lpTerminalView
+    ) {
+      currentView =
+        lpTerminalView;
+    } else if (
+      fabriqTerminalView
+    ) {
+      currentView =
+        fabriqTerminalView;
+    }
+  }
+
+  let modalTitle =
+    "Update Wallet Data";
+
+  let stageBadgeText =
+    "Idle";
+
+  if (
+    currentView ===
+    "lp_running"
+  ) {
+    modalTitle =
+      "Updating Wallet List";
+
+    if (isLpStopping) {
+      stageBadgeText =
+        lpAgentState?.stopMode === "force"
+          ? "Force Stopping..."
+          : "Stopping LP Agent...";
+    } else if (
+      lpAgentState?.stage ===
+      "scrape"
+    ) {
+      stageBadgeText =
+        "Scraping LP Agent...";
+    } else if (
+      lpAgentState?.stage ===
+      "merge_wallets"
+    ) {
+      stageBadgeText =
+        "Merging Wallets...";
+    } else if (
+      lpAgentState?.stage ===
+      "fabriq_enrich"
+    ) {
+      stageBadgeText =
+        "Enriching Fabriq...";
+    } else if (
+      lpAgentState?.stage ===
+      "fabriq_merge"
+    ) {
+      stageBadgeText =
+        "Merging Fabriq...";
+    } else if (
+      lpAgentState?.stage ===
+      "publish"
+    ) {
+      stageBadgeText =
+        "Publishing Frontend...";
+    } else {
+      stageBadgeText =
+        "Running";
+    }
+  } else if (
+    currentView ===
+    "lp_stopped"
+  ) {
+    modalTitle =
+      "Update Wallet List";
+
+    stageBadgeText =
+      "Stopped";
+  } else if (
+    currentView ===
+    "lp_completed"
+  ) {
+    modalTitle =
+      "Wallet List Updated";
+
+    stageBadgeText =
+      "Completed";
+  } else if (
+    currentView ===
+    "lp_error"
+  ) {
+    modalTitle =
+      "Update Failed";
+
+    stageBadgeText =
+      "Failed";
+  } else if (
+    currentView ===
+    "fabriq_running"
+  ) {
+    modalTitle =
+      "Updating Fabriq";
+
+    if (isFabriqStopping) {
+      stageBadgeText =
+        "Stopping Fabriq...";
+    } else if (
+      state?.stage ===
+      "enrich"
+    ) {
+      stageBadgeText =
+        "Enriching Wallets...";
+    } else if (
+      state?.stage ===
+      "merge"
+    ) {
+      stageBadgeText =
+        "Merging Master...";
+    } else if (
+      state?.stage ===
+      "publish"
+    ) {
+      stageBadgeText =
+        "Publishing...";
+    } else {
+      stageBadgeText =
+        "Running";
+    }
+  } else if (
+    currentView ===
+    "fabriq_stopped"
+  ) {
+    stageBadgeText =
+      "Stopped";
+  } else if (
+    currentView ===
+    "fabriq_completed"
+  ) {
+    modalTitle =
+      "Update Completed";
+
+    stageBadgeText =
+      "Completed";
+  } else if (
+    currentView ===
+    "fabriq_error"
+  ) {
+    modalTitle =
+      "Update Failed";
+
+    stageBadgeText =
+      "Failed";
   }
 
   // Handlers for LP Agent
@@ -253,11 +423,16 @@ export function FabriqControlModal({
     setActionLoading(true);
     setActionError(null);
     try {
-      const res = await startLpAgentRefresh({
-        concurrency: lpConcurrency,
-        fabriqConcurrency: lpFabriqConcurrency,
-      });
+      const res =
+        await startLpAgentRefresh({
+          concurrency:
+            lpConcurrency,
+          fabriqConcurrency:
+            lpFabriqConcurrency,
+        });
+
       setLpAgentState(res);
+      setConfigureNewRun(false);
     } catch (err) {
       setActionError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -278,6 +453,20 @@ export function FabriqControlModal({
     }
   };
 
+  const handleForceStopLp = async () => {
+    setActionLoading(true);
+    setActionError(null);
+    setShowForceStopConfirm(false);
+    try {
+      const res = await forceStopLpAgentRefresh();
+      setLpAgentState(res);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
   // Handlers for Fabriq
   const handleStartFabriq = async () => {
     setActionLoading(true);
@@ -288,6 +477,7 @@ export function FabriqControlModal({
         concurrency,
       });
       setState(nextState);
+      setConfigureNewRun(false);
     } catch (err) {
       setActionError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -581,20 +771,35 @@ export function FabriqControlModal({
                 </>
               )}
 
-              {/* Stop Button */}
-              <div className="fabriq-modal-actions">
+              {/* Stop Actions */}
+              <div className="fabriq-modal-actions lp-stop-actions">
                 <button
-                  className="fabriq-btn btn-danger"
+                  className="fabriq-btn btn-secondary"
                   onClick={handleStopLp}
                   disabled={actionLoading || isLpStopping}
                 >
-                  {isLpStopping ? (
+                  {isLpStopping && lpAgentState?.stopMode === "graceful" ? (
                     <>
                       <RefreshCw size={14} className="spin" /> Stopping Pipeline...
                     </>
                   ) : (
                     <>
-                      <Square size={14} /> Stop Update
+                      <Square size={14} /> Stop & Save Progress
+                    </>
+                  )}
+                </button>
+                <button
+                  className="fabriq-btn btn-danger"
+                  onClick={() => setShowForceStopConfirm(true)}
+                  disabled={actionLoading || isLpStopping}
+                >
+                  {isLpStopping && lpAgentState?.stopMode === "force" ? (
+                    <>
+                      <RefreshCw size={14} className="spin" /> Force Stopping...
+                    </>
+                  ) : (
+                    <>
+                      <AlertOctagon size={14} /> Force Stop
                     </>
                   )}
                 </button>
@@ -607,13 +812,23 @@ export function FabriqControlModal({
           {/* ======================================================== */}
           {currentView === "lp_stopped" && (
             <div className="fabriq-stopped-section">
-              <div className="fabriq-alert-banner alert-warning">
-                <AlertCircle size={16} />
-                <span>
-                  Update stopped. LP Agent checkpoint is preserved. Starting Update Wallet List again
-                  will automatically resume already completed scrape pages.
-                </span>
-              </div>
+              {lpAgentState?.stopMode === "force" || lpAgentState?.checkpointPreserved === false ? (
+                <div className="fabriq-alert-banner alert-error">
+                  <AlertCircle size={18} />
+                  <div>
+                    <strong>Update force-stopped. Checkpoint discarded.</strong>
+                    <div>The next update will start fresh.</div>
+                  </div>
+                </div>
+              ) : (
+                <div className="fabriq-alert-banner alert-warning">
+                  <AlertCircle size={18} />
+                  <div>
+                    <strong>Update stopped. Progress is saved and can be resumed.</strong>
+                    <div>Starting Update Wallet List again will automatically resume already completed scrape pages.</div>
+                  </div>
+                </div>
+              )}
 
               <div className="fabriq-stats-grid">
                 <div className="fabriq-stat-card">
@@ -640,7 +855,25 @@ export function FabriqControlModal({
                   onClick={handleStartLp}
                   disabled={actionLoading}
                 >
-                  <Play size={14} /> Resume / Start Update
+                  {lpAgentState?.stopMode === "force" || lpAgentState?.checkpointPreserved === false ? (
+                    <>
+                      <Play size={14} /> Start Fresh Update
+                    </>
+                  ) : (
+                    <>
+                      <Play size={14} /> Resume / Start Update
+                    </>
+                  )}
+                </button>
+                <button
+                  className="fabriq-btn btn-secondary"
+                  onClick={() => {
+                    setConfigureNewRun(true);
+                    setActionError(null);
+                    setShowLogs(false);
+                  }}
+                >
+                  Configure New Run
                 </button>
                 <button className="fabriq-btn btn-secondary" onClick={onClose}>
                   Close
@@ -700,7 +933,9 @@ export function FabriqControlModal({
                 <button
                   className="fabriq-btn btn-secondary"
                   onClick={() => {
-                    setLpAgentState((prev) => (prev ? { ...prev, status: "idle", stage: "idle" } : null));
+                    setConfigureNewRun(true);
+                    setActionError(null);
+                    setShowLogs(false);
                   }}
                 >
                   Configure New Run
@@ -955,7 +1190,9 @@ export function FabriqControlModal({
                 <button
                   className="fabriq-btn btn-secondary"
                   onClick={() => {
-                    setState((prev) => (prev ? { ...prev, status: "idle", stage: "idle" } : null));
+                    setConfigureNewRun(true);
+                    setActionError(null);
+                    setShowLogs(false);
                   }}
                 >
                   Configure New Run
@@ -1187,6 +1424,51 @@ export function FabriqControlModal({
             )}
           </div>
         </div>
+
+        {/* Force Stop Confirmation Dialog */}
+        {showForceStopConfirm && (
+          <div className="force-stop-overlay">
+            <div className="force-stop-card">
+              <div className="force-stop-header">
+                <div className="force-stop-icon-wrap">
+                  <AlertTriangle size={20} className="text-red" />
+                </div>
+                <div className="force-stop-title">Force Stop Update?</div>
+              </div>
+
+              <div className="force-stop-body">
+                <p>
+                  This will immediately stop the current pipeline and discard its resumable checkpoint.
+                </p>
+                <p>
+                  The next update will start fresh.
+                </p>
+                <p className="force-stop-sub">
+                  Already completed merge/publish stages will not be rolled back.
+                </p>
+              </div>
+
+              <div className="fabriq-modal-actions force-stop-actions">
+                <button
+                  type="button"
+                  className="fabriq-btn btn-secondary"
+                  onClick={() => setShowForceStopConfirm(false)}
+                  disabled={actionLoading}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="fabriq-btn btn-danger"
+                  onClick={handleForceStopLp}
+                  disabled={actionLoading}
+                >
+                  <AlertOctagon size={14} /> Force Stop
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
