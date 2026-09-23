@@ -716,43 +716,139 @@ function parseEnrichLine(line) {
     }
 }
 
-function runChildProcess(command, args, env, lineParser = null) {
-    return new Promise((resolve, reject) => {
-        currentChild = spawn(command, args, {
-            cwd: ROOT,
-            env: {
-                ...process.env,
-                ...env,
-            },
-            stdio: ["ignore", "pipe", "pipe"],
-        });
+function runChildProcess(
+    command,
+    args,
+    env,
+    lineParser = null
+) {
+    return new Promise(
+        (resolve, reject) => {
+            currentChild =
+                spawn(
+                    command,
+                    args,
+                    {
+                        cwd: ROOT,
 
-        const handleChunk = (chunk) => {
-            const lines = String(chunk).split("\n");
-            for (const line of lines) {
-                const trimmed = line.trimEnd();
-                if (trimmed) {
-                    addLog(trimmed);
-                    if (lineParser) {
-                        lineParser(trimmed);
+                        env: {
+                            ...process.env,
+                            ...env,
+                        },
+
+                        stdio: [
+                            "ignore",
+                            "pipe",
+                            "pipe",
+                        ],
                     }
+                );
+
+            let stdoutBuffer = "";
+            let stderrBuffer = "";
+
+            function processLine(line) {
+                const trimmed =
+                    line.trimEnd();
+
+                if (!trimmed) {
+                    return;
+                }
+
+                addLog(trimmed);
+
+                if (lineParser) {
+                    lineParser(
+                        trimmed
+                    );
                 }
             }
-        };
 
-        currentChild.stdout.on("data", handleChunk);
-        currentChild.stderr.on("data", handleChunk);
+            function consumeChunk(
+                buffer,
+                chunk
+            ) {
+                buffer +=
+                    String(chunk);
 
-        currentChild.on("error", (error) => {
-            currentChild = null;
-            reject(error);
-        });
+                const lines =
+                    buffer.split("\n");
 
-        currentChild.on("exit", (code, signal) => {
-            currentChild = null;
-            resolve({ code, signal });
-        });
-    });
+                const remainder =
+                    lines.pop() ?? "";
+
+                for (
+                    const line
+                    of lines
+                ) {
+                    processLine(line);
+                }
+
+                return remainder;
+            }
+
+            currentChild.stdout.on(
+                "data",
+                (chunk) => {
+                    stdoutBuffer =
+                        consumeChunk(
+                            stdoutBuffer,
+                            chunk
+                        );
+                }
+            );
+
+            currentChild.stderr.on(
+                "data",
+                (chunk) => {
+                    stderrBuffer =
+                        consumeChunk(
+                            stderrBuffer,
+                            chunk
+                        );
+                }
+            );
+
+            currentChild.on(
+                "error",
+                (error) => {
+                    currentChild =
+                        null;
+
+                    reject(error);
+                }
+            );
+
+            currentChild.on(
+                "exit",
+                (code, signal) => {
+                    if (
+                        stdoutBuffer.trim()
+                    ) {
+                        processLine(
+                            stdoutBuffer
+                        );
+                    }
+
+                    if (
+                        stderrBuffer.trim()
+                    ) {
+                        processLine(
+                            stderrBuffer
+                        );
+                    }
+
+                    currentChild =
+                        null;
+
+                    resolve({
+                        code,
+                        signal,
+                    });
+                }
+            );
+        }
+    );
 }
 
 async function startPipeline({ mode, concurrency, resume }) {
@@ -863,6 +959,24 @@ async function startPipeline({ mode, concurrency, resume }) {
             addLog(`[CONTROL] ${state.error}`);
             stopRuntimeTicker();
             broadcastState("error");
+            return;
+        }
+
+        if (state.failed > 0) {
+            state.status = "error";
+            state.stage = "error";
+            state.error =
+                `Fabriq enrichment completed with ${state.failed} failed wallets; merge/publish aborted.`;
+            state.finishedAt =
+                new Date().toISOString();
+
+            addLog(
+                `[CONTROL] ${state.error}`
+            );
+
+            stopRuntimeTicker();
+            broadcastState("error");
+
             return;
         }
 
