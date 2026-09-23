@@ -24,6 +24,8 @@
     "typescript": "^5.9.3"
   },
   "dependencies": {
+    "@coral-xyz/anchor": "^0.32.1",
+    "@meteora-ag/dlmm": "^1.9.14",
     "@solana/web3.js": "^1.99.0",
     "bs58": "^6.0.0",
     "playwright-core": "^1.63.0",

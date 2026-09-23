@@ -851,265 +851,255 @@ function runChildProcess(
     );
 }
 
-async function startPipeline({
-    mode,
-    concurrency,
-    resume,
-}) {
-    if (
-        currentChild ||
-        state.status === "running" ||
-        state.status === "stopping"
-    ) {
-        throw new Error(
-            "Fabriq update is already running"
-        );
+async function startPipeline({ mode, concurrency, resume }) {
+    if (currentChild || state.status === "running" || state.status === "stopping") {
+        throw new Error("Fabriq update is already running");
     }
 
-const isResume = Boolean(resume);
-const safeConcurrency = sanitizeConcurrency(concurrency ?? state.concurrency);
+    const isResume = Boolean(resume);
+    const safeConcurrency = sanitizeConcurrency(concurrency ?? state.concurrency);
 
-let safeMode = mode;
-if (!safeMode) {
-    safeMode = isResume && state.mode ? state.mode : "stale";
-}
-
-let refreshBefore = state.refreshBefore;
-if (isResume) {
-    // Keep existing refreshBefore when resuming
-    if (safeMode === "full" && !refreshBefore) {
-        refreshBefore = new Date().toISOString();
+    let safeMode = mode;
+    if (!safeMode) {
+        safeMode = isResume && state.mode ? state.mode : "stale";
     }
-} else {
-    // New run
-    if (safeMode === "full") {
-        refreshBefore = new Date().toISOString();
+
+    let refreshBefore = state.refreshBefore;
+    if (isResume) {
+        // Keep existing refreshBefore when resuming
+        if (safeMode === "full" && !refreshBefore) {
+            refreshBefore = new Date().toISOString();
+        }
     } else {
-        refreshBefore = null;
-    }
-}
-
-state.status = "running";
-state.stage = "enrich";
-state.mode = safeMode;
-state.concurrency = safeConcurrency;
-state.refreshBefore = refreshBefore;
-state.startedAt =
-    new Date().toISOString();
-state.finishedAt = null;
-state.exitCode = null;
-state.error = null;
-state.stopMode = null;
-state.checkpointPreserved = true;
-
-if (!isResume) {
-    state.total = 0;
-    state.completed = 0;
-    state.success = 0;
-    state.failed = 0;
-    state.skipped = 0;
-    state.runtimeSeconds = 0;
-    state.logs = [];
-}
-
-resetEnrichProgress();
-
-addLog(`[CONTROL] Starting pipeline: mode=${safeMode}, workers=${safeConcurrency}, resume=${isResume}`);
-if (refreshBefore) {
-    addLog(`[CONTROL] refreshBefore=${refreshBefore}`);
-}
-
-broadcastState("status");
-startRuntimeTicker();
-
-try {
-    // ----------------------------------------------------
-    // 1. Stage: enrich
-    // ----------------------------------------------------
-    state.stage = "enrich";
-    broadcastState("stage");
-
-    const enrichEnv = {
-        FABRIQ_CONCURRENCY: String(safeConcurrency),
-    };
-    if (refreshBefore) {
-        enrichEnv.FABRIQ_REFRESH_BEFORE = refreshBefore;
-    }
-
-    const enrichResult = await runChildProcess(
-        process.execPath,
-        ["scripts/fabriq/enrich-wallets.mjs"],
-        enrichEnv,
-        parseEnrichLine
-    );
-
-    if (state.status === "stopping" || state.status === "stopped") {
-        const wasForce = state.stopMode === "force";
-        if (wasForce) {
-            discardFabriqCheckpoint();
-        }
-        state.status = "stopped";
-        state.stage = "stopped";
-        state.finishedAt = new Date().toISOString();
-        if (wasForce) {
-            addLog("[CONTROL] Fabriq pipeline force-stopped. Checkpoint discarded. Next update will start fresh.");
+        // New run
+        if (safeMode === "full") {
+            refreshBefore = new Date().toISOString();
         } else {
-            addLog("[CONTROL] Enrichment stopped by user. Progress is saved and can be resumed.");
+            refreshBefore = null;
         }
-        stopRuntimeTicker();
-        broadcastState("status");
-        return;
     }
 
-    if (enrichResult.code !== 0) {
-        state.status = "error";
-        state.stage = "error";
-        state.exitCode = enrichResult.code;
-        state.error = `Enrichment failed with exit code ${enrichResult.code}`;
-        state.finishedAt = new Date().toISOString();
-        addLog(`[CONTROL] ${state.error}`);
-        stopRuntimeTicker();
-        broadcastState("error");
-        return;
+    state.status = "running";
+    state.stage = "enrich";
+    state.mode = safeMode;
+    state.concurrency = safeConcurrency;
+    state.refreshBefore = refreshBefore;
+    state.startedAt =
+        new Date().toISOString();
+    state.finishedAt = null;
+    state.exitCode = null;
+    state.error = null;
+    state.stopMode = null;
+    state.checkpointPreserved = true;
+
+    if (!isResume) {
+        state.total = 0;
+        state.completed = 0;
+        state.success = 0;
+        state.failed = 0;
+        state.skipped = 0;
+        state.runtimeSeconds = 0;
+        state.logs = [];
     }
 
-    if (state.failed > 0) {
-        state.status = "error";
-        state.stage = "error";
-        state.error =
-            `Fabriq enrichment completed with ${state.failed} failed wallets; merge/publish aborted.`;
-        state.finishedAt =
-            new Date().toISOString();
+    resetEnrichProgress();
 
-        addLog(
-            `[CONTROL] ${state.error}`
+    addLog(`[CONTROL] Starting pipeline: mode=${safeMode}, workers=${safeConcurrency}, resume=${isResume}`);
+    if (refreshBefore) {
+        addLog(`[CONTROL] refreshBefore=${refreshBefore}`);
+    }
+
+    broadcastState("status");
+    startRuntimeTicker();
+
+    try {
+        // ----------------------------------------------------
+        // 1. Stage: enrich
+        // ----------------------------------------------------
+        state.stage = "enrich";
+        broadcastState("stage");
+
+        const enrichEnv = {
+            FABRIQ_CONCURRENCY: String(safeConcurrency),
+        };
+        if (refreshBefore) {
+            enrichEnv.FABRIQ_REFRESH_BEFORE = refreshBefore;
+        }
+
+        const enrichResult = await runChildProcess(
+            process.execPath,
+            ["scripts/fabriq/enrich-wallets.mjs"],
+            enrichEnv,
+            parseEnrichLine
         );
 
-        stopRuntimeTicker();
-        broadcastState("error");
-
-        return;
-    }
-
-    if (state.total > 0) {
-        state.completed = state.total;
-    }
-
-    // ----------------------------------------------------
-    // 2. Stage: merge
-    // ----------------------------------------------------
-    if (state.status === "stopping" || state.status === "stopped") return;
-
-    state.stage = "merge";
-    addLog("[CONTROL] Enrichment completed. Running merge:fabriq...");
-    broadcastState("stage");
-
-    const mergeResult = await runChildProcess(
-        process.execPath,
-        [
-            "--experimental-strip-types",
-            "scripts/pipeline/merge-fabriq.ts",
-        ],
-        {}
-    );
-
-    if (state.status === "stopping" || state.status === "stopped") {
-        const wasForce = state.stopMode === "force";
-        if (wasForce) {
-            discardFabriqCheckpoint();
+        if (state.status === "stopping" || state.status === "stopped") {
+            const wasForce = state.stopMode === "force";
+            if (wasForce) {
+                discardFabriqCheckpoint();
+            }
+            state.status = "stopped";
+            state.stage = "stopped";
+            state.finishedAt = new Date().toISOString();
+            if (wasForce) {
+                addLog("[CONTROL] Fabriq pipeline force-stopped. Checkpoint discarded. Next update will start fresh.");
+            } else {
+                addLog("[CONTROL] Enrichment stopped by user. Progress is saved and can be resumed.");
+            }
+            stopRuntimeTicker();
+            broadcastState("status");
+            return;
         }
-        state.status = "stopped";
-        state.stage = "stopped";
+
+        if (enrichResult.code !== 0) {
+            state.status = "error";
+            state.stage = "error";
+            state.exitCode = enrichResult.code;
+            state.error = `Enrichment failed with exit code ${enrichResult.code}`;
+            state.finishedAt = new Date().toISOString();
+            addLog(`[CONTROL] ${state.error}`);
+            stopRuntimeTicker();
+            broadcastState("error");
+            return;
+        }
+
+        if (state.failed > 0) {
+            state.status = "error";
+            state.stage = "error";
+            state.error =
+                `Fabriq enrichment completed with ${state.failed} failed wallets; merge/publish aborted.`;
+            state.finishedAt =
+                new Date().toISOString();
+
+            addLog(
+                `[CONTROL] ${state.error}`
+            );
+
+            stopRuntimeTicker();
+            broadcastState("error");
+
+            return;
+        }
+
+        if (state.total > 0) {
+            state.completed = state.total;
+        }
+
+        // ----------------------------------------------------
+        // 2. Stage: merge
+        // ----------------------------------------------------
+        if (state.status === "stopping" || state.status === "stopped") return;
+
+        state.stage = "merge";
+        addLog("[CONTROL] Enrichment completed. Running merge:fabriq...");
+        broadcastState("stage");
+
+        const mergeResult = await runChildProcess(
+            process.execPath,
+            [
+                "--experimental-strip-types",
+                "scripts/pipeline/merge-fabriq.ts",
+            ],
+            {}
+        );
+
+        if (state.status === "stopping" || state.status === "stopped") {
+            const wasForce = state.stopMode === "force";
+            if (wasForce) {
+                discardFabriqCheckpoint();
+            }
+            state.status = "stopped";
+            state.stage = "stopped";
+            state.finishedAt = new Date().toISOString();
+            if (wasForce) {
+                addLog("[CONTROL] Fabriq pipeline force-stopped during merge. Checkpoint discarded.");
+            } else {
+                addLog("[CONTROL] Pipeline stopped by user during merge.");
+            }
+            stopRuntimeTicker();
+            broadcastState("status");
+            return;
+        }
+
+        if (mergeResult.code !== 0) {
+            state.status = "error";
+            state.stage = "error";
+            state.exitCode = mergeResult.code;
+            state.error = `Merge failed with exit code ${mergeResult.code}`;
+            state.finishedAt = new Date().toISOString();
+            addLog(`[CONTROL] ${state.error}`);
+            stopRuntimeTicker();
+            broadcastState("error");
+            return;
+        }
+
+        // ----------------------------------------------------
+        // 3. Stage: publish
+        // ----------------------------------------------------
+        if (state.status === "stopping" || state.status === "stopped") return;
+
+        state.stage = "publish";
+        addLog("[CONTROL] Merge completed. Running publish:wallets...");
+        broadcastState("stage");
+
+        const publishResult = await runChildProcess(
+            process.execPath,
+            [
+                "--experimental-strip-types",
+                "scripts/pipeline/publish-wallets.ts",
+            ],
+            {}
+        );
+
+        if (state.status === "stopping" || state.status === "stopped") {
+            const wasForce = state.stopMode === "force";
+            if (wasForce) {
+                discardFabriqCheckpoint();
+            }
+            state.status = "stopped";
+            state.stage = "stopped";
+            state.finishedAt = new Date().toISOString();
+            if (wasForce) {
+                addLog("[CONTROL] Fabriq pipeline force-stopped during publish. Checkpoint discarded.");
+            } else {
+                addLog("[CONTROL] Pipeline stopped by user during publish.");
+            }
+            stopRuntimeTicker();
+            broadcastState("status");
+            return;
+        }
+
+        if (publishResult.code !== 0) {
+            state.status = "error";
+            state.stage = "error";
+            state.exitCode = publishResult.code;
+            state.error = `Publish failed with exit code ${publishResult.code}`;
+            state.finishedAt = new Date().toISOString();
+            addLog(`[CONTROL] ${state.error}`);
+            stopRuntimeTicker();
+            broadcastState("error");
+            return;
+        }
+
+        // ----------------------------------------------------
+        // 4. Stage: completed
+        // ----------------------------------------------------
+        state.status = "completed";
+        state.stage = "completed";
+        state.exitCode = 0;
         state.finishedAt = new Date().toISOString();
-        if (wasForce) {
-            addLog("[CONTROL] Fabriq pipeline force-stopped during merge. Checkpoint discarded.");
-        } else {
-            addLog("[CONTROL] Pipeline stopped by user during merge.");
-        }
+        addLog("[CONTROL] Entire pipeline (enrich -> merge -> publish) completed successfully.");
         stopRuntimeTicker();
-        broadcastState("status");
-        return;
-    }
-
-    if (mergeResult.code !== 0) {
+        broadcastState("finish");
+    } catch (error) {
         state.status = "error";
         state.stage = "error";
-        state.exitCode = mergeResult.code;
-        state.error = `Merge failed with exit code ${mergeResult.code}`;
+        state.error = error instanceof Error ? error.message : String(error);
         state.finishedAt = new Date().toISOString();
-        addLog(`[CONTROL] ${state.error}`);
+        addLog(`[CONTROL] Pipeline error: ${state.error}`);
         stopRuntimeTicker();
         broadcastState("error");
-        return;
     }
-
-    // ----------------------------------------------------
-    // 3. Stage: publish
-    // ----------------------------------------------------
-    if (state.status === "stopping" || state.status === "stopped") return;
-
-    state.stage = "publish";
-    addLog("[CONTROL] Merge completed. Running publish:wallets...");
-    broadcastState("stage");
-
-    const publishResult = await runChildProcess(
-        process.execPath,
-        [
-            "--experimental-strip-types",
-            "scripts/pipeline/publish-wallets.ts",
-        ],
-        {}
-    );
-
-    if (state.status === "stopping" || state.status === "stopped") {
-        const wasForce = state.stopMode === "force";
-        if (wasForce) {
-            discardFabriqCheckpoint();
-        }
-        state.status = "stopped";
-        state.stage = "stopped";
-        state.finishedAt = new Date().toISOString();
-        if (wasForce) {
-            addLog("[CONTROL] Fabriq pipeline force-stopped during publish. Checkpoint discarded.");
-        } else {
-            addLog("[CONTROL] Pipeline stopped by user during publish.");
-        }
-        stopRuntimeTicker();
-        broadcastState("status");
-        return;
-    }
-
-    if (publishResult.code !== 0) {
-        state.status = "error";
-        state.stage = "error";
-        state.exitCode = publishResult.code;
-        state.error = `Publish failed with exit code ${publishResult.code}`;
-        state.finishedAt = new Date().toISOString();
-        addLog(`[CONTROL] ${state.error}`);
-        stopRuntimeTicker();
-        broadcastState("error");
-        return;
-    }
-
-    // ----------------------------------------------------
-    // 4. Stage: completed
-    // ----------------------------------------------------
-    state.status = "completed";
-    state.stage = "completed";
-    state.exitCode = 0;
-    state.finishedAt = new Date().toISOString();
-    addLog("[CONTROL] Entire pipeline (enrich -> merge -> publish) completed successfully.");
-    stopRuntimeTicker();
-    broadcastState("finish");
-} catch (error) {
-    state.status = "error";
-    state.stage = "error";
-    state.error = error instanceof Error ? error.message : String(error);
-    state.finishedAt = new Date().toISOString();
-    addLog(`[CONTROL] Pipeline error: ${state.error}`);
-    stopRuntimeTicker();
-    broadcastState("error");
-}
 }
 
 function runLpAgentChildProcess(command, args, env, lineParser = null) {
@@ -1701,6 +1691,473 @@ async function readJson(request) {
     return JSON.parse(body);
 }
 
+// ============================================================
+// POOL EXPLORER
+// ============================================================
+
+const POOL_CACHE_PATH =
+    "data/pools/legacy-dlmm-pools.json";
+
+let poolCacheMemory = null;
+let poolCacheMtimeMs = null;
+
+function loadPoolExplorerCache() {
+    const stats =
+        fs.statSync(
+            POOL_CACHE_PATH
+        );
+
+    if (
+        poolCacheMemory &&
+        poolCacheMtimeMs ===
+        stats.mtimeMs
+    ) {
+        return poolCacheMemory;
+    }
+
+    const raw =
+        fs.readFileSync(
+            POOL_CACHE_PATH,
+            "utf8"
+        );
+
+    const parsed =
+        JSON.parse(raw);
+
+    poolCacheMemory =
+        parsed;
+
+    poolCacheMtimeMs =
+        stats.mtimeMs;
+
+    return parsed;
+}
+
+function finiteQueryNumber(
+    value
+) {
+    if (
+        value === null ||
+        value === undefined ||
+        value === ""
+    ) {
+        return null;
+    }
+
+    const number =
+        Number(value);
+
+    return Number.isFinite(
+        number
+    )
+        ? number
+        : null;
+}
+
+function poolSearchText(pool) {
+    return [
+        pool.name,
+        pool.address,
+
+        pool.tokenX?.name,
+        pool.tokenX?.symbol,
+        pool.tokenX?.address,
+
+        pool.tokenY?.name,
+        pool.tokenY?.symbol,
+        pool.tokenY?.address,
+    ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+}
+
+function poolSortValue(
+    pool,
+    sortBy
+) {
+    switch (sortBy) {
+        case "tvl":
+            return pool.tvl ?? 0;
+
+        case "volume24h":
+            return (
+                pool.volume?.["24h"] ??
+                0
+            );
+
+        case "fees24h":
+            return (
+                pool.fees?.["24h"] ??
+                0
+            );
+
+        case "feeTvl24h":
+            return (
+                pool.feeTvlRatio
+                ?.["24h"] ??
+                0
+            );
+
+        case "apr":
+            return pool.apr ?? 0;
+
+        case "apy":
+            return pool.apy ?? 0;
+
+        case "createdAt":
+            return (
+                pool.createdAt ??
+                0
+            );
+
+        case "binStep":
+            return (
+                pool.binStep ??
+                0
+            );
+
+        case "baseFeePct":
+            return (
+                pool.baseFeePct ??
+                0
+            );
+
+        case "name":
+            return (
+                pool.name ??
+                ""
+            ).toLowerCase();
+
+        default:
+            return (
+                pool.volume?.["24h"] ??
+                0
+            );
+    }
+}
+
+function queryPoolExplorer(
+    url
+) {
+    const cache =
+        loadPoolExplorerCache();
+
+    let pools =
+        Array.isArray(
+            cache.pools
+        )
+            ? [...cache.pools]
+            : [];
+
+    // --------------------------------------------------------
+    // PAGINATION
+    // --------------------------------------------------------
+
+    const page =
+        Math.max(
+            1,
+            Math.floor(
+                finiteQueryNumber(
+                    url.searchParams.get(
+                        "page"
+                    )
+                ) ?? 1
+            )
+        );
+
+    const pageSize =
+        Math.min(
+            100,
+            Math.max(
+                1,
+                Math.floor(
+                    finiteQueryNumber(
+                        url.searchParams.get(
+                            "pageSize"
+                        )
+                    ) ?? 50
+                )
+            )
+        );
+
+    // --------------------------------------------------------
+    // SEARCH
+    // --------------------------------------------------------
+
+    const query =
+        (
+            url.searchParams.get(
+                "query"
+            ) ?? ""
+        )
+            .trim()
+            .toLowerCase();
+
+    if (query) {
+        pools =
+            pools.filter(
+                (pool) =>
+                    poolSearchText(
+                        pool
+                    ).includes(
+                        query
+                    )
+            );
+    }
+
+    // --------------------------------------------------------
+    // FILTERS
+    // --------------------------------------------------------
+
+    const minTvl =
+        finiteQueryNumber(
+            url.searchParams.get(
+                "minTvl"
+            )
+        );
+
+    const maxTvl =
+        finiteQueryNumber(
+            url.searchParams.get(
+                "maxTvl"
+            )
+        );
+
+    const minVolume24h =
+        finiteQueryNumber(
+            url.searchParams.get(
+                "minVolume24h"
+            )
+        );
+
+    const minFees24h =
+        finiteQueryNumber(
+            url.searchParams.get(
+                "minFees24h"
+            )
+        );
+
+    const minFeeTvl24h =
+        finiteQueryNumber(
+            url.searchParams.get(
+                "minFeeTvl24h"
+            )
+        );
+
+    const binStep =
+        finiteQueryNumber(
+            url.searchParams.get(
+                "binStep"
+            )
+        );
+
+    if (minTvl !== null) {
+        pools =
+            pools.filter(
+                (pool) =>
+                    (pool.tvl ?? 0) >=
+                    minTvl
+            );
+    }
+
+    if (maxTvl !== null) {
+        pools =
+            pools.filter(
+                (pool) =>
+                    (pool.tvl ?? 0) <=
+                    maxTvl
+            );
+    }
+
+    if (
+        minVolume24h !== null
+    ) {
+        pools =
+            pools.filter(
+                (pool) =>
+                    (
+                        pool.volume
+                        ?.["24h"] ??
+                        0
+                    ) >=
+                    minVolume24h
+            );
+    }
+
+    if (
+        minFees24h !== null
+    ) {
+        pools =
+            pools.filter(
+                (pool) =>
+                    (
+                        pool.fees
+                        ?.["24h"] ??
+                        0
+                    ) >=
+                    minFees24h
+            );
+    }
+
+    if (
+        minFeeTvl24h !==
+        null
+    ) {
+        pools =
+            pools.filter(
+                (pool) =>
+                    (
+                        pool
+                            .feeTvlRatio
+                        ?.["24h"] ??
+                        0
+                    ) >=
+                    minFeeTvl24h
+            );
+    }
+
+    if (binStep !== null) {
+        pools =
+            pools.filter(
+                (pool) =>
+                    pool.binStep ===
+                    binStep
+            );
+    }
+
+    // --------------------------------------------------------
+    // SORT
+    // --------------------------------------------------------
+
+    const sortBy =
+        url.searchParams.get(
+            "sortBy"
+        ) ??
+        "volume24h";
+
+    const sortOrder =
+        (
+            url.searchParams.get(
+                "sortOrder"
+            ) ?? "desc"
+        ).toLowerCase() ===
+            "asc"
+            ? "asc"
+            : "desc";
+
+    pools.sort(
+        (a, b) => {
+            const aValue =
+                poolSortValue(
+                    a,
+                    sortBy
+                );
+
+            const bValue =
+                poolSortValue(
+                    b,
+                    sortBy
+                );
+
+            let comparison = 0;
+
+            if (
+                typeof aValue ===
+                "string" &&
+                typeof bValue ===
+                "string"
+            ) {
+                comparison =
+                    aValue.localeCompare(
+                        bValue
+                    );
+            } else {
+                comparison =
+                    Number(aValue) -
+                    Number(bValue);
+            }
+
+            return sortOrder ===
+                "asc"
+                ? comparison
+                : -comparison;
+        }
+    );
+
+    // --------------------------------------------------------
+    // RESPONSE
+    // --------------------------------------------------------
+
+    const total =
+        pools.length;
+
+    const pages =
+        Math.max(
+            1,
+            Math.ceil(
+                total /
+                pageSize
+            )
+        );
+
+    const safePage =
+        Math.min(
+            page,
+            pages
+        );
+
+    const start =
+        (safePage - 1) *
+        pageSize;
+
+    const data =
+        pools.slice(
+            start,
+            start +
+            pageSize
+        );
+
+    return {
+        generatedAt:
+            cache.generatedAt ??
+            null,
+
+        total,
+
+        page:
+            safePage,
+
+        pageSize,
+
+        pages,
+
+        filters: {
+            query:
+                query || null,
+
+            minTvl,
+
+            maxTvl,
+
+            minVolume24h,
+
+            minFees24h,
+
+            minFeeTvl24h,
+
+            binStep,
+        },
+
+        sort: {
+            sortBy,
+            sortOrder,
+        },
+
+        data,
+    };
+}
+
 const server = http.createServer(async (request, response) => {
     if (request.method === "OPTIONS") {
         setCors(request, response);
@@ -1710,6 +2167,47 @@ const server = http.createServer(async (request, response) => {
     }
 
     const url = new URL(request.url, `http://${HOST}:${PORT}`);
+
+    // ------------------------------------------------------
+    // GET /api/pools
+    // ------------------------------------------------------
+
+    if (
+        request.method === "GET" &&
+        url.pathname ===
+        "/api/pools"
+    ) {
+        try {
+            const result =
+                queryPoolExplorer(
+                    url
+                );
+
+            json(
+                request,
+                response,
+                200,
+                result
+            );
+        } catch (error) {
+            console.error(
+                "[POOLS] Failed:",
+                error
+            );
+
+            json(
+                request,
+                response,
+                500,
+                {
+                    error:
+                        "Failed to load Pool Explorer cache",
+                }
+            );
+        }
+
+        return;
+    }
 
     // ------------------------------------------------------
     // GET /api/lpagent/status
