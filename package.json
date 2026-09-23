@@ -12,7 +12,8 @@
     "control": "node scripts/control/server.mjs",
     "merge:fabriq": "node --experimental-strip-types scripts/pipeline/merge-fabriq.ts",
     "publish:wallets": "node --experimental-strip-types scripts/pipeline/publish-wallets.ts",
-    "pipeline": "node scripts/pipeline/run-pipeline.mjs"
+    "pipeline": "node scripts/pipeline/run-pipeline.mjs",
+    "waldisc:test-one-pool": "node --experimental-strip-types --env-file=.env scripts/discovery/waldisc-1-test-one-pool.ts"
   },
   "engines": {
     "node": ">=22.6.0"

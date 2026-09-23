@@ -10,29 +10,89 @@ import {
   WalletCards,
 } from "lucide-react";
 
+type ActivePage = "explore" | "pools" | "track" | "portfolio";
+type AppPage = "explore" | "track" | "portfolio";
+
 type Props = {
-  activePage: "explore" | "track" | "portfolio";
-  onNavigate: (page: "explore" | "track" | "portfolio") => void;
+  activePage: ActivePage;
+  onNavigate: (page: AppPage) => void;
 };
 
-const discover = [
-  { label: "Wallet Explorer", icon: WalletCards, page: "explore" as const },
-  { label: "Pool Explorer", icon: Coins },
+type SidebarItem = {
+  label: string;
+  icon: typeof WalletCards;
+  page?: AppPage;
+  href?: string;
+  activeKey?: ActivePage;
+};
+
+const discover: SidebarItem[] = [
+  {
+    label: "Wallet Explorer",
+    icon: WalletCards,
+    page: "explore",
+    activeKey: "explore",
+  },
+  {
+    label: "Pool Explorer",
+    icon: Coins,
+    href: "/pools",
+    activeKey: "pools",
+  },
   { label: "Token Insights", icon: Activity },
   { label: "Trends", icon: ChartNoAxesCombined },
   { label: "Opportunities", icon: Star },
 ];
 
-const watchlist = [
+const watchlist: SidebarItem[] = [
   { label: "My Wallets", icon: WalletCards },
-  { label: "Tracked Wallets", icon: ShieldCheck, page: "track" as const },
+  {
+    label: "Tracked Wallets",
+    icon: ShieldCheck,
+    page: "track",
+    activeKey: "track",
+  },
 ];
 
-const tools = [
+const tools: SidebarItem[] = [
   { label: "Screener", icon: CircleGauge },
   { label: "Alerts", icon: Bell },
   { label: "Settings", icon: Settings },
 ];
+
+function SidebarButton({
+  item,
+  activePage,
+  onNavigate,
+}: {
+  item: SidebarItem;
+  activePage: ActivePage;
+  onNavigate: (page: AppPage) => void;
+}) {
+  const Icon = item.icon;
+  const active = item.activeKey === activePage;
+
+  function handleClick() {
+    if (item.href) {
+      window.location.assign(item.href);
+      return;
+    }
+
+    if (item.page) {
+      onNavigate(item.page);
+    }
+  }
+
+  return (
+    <button
+      className={`nav-item ${active ? "active" : ""}`}
+      onClick={handleClick}
+    >
+      <Icon size={16} strokeWidth={1.7} />
+      <span>{item.label}</span>
+    </button>
+  );
+}
 
 export function Sidebar({ activePage, onNavigate }: Props) {
   return (
@@ -49,39 +109,37 @@ export function Sidebar({ activePage, onNavigate }: Props) {
 
       <div className="sidebar-section">
         <span className="sidebar-heading">DISCOVER</span>
-        {discover.map(({ label, icon: Icon, page }) => (
-          <button
-            key={label}
-            className={`nav-item ${page === "explore" && activePage === "explore" ? "active" : ""}`}
-            onClick={() => page && onNavigate(page)}
-          >
-            <Icon size={16} strokeWidth={1.7} />
-            <span>{label}</span>
-          </button>
+        {discover.map((item) => (
+          <SidebarButton
+            key={item.label}
+            item={item}
+            activePage={activePage}
+            onNavigate={onNavigate}
+          />
         ))}
       </div>
 
       <div className="sidebar-section">
         <span className="sidebar-heading">WATCHLIST</span>
-        {watchlist.map(({ label, icon: Icon, page }) => (
-          <button
-            key={label}
-            className={`nav-item ${page === "track" && activePage === "track" ? "active" : ""}`}
-            onClick={() => page && onNavigate(page)}
-          >
-            <Icon size={16} strokeWidth={1.7} />
-            <span>{label}</span>
-          </button>
+        {watchlist.map((item) => (
+          <SidebarButton
+            key={item.label}
+            item={item}
+            activePage={activePage}
+            onNavigate={onNavigate}
+          />
         ))}
       </div>
 
       <div className="sidebar-section">
         <span className="sidebar-heading">TOOLS</span>
-        {tools.map(({ label, icon: Icon }) => (
-          <button key={label} className="nav-item">
-            <Icon size={16} strokeWidth={1.7} />
-            <span>{label}</span>
-          </button>
+        {tools.map((item) => (
+          <SidebarButton
+            key={item.label}
+            item={item}
+            activePage={activePage}
+            onNavigate={onNavigate}
+          />
         ))}
       </div>
 
