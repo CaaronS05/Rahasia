@@ -24,6 +24,7 @@ import {
   resumeFabriqRefresh,
   startFabriqRefresh,
   stopFabriqRefresh,
+  forceStopFabriqRefresh,
   subscribeFabriqEvents,
 } from "../lib/fabriqControl";
 import {
@@ -95,7 +96,7 @@ export function FabriqControlModal({
     setConfigureNewRun,
   ] = useState(false);
 
-  const [showForceStopConfirm, setShowForceStopConfirm] = useState(false);
+  const [forceStopTarget, setForceStopTarget] = useState<"lpagent" | "fabriq" | null>(null);
 
   const logsEndRef = useRef<HTMLDivElement>(null);
   const prevFabriqStatusRef = useRef<string | null>(null);
@@ -369,7 +370,9 @@ export function FabriqControlModal({
 
     if (isFabriqStopping) {
       stageBadgeText =
-        "Stopping Fabriq...";
+        state?.stopMode === "force"
+          ? "Force Stopping..."
+          : "Stopping Fabriq...";
     } else if (
       state?.stage ===
       "enrich"
@@ -456,7 +459,7 @@ export function FabriqControlModal({
   const handleForceStopLp = async () => {
     setActionLoading(true);
     setActionError(null);
-    setShowForceStopConfirm(false);
+    setForceStopTarget(null);
     try {
       const res = await forceStopLpAgentRefresh();
       setLpAgentState(res);
@@ -498,6 +501,20 @@ export function FabriqControlModal({
     }
   };
 
+  const handleForceStopFabriq = async () => {
+    setActionLoading(true);
+    setActionError(null);
+    setForceStopTarget(null);
+    try {
+      const nextState = await forceStopFabriqRefresh();
+      setState(nextState);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
   const handleResumeFabriq = async () => {
     setActionLoading(true);
     setActionError(null);
@@ -523,8 +540,13 @@ export function FabriqControlModal({
   const fabriqCompleted = state?.completed || 0;
   const fabriqProgressPercent = fabriqTotal > 0 ? Math.min(100, Math.round((fabriqCompleted / fabriqTotal) * 100)) : 0;
 
+  const handleClose = () => {
+    setForceStopTarget(null);
+    onClose();
+  };
+
   return (
-    <div className="fabriq-modal-backdrop" onClick={onClose}>
+    <div className="fabriq-modal-backdrop" onClick={handleClose}>
       <div
         className="fabriq-modal-dialog modal-wide"
         onClick={(e) => e.stopPropagation()}
@@ -553,7 +575,7 @@ export function FabriqControlModal({
 
             <button
               className="fabriq-modal-close"
-              onClick={onClose}
+              onClick={handleClose}
               title="Close modal (processes keep running in background)"
             >
               <X size={18} />
@@ -790,7 +812,7 @@ export function FabriqControlModal({
                 </button>
                 <button
                   className="fabriq-btn btn-danger"
-                  onClick={() => setShowForceStopConfirm(true)}
+                  onClick={() => setForceStopTarget("lpagent")}
                   disabled={actionLoading || isLpStopping}
                 >
                   {isLpStopping && lpAgentState?.stopMode === "force" ? (
@@ -1060,19 +1082,34 @@ export function FabriqControlModal({
                 </div>
               </div>
 
-              <div className="fabriq-modal-actions">
+              <div className="fabriq-modal-actions lp-stop-actions">
                 <button
-                  className="fabriq-btn btn-danger"
+                  className="fabriq-btn btn-secondary"
                   onClick={handleStopFabriq}
                   disabled={actionLoading || isFabriqStopping}
                 >
-                  {isFabriqStopping ? (
+                  {isFabriqStopping && state?.stopMode === "graceful" ? (
                     <>
-                      <RefreshCw size={14} className="spin" /> Stopping Workers...
+                      <RefreshCw size={14} className="spin" /> Stopping Pipeline...
                     </>
                   ) : (
                     <>
-                      <Square size={14} /> Stop Update
+                      <Square size={14} /> Stop & Save Progress
+                    </>
+                  )}
+                </button>
+                <button
+                  className="fabriq-btn btn-danger"
+                  onClick={() => setForceStopTarget("fabriq")}
+                  disabled={actionLoading || isFabriqStopping}
+                >
+                  {isFabriqStopping && state?.stopMode === "force" ? (
+                    <>
+                      <RefreshCw size={14} className="spin" /> Force Stopping...
+                    </>
+                  ) : (
+                    <>
+                      <AlertOctagon size={14} /> Force Stop
                     </>
                   )}
                 </button>
@@ -1085,13 +1122,22 @@ export function FabriqControlModal({
           {/* ======================================================== */}
           {currentView === "fabriq_stopped" && (
             <div className="fabriq-stopped-section">
-              <div className="fabriq-alert-banner alert-warning">
-                <AlertCircle size={16} />
-                <span>
-                  Update stopped. Progress saved in checkpoint. You can resume anytime without
-                  losing completed wallets.
-                </span>
-              </div>
+              {state?.stopMode === "force" || state?.checkpointPreserved === false ? (
+                <div className="fabriq-alert-banner alert-error">
+                  <AlertCircle size={18} />
+                  <div>
+                    <strong>Fabriq update force-stopped. Checkpoint discarded.</strong>
+                    <div>The next update will start fresh.</div>
+                  </div>
+                </div>
+              ) : (
+                <div className="fabriq-alert-banner alert-warning">
+                  <AlertCircle size={18} />
+                  <div>
+                    <strong>Update stopped. Progress is saved and can be resumed.</strong>
+                  </div>
+                </div>
+              )}
 
               <div className="fabriq-stats-grid">
                 <div className="fabriq-stat-card">
@@ -1115,7 +1161,11 @@ export function FabriqControlModal({
               </div>
 
               <div className="fabriq-config-group">
-                <label className="config-label">Adjust Workers Before Resuming</label>
+                <label className="config-label">
+                  {state?.stopMode === "force" || state?.checkpointPreserved === false
+                    ? "Adjust Workers Before Starting Fresh"
+                    : "Adjust Workers Before Resuming"}
+                </label>
                 <div className="worker-input-wrap">
                   <input
                     type="number"
@@ -1133,12 +1183,32 @@ export function FabriqControlModal({
               </div>
 
               <div className="fabriq-modal-actions">
+                {state?.stopMode === "force" || state?.checkpointPreserved === false ? (
+                  <button
+                    className="fabriq-btn btn-primary"
+                    onClick={handleStartFabriq}
+                    disabled={actionLoading}
+                  >
+                    <Play size={14} /> Start Fresh Update
+                  </button>
+                ) : (
+                  <button
+                    className="fabriq-btn btn-primary"
+                    onClick={handleResumeFabriq}
+                    disabled={actionLoading}
+                  >
+                    <Play size={14} /> Resume Update
+                  </button>
+                )}
                 <button
-                  className="fabriq-btn btn-primary"
-                  onClick={handleResumeFabriq}
-                  disabled={actionLoading}
+                  className="fabriq-btn btn-secondary"
+                  onClick={() => {
+                    setConfigureNewRun(true);
+                    setActionError(null);
+                    setShowLogs(false);
+                  }}
                 >
-                  <Play size={14} /> Resume Update
+                  Configure New Run
                 </button>
                 <button className="fabriq-btn btn-secondary" onClick={onClose}>
                   Close
@@ -1426,22 +1496,28 @@ export function FabriqControlModal({
         </div>
 
         {/* Force Stop Confirmation Dialog */}
-        {showForceStopConfirm && (
+        {forceStopTarget && (
           <div className="force-stop-overlay">
             <div className="force-stop-card">
               <div className="force-stop-header">
                 <div className="force-stop-icon-wrap">
                   <AlertTriangle size={20} className="text-red" />
                 </div>
-                <div className="force-stop-title">Force Stop Update?</div>
+                <div className="force-stop-title">
+                  {forceStopTarget === "fabriq" ? "Force Stop Fabriq Update?" : "Force Stop Update?"}
+                </div>
               </div>
 
               <div className="force-stop-body">
                 <p>
-                  This will immediately stop the current pipeline and discard its resumable checkpoint.
+                  {forceStopTarget === "fabriq"
+                    ? "This will immediately stop the current Fabriq pipeline and discard its resumable checkpoint."
+                    : "This will immediately stop the current pipeline and discard its resumable checkpoint."}
                 </p>
                 <p>
-                  The next update will start fresh.
+                  {forceStopTarget === "fabriq"
+                    ? "The next Fabriq update will start fresh."
+                    : "The next update will start fresh."}
                 </p>
                 <p className="force-stop-sub">
                   Already completed merge/publish stages will not be rolled back.
@@ -1452,7 +1528,7 @@ export function FabriqControlModal({
                 <button
                   type="button"
                   className="fabriq-btn btn-secondary"
-                  onClick={() => setShowForceStopConfirm(false)}
+                  onClick={() => setForceStopTarget(null)}
                   disabled={actionLoading}
                 >
                   Cancel
@@ -1460,7 +1536,7 @@ export function FabriqControlModal({
                 <button
                   type="button"
                   className="fabriq-btn btn-danger"
-                  onClick={handleForceStopLp}
+                  onClick={forceStopTarget === "fabriq" ? handleForceStopFabriq : handleForceStopLp}
                   disabled={actionLoading}
                 >
                   <AlertOctagon size={14} /> Force Stop

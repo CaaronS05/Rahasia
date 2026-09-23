@@ -8,12 +8,15 @@ export type FabriqStatus =
   | "completed"
   | "error";
 
+export type FabriqStopMode = "graceful" | "force" | null;
+
 export type FabriqStage =
   | "idle"
   | "enrich"
   | "merge"
   | "publish"
   | "completed"
+  | "stopped"
   | "error";
 
 export type FabriqMode = "stale" | "full";
@@ -34,6 +37,8 @@ export interface FabriqState {
   failed: number;
   skipped: number;
   runtimeSeconds: number;
+  stopMode?: FabriqStopMode;
+  checkpointPreserved?: boolean;
   logs: string[];
   running: boolean;
 }
@@ -88,6 +93,21 @@ export async function stopFabriqRefresh(): Promise<FabriqState> {
   const payload = await response.json();
   if (!response.ok && response.status !== 409) {
     throw new Error(payload.error || `Stop failed with status ${response.status}`);
+  }
+  return payload;
+}
+
+export async function forceStopFabriqRefresh(): Promise<FabriqState> {
+  const response = await fetch(`${FABRIQ_API_BASE}/api/fabriq/force-stop`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+  });
+
+  const payload = await response.json();
+  if (!response.ok && response.status !== 409) {
+    throw new Error(payload.error || `Force stop failed with status ${response.status}`);
   }
   return payload;
 }

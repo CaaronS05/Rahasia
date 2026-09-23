@@ -41,6 +41,9 @@ let state = {
     skipped: 0,
     runtimeSeconds: 0,
 
+    stopMode: null, // "graceful" | "force" | null
+    checkpointPreserved: true,
+
     logs: [],
 };
 
@@ -90,11 +93,37 @@ function lpAgentPublicState() {
         lpAgentState.status === "running" ||
         lpAgentState.status === "stopping";
 
-    let runtimeSeconds = lpAgentState.runtimeSeconds;
-    if (isRunning && lpAgentState.startedAt) {
-        const start = Date.parse(lpAgentState.startedAt);
-        if (Number.isFinite(start)) {
-            runtimeSeconds = Math.max(0, Math.floor((Date.now() - start) / 1000));
+    let runtimeSeconds =
+        lpAgentState.runtimeSeconds;
+
+    if (lpAgentState.startedAt) {
+        const start =
+            Date.parse(
+                lpAgentState.startedAt
+            );
+
+        const end =
+            lpAgentState.finishedAt
+                ? Date.parse(
+                    lpAgentState.finishedAt
+                )
+                : Date.now();
+
+        if (
+            Number.isFinite(start) &&
+            Number.isFinite(end)
+        ) {
+            runtimeSeconds =
+                Math.max(
+                    0,
+                    Math.floor(
+                        (
+                            end -
+                            start
+                        ) /
+                        1000
+                    )
+                );
         }
     }
 
@@ -378,8 +407,18 @@ function sanitizeConcurrency(value) {
 }
 
 function publicState() {
+    let runtimeSeconds = state.runtimeSeconds;
+    if (state.startedAt) {
+        const start = Date.parse(state.startedAt);
+        const end = state.finishedAt ? Date.parse(state.finishedAt) : Date.now();
+        if (Number.isFinite(start) && Number.isFinite(end)) {
+            runtimeSeconds = Math.max(0, Math.floor((end - start) / 1000));
+        }
+    }
+
     return {
         ...state,
+        runtimeSeconds,
         running: Boolean(currentChild) || state.status === "running" || state.status === "stopping",
     };
 }
@@ -753,6 +792,8 @@ async function startPipeline({ mode, concurrency, resume }) {
     state.finishedAt = null;
     state.exitCode = null;
     state.error = null;
+    state.stopMode = null;
+    state.checkpointPreserved = true;
 
     if (!isResume) {
         state.total = 0;
@@ -788,12 +829,26 @@ async function startPipeline({ mode, concurrency, resume }) {
             enrichEnv.FABRIQ_REFRESH_BEFORE = refreshBefore;
         }
 
-        const enrichResult = await runChildProcess("npm", ["run", "enrich:fabriq"], enrichEnv, parseEnrichLine);
+        const enrichResult = await runChildProcess(
+            process.execPath,
+            ["scripts/fabriq/enrich-wallets.mjs"],
+            enrichEnv,
+            parseEnrichLine
+        );
 
-        if (state.status === "stopping") {
+        if (state.status === "stopping" || state.status === "stopped") {
+            const wasForce = state.stopMode === "force";
+            if (wasForce) {
+                discardFabriqCheckpoint();
+            }
             state.status = "stopped";
+            state.stage = "stopped";
             state.finishedAt = new Date().toISOString();
-            addLog("[CONTROL] Enrichment stopped by user.");
+            if (wasForce) {
+                addLog("[CONTROL] Fabriq pipeline force-stopped. Checkpoint discarded. Next update will start fresh.");
+            } else {
+                addLog("[CONTROL] Enrichment stopped by user. Progress is saved and can be resumed.");
+            }
             stopRuntimeTicker();
             broadcastState("status");
             return;
@@ -818,16 +873,34 @@ async function startPipeline({ mode, concurrency, resume }) {
         // ----------------------------------------------------
         // 2. Stage: merge
         // ----------------------------------------------------
+        if (state.status === "stopping" || state.status === "stopped") return;
+
         state.stage = "merge";
         addLog("[CONTROL] Enrichment completed. Running merge:fabriq...");
         broadcastState("stage");
 
-        const mergeResult = await runChildProcess("npm", ["run", "merge:fabriq"], {});
+        const mergeResult = await runChildProcess(
+            process.execPath,
+            [
+                "--experimental-strip-types",
+                "scripts/pipeline/merge-fabriq.ts",
+            ],
+            {}
+        );
 
-        if (state.status === "stopping") {
+        if (state.status === "stopping" || state.status === "stopped") {
+            const wasForce = state.stopMode === "force";
+            if (wasForce) {
+                discardFabriqCheckpoint();
+            }
             state.status = "stopped";
+            state.stage = "stopped";
             state.finishedAt = new Date().toISOString();
-            addLog("[CONTROL] Pipeline stopped by user during merge.");
+            if (wasForce) {
+                addLog("[CONTROL] Fabriq pipeline force-stopped during merge. Checkpoint discarded.");
+            } else {
+                addLog("[CONTROL] Pipeline stopped by user during merge.");
+            }
             stopRuntimeTicker();
             broadcastState("status");
             return;
@@ -848,16 +921,34 @@ async function startPipeline({ mode, concurrency, resume }) {
         // ----------------------------------------------------
         // 3. Stage: publish
         // ----------------------------------------------------
+        if (state.status === "stopping" || state.status === "stopped") return;
+
         state.stage = "publish";
         addLog("[CONTROL] Merge completed. Running publish:wallets...");
         broadcastState("stage");
 
-        const publishResult = await runChildProcess("npm", ["run", "publish:wallets"], {});
+        const publishResult = await runChildProcess(
+            process.execPath,
+            [
+                "--experimental-strip-types",
+                "scripts/pipeline/publish-wallets.ts",
+            ],
+            {}
+        );
 
-        if (state.status === "stopping") {
+        if (state.status === "stopping" || state.status === "stopped") {
+            const wasForce = state.stopMode === "force";
+            if (wasForce) {
+                discardFabriqCheckpoint();
+            }
             state.status = "stopped";
+            state.stage = "stopped";
             state.finishedAt = new Date().toISOString();
-            addLog("[CONTROL] Pipeline stopped by user during publish.");
+            if (wasForce) {
+                addLog("[CONTROL] Fabriq pipeline force-stopped during publish. Checkpoint discarded.");
+            } else {
+                addLog("[CONTROL] Pipeline stopped by user during publish.");
+            }
             stopRuntimeTicker();
             broadcastState("status");
             return;
@@ -1271,6 +1362,18 @@ async function startLpAgentRefresh({
     }
 }
 
+function discardFabriqCheckpoint() {
+    try {
+        const fabriqCheckpointPath = path.join(ROOT, "data/checkpoints/fabriq.jsonl");
+        if (fs.existsSync(fabriqCheckpointPath)) {
+            fs.unlinkSync(fabriqCheckpointPath);
+            addLog("[CONTROL] Discarded checkpoint: data/checkpoints/fabriq.jsonl");
+        }
+    } catch (err) {
+        console.error("Failed to delete fabriq checkpoint:", err);
+    }
+}
+
 function discardLpAgentCheckpoints(stage) {
     try {
         const lpCheckpointPath = path.join(ROOT, "data/checkpoints/lpagent.jsonl");
@@ -1283,15 +1386,7 @@ function discardLpAgentCheckpoints(stage) {
     }
 
     if (stage === "fabriq_enrich") {
-        try {
-            const fabriqCheckpointPath = path.join(ROOT, "data/checkpoints/fabriq.jsonl");
-            if (fs.existsSync(fabriqCheckpointPath)) {
-                fs.unlinkSync(fabriqCheckpointPath);
-                addLpAgentLog("[CONTROL] Discarded checkpoint: data/checkpoints/fabriq.jsonl");
-            }
-        } catch (err) {
-            console.error("Failed to delete fabriq checkpoint:", err);
-        }
+        discardFabriqCheckpoint();
     }
 }
 
@@ -1374,7 +1469,9 @@ function stopPipeline() {
     }
 
     state.status = "stopping";
-    addLog("[CONTROL] Stopping Fabriq pipeline...");
+    state.stopMode = "graceful";
+    state.checkpointPreserved = true;
+    addLog("[CONTROL] Stopping Fabriq pipeline (preserving checkpoint)...");
     broadcastState("status");
 
     if (currentChild) {
@@ -1394,7 +1491,53 @@ function stopPipeline() {
         }, 4000);
     } else {
         state.status = "stopped";
+        state.stage = "stopped";
+        state.finishedAt = new Date().toISOString();
+        stopRuntimeTicker();
         broadcastState("status");
+    }
+
+    return true;
+}
+
+function forceStopPipeline() {
+    if (!currentChild && state.status !== "running" && state.status !== "stopping") {
+        return false;
+    }
+
+    const currentStage = state.stage;
+    state.status = "stopping";
+    state.stopMode = "force";
+    state.checkpointPreserved = false;
+    addLog("[CONTROL] Force-stopping Fabriq pipeline...");
+    broadcastState("status");
+
+    discardFabriqCheckpoint();
+
+    if (currentChild) {
+        try {
+            currentChild.kill("SIGTERM");
+        } catch (e) {
+            console.error(e);
+        }
+
+        const targetChild = currentChild;
+        setTimeout(() => {
+            if (currentChild === targetChild) {
+                try {
+                    currentChild.kill("SIGKILL");
+                } catch { }
+            }
+            discardFabriqCheckpoint();
+        }, 1500);
+    } else {
+        state.status = "stopped";
+        state.stage = "stopped";
+        state.finishedAt = new Date().toISOString();
+        discardFabriqCheckpoint();
+        stopRuntimeTicker();
+        broadcastState("status");
+        addLog("[CONTROL] Fabriq pipeline force-stopped. Checkpoint discarded. Next update will start fresh.");
     }
 
     return true;
@@ -1711,6 +1854,18 @@ const server = http.createServer(async (request, response) => {
     // ------------------------------------------------------
     if (request.method === "POST" && url.pathname === "/api/fabriq/stop") {
         const stopped = stopPipeline();
+        json(request, response, stopped ? 202 : 409, {
+            stopped,
+            ...publicState(),
+        });
+        return;
+    }
+
+    // ------------------------------------------------------
+    // POST /api/fabriq/force-stop
+    // ------------------------------------------------------
+    if (request.method === "POST" && url.pathname === "/api/fabriq/force-stop") {
+        const stopped = forceStopPipeline();
         json(request, response, stopped ? 202 : 409, {
             stopped,
             ...publicState(),
