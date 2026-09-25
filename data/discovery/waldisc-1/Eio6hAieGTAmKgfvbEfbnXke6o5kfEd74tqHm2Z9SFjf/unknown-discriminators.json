@@ -1,0 +1,46 @@
+[
+  {
+    "discriminatorHex": "e445a52e51cb9a1d",
+    "classification": "ANCHOR_EVENT_CPI_OR_INTERNAL",
+    "count": 378,
+    "sources": {
+      "topLevel": 0,
+      "inner": 378
+    },
+    "sampleSignatures": [
+      "4bewBcDXqTUCVSqUgzT9VuKUAFHiM5HnpCgDxxwdRr9KgbtRpR8vqEhv6dLpahsLw5Ph9MWWMf3JxXQ9GgeDZLZ1",
+      "4bewBcDXqTUCVSqUgzT9VuKUAFHiM5HnpCgDxxwdRr9KgbtRpR8vqEhv6dLpahsLw5Ph9MWWMf3JxXQ9GgeDZLZ1",
+      "4bewBcDXqTUCVSqUgzT9VuKUAFHiM5HnpCgDxxwdRr9KgbtRpR8vqEhv6dLpahsLw5Ph9MWWMf3JxXQ9GgeDZLZ1",
+      "4bewBcDXqTUCVSqUgzT9VuKUAFHiM5HnpCgDxxwdRr9KgbtRpR8vqEhv6dLpahsLw5Ph9MWWMf3JxXQ9GgeDZLZ1",
+      "5E8vYxHyAu3FXTXZVQifzXrFYJsz9iEFdg4rJHeLMrffKUdxVpLKFGagN7AzpQFfXhgErjzrGmufQYor9N3Y8D8s"
+    ],
+    "sampleAccountCounts": [
+      1,
+      1,
+      1,
+      1,
+      1
+    ],
+    "sampleDataLengths": [
+      145,
+      163,
+      145,
+      163,
+      145
+    ],
+    "innerEvents": {
+      "Swap": 170,
+      "Swap2Evt": 170,
+      "ClaimFee": 5,
+      "ClaimFee2": 5,
+      "Rebalancing": 4,
+      "PositionClose": 4,
+      "PositionCreate": 4,
+      "IncreasePositionLength": 4,
+      "CompositionFee": 4,
+      "AddLiquidity": 8
+    },
+    "isSuspectedLpInstruction": false,
+    "explanation": "Anchor event CPI self-call dispatching IDL event 'Swap'"
+  }
+]

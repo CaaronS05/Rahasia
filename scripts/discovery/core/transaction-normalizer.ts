@@ -63,11 +63,11 @@ export function normalizeTransactionInstructions(txItem: any): NormalizedInstruc
         .filter((k): k is string => Boolean(k));
 
     const loadedWritable: string[] = Array.isArray(meta?.loadedAddresses?.writable)
-        ? meta.loadedAddresses.writable.map(pubkeyOf).filter((k): k is string => Boolean(k))
+        ? meta.loadedAddresses.writable.map(pubkeyOf).filter((k: any): k is string => Boolean(k))
         : [];
 
     const loadedReadonly: string[] = Array.isArray(meta?.loadedAddresses?.readonly)
-        ? meta.loadedAddresses.readonly.map(pubkeyOf).filter((k): k is string => Boolean(k))
+        ? meta.loadedAddresses.readonly.map(pubkeyOf).filter((k: any): k is string => Boolean(k))
         : [];
 
     const allKeys: string[] = [...staticKeys, ...loadedWritable, ...loadedReadonly];

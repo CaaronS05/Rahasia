@@ -14,10 +14,11 @@ import {
     normalizeTransactionInstructions,
     type NormalizedInstruction,
 } from "./transaction-normalizer.ts";
-import { loadMeteoraIdl, type IdlDiscriminatorMap } from "./meteora-idl.ts";
+import { loadMeteoraIdl, type MeteoraIdlBundle } from "./meteora-idl.ts";
 import {
     decodeLpInstruction,
     type DecodedLpInstruction,
+    type UnknownDiscriminatorClassification,
 } from "./lp-instruction-decoder.ts";
 import { resolveLpWallet, type ResolvedWalletResult } from "./wallet-resolver.ts";
 
@@ -25,6 +26,7 @@ export type VerificationStatus =
     | "MATCH"
     | "OWNER_MISMATCH"
     | "POOL_MISMATCH"
+    | "NON_METEORA_ACCOUNT"
     | "DELETED_OR_CLOSED"
     | "LEGACY_POSITION"
     | "UNKNOWN_ACCOUNT"
@@ -38,6 +40,7 @@ export interface LpEventRecord {
     source: "top-level" | "inner";
     parentInstructionIndex: number | null;
     instructionIndex: number;
+    programId: string;
     instruction: string;
     category: string;
     pool: string;
@@ -71,6 +74,22 @@ export interface RejectedSampleRecord {
     reason: string;
 }
 
+export interface UnknownDiscriminatorRecord {
+    discriminatorHex: string;
+    classification: UnknownDiscriminatorClassification;
+    count: number;
+    sources: {
+        topLevel: number;
+        inner: number;
+    };
+    sampleSignatures: string[];
+    sampleAccountCounts: number[];
+    sampleDataLengths: number[];
+    innerEvents?: Record<string, number>;
+    isSuspectedLpInstruction: boolean;
+    explanation: string;
+}
+
 export interface PoolDiscoverySummary {
     step: "WALDISC-1";
     generatedAt: string;
@@ -90,11 +109,22 @@ export interface PoolDiscoverySummary {
         days: number;
         pagesFetched: number;
         transactionsFetched: number;
+        transactionLimit: number;
+        transactionLimitReached: boolean;
+        historyWindowComplete: boolean;
         meteoraInstructionsDecoded: number;
         lpInstructionsAccepted: number;
         nonLpInstructionsRejected: number;
         wrongPoolInstructionsRejected: number;
-        unknownDiscriminators: number;
+        unknownDiscriminatorTotalCount: number;
+        unknownDiscriminatorUniqueCount: number;
+        unknownDiscriminators: {
+            total: number;
+            unique: number;
+            idlEvent: number;
+            anchorInternal: number;
+            unexplained: number;
+        };
         walletResolvedEvents: number;
         unresolvedEvents: number;
         uniqueWallets: number;
@@ -103,6 +133,7 @@ export interface PoolDiscoverySummary {
         verificationMismatchCount: number;
         deletedOrClosedCount: number;
         legacyPositionCount: number;
+        nonMeteoraAccountCount: number;
         unknownAccountCount: number;
     };
     rejectedSamples: RejectedSampleRecord[];
@@ -122,8 +153,10 @@ export interface ScanPoolHistoryResult {
     wallets: DiscoveredWalletRecord[];
     events: LpEventRecord[];
     rejectedSamples: RejectedSampleRecord[];
+    unknownDiscriminators: UnknownDiscriminatorRecord[];
     outputDirectory: string;
 }
+
 
 function anchorDiscriminator(accountName: string): Buffer {
     return crypto
@@ -191,12 +224,13 @@ export async function scanPoolHistory(
 
     // 2. Load IDL
     log("[SCAN] Loading official Meteora DLMM IDL...");
-    const discriminatorMap = await loadMeteoraIdl();
+    const idlBundle = await loadMeteoraIdl(config.meteoraDlmmProgramId);
 
     // 3. Historical Transaction Retrieval
     const rawTransactions: any[] = [];
     let pagesFetched = 0;
     let effectiveMode = config.scanMode;
+    let paginationExhausted = false;
 
     const useGtfa =
         config.scanMode === "gtfa" ||
@@ -233,11 +267,12 @@ export async function scanPoolHistory(
                 rawTransactions.push(...pageResult.data);
                 log(`[gTFA] Page ${pagesFetched}: fetched ${count} txs (total: ${rawTransactions.length})`);
 
-                if (
-                    !pageResult.paginationToken ||
-                    count === 0 ||
-                    (maxTransactions > 0 && rawTransactions.length >= maxTransactions)
-                ) {
+                if (!pageResult.paginationToken || count === 0) {
+                    paginationExhausted = true;
+                    break;
+                }
+
+                if (maxTransactions > 0 && rawTransactions.length >= maxTransactions) {
                     break;
                 }
                 paginationToken = pageResult.paginationToken;
@@ -248,6 +283,7 @@ export async function scanPoolHistory(
                 effectiveMode = "standard";
                 rawTransactions.length = 0;
                 pagesFetched = 0;
+                paginationExhausted = false;
             } else {
                 throw gtfaErr;
             }
@@ -268,7 +304,10 @@ export async function scanPoolHistory(
                 beforeSignature
             );
 
-            if (sigs.length === 0) break;
+            if (sigs.length === 0) {
+                paginationExhausted = true;
+                break;
+            }
 
             const inRangeSigs = sigs.filter((s) => {
                 if (s.err != null || s.blockTime == null) return false;
@@ -304,17 +343,28 @@ export async function scanPoolHistory(
 
             const oldest = sigs[sigs.length - 1];
             if (
-                oldest.blockTime != null && oldest.blockTime < startTime ||
-                sigs.length < sigLimit ||
-                (maxTransactions > 0 && rawTransactions.length >= maxTransactions)
+                (oldest.blockTime != null && oldest.blockTime < startTime) ||
+                sigs.length < sigLimit
             ) {
+                paginationExhausted = true;
+                break;
+            }
+
+            if (maxTransactions > 0 && rawTransactions.length >= maxTransactions) {
                 break;
             }
             beforeSignature = oldest.signature;
         }
     }
 
+    const transactionLimitReached =
+        maxTransactions > 0 &&
+        rawTransactions.length >= maxTransactions &&
+        !paginationExhausted;
+    const historyWindowComplete = paginationExhausted;
+
     log(`[SCAN] Total raw transactions retrieved: ${rawTransactions.length}`);
+    log(`[SCAN] Scan cap stats: limit=${maxTransactions}, limitReached=${transactionLimitReached}, windowComplete=${historyWindowComplete}`);
 
     // 4. Normalize & Decode instructions
     let meteoraInstructionsDecoded = 0;
@@ -327,6 +377,8 @@ export async function scanPoolHistory(
 
     const acceptedEvents: LpEventRecord[] = [];
     const rejectedSamples: RejectedSampleRecord[] = [];
+
+    const unknownHistogram = new Map<string, UnknownDiscriminatorRecord>();
 
     for (const rawTx of rawTransactions) {
         const normalizedList = normalizeTransactionInstructions(rawTx);
@@ -341,11 +393,58 @@ export async function scanPoolHistory(
                 ix,
                 poolAddress,
                 config.meteoraDlmmProgramId,
-                discriminatorMap
+                idlBundle.instructionMap,
+                idlBundle.eventMap
             );
 
             if (decoded.status === "UNKNOWN_DISCRIMINATOR") {
                 unknownDiscriminators++;
+                const discHex = decoded.discriminatorHex || "unknown";
+                let entry = unknownHistogram.get(discHex);
+                if (!entry) {
+                    const classification: UnknownDiscriminatorClassification =
+                        decoded.unknownClassification?.classification ||
+                        "UNKNOWN_REAL_INSTRUCTION";
+                    const explanation =
+                        decoded.unknownClassification?.explanation ||
+                        "Unknown instruction discriminator";
+                    entry = {
+                        discriminatorHex: discHex,
+                        classification,
+                        count: 0,
+                        sources: { topLevel: 0, inner: 0 },
+                        sampleSignatures: [],
+                        sampleAccountCounts: [],
+                        sampleDataLengths: [],
+                        innerEvents: {},
+                        isSuspectedLpInstruction: Boolean(
+                            decoded.unknownClassification?.isSuspectedLpInstruction
+                        ),
+                        explanation,
+                    };
+                    unknownHistogram.set(discHex, entry);
+                }
+                entry.count++;
+                if (ix.source === "top-level") {
+                    entry.sources.topLevel++;
+                } else {
+                    entry.sources.inner++;
+                }
+                if (entry.sampleSignatures.length < 5) {
+                    entry.sampleSignatures.push(ix.signature);
+                    entry.sampleAccountCounts.push(ix.accounts.length);
+                    entry.sampleDataLengths.push(
+                        decoded.rawBuffer ? decoded.rawBuffer.length : 0
+                    );
+                }
+                if (
+                    entry.classification === "ANCHOR_EVENT_CPI_OR_INTERNAL" &&
+                    decoded.unknownClassification?.eventName
+                ) {
+                    const ev = decoded.unknownClassification.eventName;
+                    if (!entry.innerEvents) entry.innerEvents = {};
+                    entry.innerEvents[ev] = (entry.innerEvents[ev] || 0) + 1;
+                }
             } else if (decoded.status === "NON_LP_INSTRUCTION") {
                 nonLpInstructionsRejected++;
                 if (rejectedSamples.length < 10) {
@@ -390,6 +489,7 @@ export async function scanPoolHistory(
                     source: ix.source,
                     parentInstructionIndex: ix.parentIndex,
                     instructionIndex: ix.instructionIndex,
+                    programId: ix.programId,
                     instruction: decoded.instructionName!,
                     category: decoded.category!,
                     pool: decoded.pool!,
@@ -407,11 +507,31 @@ export async function scanPoolHistory(
         }
     }
 
+    let idlEventCount = 0;
+    let anchorInternalCount = 0;
+    let unexplainedCount = 0;
+
+    for (const entry of unknownHistogram.values()) {
+        if (entry.classification === "IDL_EVENT_DISCRIMINATOR") {
+            idlEventCount += entry.count;
+        } else if (entry.classification === "ANCHOR_EVENT_CPI_OR_INTERNAL") {
+            anchorInternalCount += entry.count;
+        } else {
+            unexplainedCount += entry.count;
+        }
+    }
+
+    const unknownRecords: UnknownDiscriminatorRecord[] = Array.from(
+        unknownHistogram.values()
+    ).sort((a, b) => b.count - a.count);
+
     log(`[SCAN] Meteora Instructions Decoded: ${meteoraInstructionsDecoded}`);
     log(`[SCAN] Accepted LP Instructions: ${lpInstructionsAccepted}`);
     log(`[SCAN] Resolved Wallet Events: ${walletResolvedEvents}`);
     log(`[SCAN] Non-LP Rejected: ${nonLpInstructionsRejected}`);
     log(`[SCAN] Wrong-Pool Rejected: ${wrongPoolInstructionsRejected}`);
+    log(`[SCAN] Unknown Discriminators Total: ${unknownDiscriminators} (Unique: ${unknownRecords.length})`);
+    log(`[SCAN] Unknown breakdown: IDL Events=${idlEventCount}, Anchor/Internal=${anchorInternalCount}, Unexplained=${unexplainedCount}`);
 
     // 5. On-Chain Verification of Positions
     const uniquePositions = Array.from(
@@ -446,6 +566,7 @@ export async function scanPoolHistory(
     let verificationMismatchCount = 0;
     let deletedOrClosedCount = 0;
     let legacyPositionCount = 0;
+    let nonMeteoraAccountCount = 0;
     let unknownAccountCount = 0;
 
     for (let i = 0; i < uniquePositions.length; i++) {
@@ -456,6 +577,18 @@ export async function scanPoolHistory(
             deletedOrClosedCount++;
             positionStatusMap.set(posAddr, {
                 status: "DELETED_OR_CLOSED",
+                onchainPool: null,
+                onchainOwner: null,
+            });
+            continue;
+        }
+
+        // Section 5: Harden PositionV2 Verification — verify account.owner === METEORA_DLMM_PROGRAM_ID
+        if (account.owner !== config.meteoraDlmmProgramId) {
+            nonMeteoraAccountCount++;
+            verificationMismatchCount++;
+            positionStatusMap.set(posAddr, {
+                status: "NON_METEORA_ACCOUNT",
                 onchainPool: null,
                 onchainOwner: null,
             });
@@ -504,7 +637,6 @@ export async function scanPoolHistory(
             status = "POOL_MISMATCH";
             verificationMismatchCount++;
         } else {
-            // Note: will be matched with resolved wallet below
             status = "MATCH";
         }
 
@@ -642,11 +774,22 @@ export async function scanPoolHistory(
             days,
             pagesFetched,
             transactionsFetched: rawTransactions.length,
+            transactionLimit: maxTransactions,
+            transactionLimitReached,
+            historyWindowComplete,
             meteoraInstructionsDecoded,
             lpInstructionsAccepted,
             nonLpInstructionsRejected,
             wrongPoolInstructionsRejected,
-            unknownDiscriminators,
+            unknownDiscriminatorTotalCount: unknownDiscriminators,
+            unknownDiscriminatorUniqueCount: unknownRecords.length,
+            unknownDiscriminators: {
+                total: unknownDiscriminators,
+                unique: unknownRecords.length,
+                idlEvent: idlEventCount,
+                anchorInternal: anchorInternalCount,
+                unexplained: unexplainedCount,
+            },
             walletResolvedEvents,
             unresolvedEvents,
             uniqueWallets: uniqueWallets.length,
@@ -655,6 +798,7 @@ export async function scanPoolHistory(
             verificationMismatchCount,
             deletedOrClosedCount,
             legacyPositionCount,
+            nonMeteoraAccountCount,
             unknownAccountCount,
         },
         rejectedSamples,
@@ -669,19 +813,24 @@ export async function scanPoolHistory(
     const summaryPath = path.join(outputDir, "summary.json");
     const walletsPath = path.join(outputDir, "wallets.json");
     const eventsPath = path.join(outputDir, "lp-events.json");
+    const unknownsPath = path.join(outputDir, "unknown-discriminators.json");
 
     atomicWriteJson(summaryPath, summary);
     atomicWriteJson(walletsPath, uniqueWallets);
     atomicWriteJson(eventsPath, acceptedEvents);
+    atomicWriteJson(unknownsPath, unknownRecords);
 
     log(`[SAVE] Output saved to: ${outputDir}`);
     log(`[SAVE] summary.json (${summary.scan.uniqueWallets} unique wallets, ${summary.scan.walletResolvedEvents} resolved events)`);
+    log(`[SAVE] unknown-discriminators.json (${unknownRecords.length} unique discriminator families)`);
 
     return {
         summary,
         wallets: uniqueWallets,
         events: acceptedEvents,
         rejectedSamples,
+        unknownDiscriminators: unknownRecords,
         outputDirectory: outputDir,
     };
 }
+

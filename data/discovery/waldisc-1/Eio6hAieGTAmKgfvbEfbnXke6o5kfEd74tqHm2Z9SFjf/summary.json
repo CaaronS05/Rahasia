@@ -1,6 +1,6 @@
 {
   "step": "WALDISC-1",
-  "generatedAt": "2026-09-23T14:29:59.491Z",
+  "generatedAt": "2026-09-25T13:44:55.408Z",
   "pool": {
     "address": "Eio6hAieGTAmKgfvbEfbnXke6o5kfEd74tqHm2Z9SFjf",
     "name": "JUP-SOL",
@@ -12,92 +12,104 @@
   },
   "scan": {
     "mode": "gtfa",
-    "startTime": "2026-09-16T14:29:53.000Z",
-    "endTime": "2026-09-23T14:29:53.000Z",
+    "startTime": "2026-09-18T13:44:48.000Z",
+    "endTime": "2026-09-25T13:44:48.000Z",
     "days": 7,
     "pagesFetched": 10,
     "transactionsFetched": 1000,
-    "meteoraInstructionsDecoded": 1480,
+    "transactionLimit": 1000,
+    "transactionLimitReached": true,
+    "historyWindowComplete": false,
+    "meteoraInstructionsDecoded": 577,
     "lpInstructionsAccepted": 21,
-    "nonLpInstructionsRejected": 475,
+    "nonLpInstructionsRejected": 174,
     "wrongPoolInstructionsRejected": 0,
-    "unknownDiscriminators": 980,
+    "unknownDiscriminatorTotalCount": 378,
+    "unknownDiscriminatorUniqueCount": 1,
+    "unknownDiscriminators": {
+      "total": 378,
+      "unique": 1,
+      "idlEvent": 0,
+      "anchorInternal": 378,
+      "unexplained": 0
+    },
     "walletResolvedEvents": 21,
     "unresolvedEvents": 0,
-    "uniqueWallets": 3,
-    "uniquePositions": 7,
-    "verificationMatchCount": 2,
+    "uniqueWallets": 2,
+    "uniquePositions": 6,
+    "verificationMatchCount": 1,
     "verificationMismatchCount": 0,
-    "deletedOrClosedCount": 6,
+    "deletedOrClosedCount": 5,
     "legacyPositionCount": 0,
+    "nonMeteoraAccountCount": 0,
     "unknownAccountCount": 0
   },
   "rejectedSamples": [
     {
-      "signature": "27sg1Nw2BZUUt1BapfKSd1AyDPZEgdJYt3vqntcmN4uVhSAShr3sHpHuVBGkxuPoZJiU5UgpiwnAPqviLbp8q7bh",
+      "signature": "4bewBcDXqTUCVSqUgzT9VuKUAFHiM5HnpCgDxxwdRr9KgbtRpR8vqEhv6dLpahsLw5Ph9MWWMf3JxXQ9GgeDZLZ1",
       "source": "inner",
       "instructionIndex": 1,
-      "instructionName": "swap",
-      "reason": "Instruction 'swap' is not an accepted LP lifecycle instruction"
-    },
-    {
-      "signature": "5U4orSxAqwLMkvJHfyQkQyV2JD64YGX8RsYDKrQtPiJiNBswE4etq82mGfQkyMrk9VtgyxRyXserDYoe2zQ3Pgyt",
-      "source": "inner",
-      "instructionIndex": 0,
-      "instructionName": "swap",
-      "reason": "Instruction 'swap' is not an accepted LP lifecycle instruction"
-    },
-    {
-      "signature": "3buGU1Fzqd261SCQH9L8rgXmMUL7W9mJPvHdnUYZZ3m26S7h8TMjfyh6cgxBQBAcJab2jZtW8uHACJeCbi6wQ2Gj",
-      "source": "inner",
-      "instructionIndex": 14,
-      "instructionName": "swap",
-      "reason": "Instruction 'swap' is not an accepted LP lifecycle instruction"
-    },
-    {
-      "signature": "2XkSf89uysrSyHwh1wYGjuTZrPy4QbqMMwxTWjtoEUqTgg35gCg1ryXHrEpCd57tAwg5JwNCPLpsFptshj2F2HH5",
-      "source": "inner",
-      "instructionIndex": 14,
-      "instructionName": "swap",
-      "reason": "Instruction 'swap' is not an accepted LP lifecycle instruction"
-    },
-    {
-      "signature": "4uVaTZaJB9zL9HwZhzDFfyr9QukqiurYN6onMdzQXven3A9MJb2k5T5doxgST3LEcMwRLjkBq9gRZiwn2qq4HiYA",
-      "source": "inner",
-      "instructionIndex": 0,
-      "instructionName": "swap",
-      "reason": "Instruction 'swap' is not an accepted LP lifecycle instruction"
-    },
-    {
-      "signature": "2xsMTjtMrYy1HFjgKjFh1BtG2EdTjDkbtvqUkujj8Ag1px7oPdQh2SiJCjFDxtE54rrW1nmETfpXfZ6wDcMr1BBL",
-      "source": "inner",
-      "instructionIndex": 5,
       "instructionName": "swap2",
       "reason": "Instruction 'swap2' is not an accepted LP lifecycle instruction"
     },
     {
-      "signature": "2xsMTjtMrYy1HFjgKjFh1BtG2EdTjDkbtvqUkujj8Ag1px7oPdQh2SiJCjFDxtE54rrW1nmETfpXfZ6wDcMr1BBL",
+      "signature": "4bewBcDXqTUCVSqUgzT9VuKUAFHiM5HnpCgDxxwdRr9KgbtRpR8vqEhv6dLpahsLw5Ph9MWWMf3JxXQ9GgeDZLZ1",
+      "source": "inner",
+      "instructionIndex": 7,
+      "instructionName": "swap2",
+      "reason": "Instruction 'swap2' is not an accepted LP lifecycle instruction"
+    },
+    {
+      "signature": "5E8vYxHyAu3FXTXZVQifzXrFYJsz9iEFdg4rJHeLMrffKUdxVpLKFGagN7AzpQFfXhgErjzrGmufQYor9N3Y8D8s",
+      "source": "inner",
+      "instructionIndex": 19,
+      "instructionName": "swap",
+      "reason": "Instruction 'swap' is not an accepted LP lifecycle instruction"
+    },
+    {
+      "signature": "5E8vYxHyAu3FXTXZVQifzXrFYJsz9iEFdg4rJHeLMrffKUdxVpLKFGagN7AzpQFfXhgErjzrGmufQYor9N3Y8D8s",
       "source": "inner",
       "instructionIndex": 26,
       "instructionName": "swap",
       "reason": "Instruction 'swap' is not an accepted LP lifecycle instruction"
     },
     {
-      "signature": "5Fuc3MBPmy8iCef2LRaLDVhVKJC11nFGWnUivBHewzVGRa1Lm9kHFRX6oqDrcJBaEBs6chktwojDsBxUgTi6oYGa",
+      "signature": "tpzWjFFuQKpk43raujpQD8yt2p7uqsh6Zhi3TmWLqXNSw9JtqsSpyAijmhWz8CHdrTHxu6GZACkngaVUSg8vffz",
+      "source": "inner",
+      "instructionIndex": 19,
+      "instructionName": "swap",
+      "reason": "Instruction 'swap' is not an accepted LP lifecycle instruction"
+    },
+    {
+      "signature": "tpzWjFFuQKpk43raujpQD8yt2p7uqsh6Zhi3TmWLqXNSw9JtqsSpyAijmhWz8CHdrTHxu6GZACkngaVUSg8vffz",
+      "source": "inner",
+      "instructionIndex": 26,
+      "instructionName": "swap",
+      "reason": "Instruction 'swap' is not an accepted LP lifecycle instruction"
+    },
+    {
+      "signature": "fzcD8YaXB1eLQ4UGZzKqsYn22fvpPbbvduZbKGtPcc2fd4tPQZL51tLRZByEVbGhDvwq62XnUcvr59nf8pDM3pZ",
+      "source": "inner",
+      "instructionIndex": 4,
+      "instructionName": "swap",
+      "reason": "Instruction 'swap' is not an accepted LP lifecycle instruction"
+    },
+    {
+      "signature": "3LpD7u1zz4KeFE4K1GrLbxmgbBzpbiyodwaRRBaczVwBanssme58ifVC9MJwUcrT1W5UscJ2T3xN3DXJXMDWKqmm",
       "source": "inner",
       "instructionIndex": 0,
       "instructionName": "swap",
       "reason": "Instruction 'swap' is not an accepted LP lifecycle instruction"
     },
     {
-      "signature": "5PSjWh3yrgPyqmNAfszsNf79wxAk8NSZXigf4kneCnNwndge3RAv6HTdfQyrQkNaowVASMvoCPgfS4Wzk7sxHzyh",
+      "signature": "MScX9QVjmunFeM951sVyA5kLCUXJD4FSzgY1jer6jE3QJEHfAX8KmD1fXdDpGJ7jCmGyewp91GqCieTw8CmaFst",
       "source": "inner",
       "instructionIndex": 0,
       "instructionName": "swap",
       "reason": "Instruction 'swap' is not an accepted LP lifecycle instruction"
     },
     {
-      "signature": "5eKArHFJBGxTc2whiApGB8QCBzPXu1EVwwHKnW6qMTz3QqwM46tUJ8byTKY7qQHyWXBdsdEFYqZJxg2fUrFkW6jU",
+      "signature": "3eErhNppuT9UnJhQuMYTD7eK4EqP82goheAvo4HXjDjNeRcDA8zLpKqXcDHZuYaAkrgo2bhkxeXAgJruGdZVSGD9",
       "source": "inner",
       "instructionIndex": 0,
       "instructionName": "swap",

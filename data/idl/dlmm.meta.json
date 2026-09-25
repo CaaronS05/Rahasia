@@ -1,0 +1,9 @@
+{
+  "sourceUrl": "https://raw.githubusercontent.com/MeteoraAg/dlmm-sdk/main/idls/dlmm.json",
+  "fetchedAt": "2026-09-25T13:44:48.111Z",
+  "sha256": "c3e5eb12fe63670e73f826d3b4fb1adc40a3089aaa8235c5c43fea1a32d89810",
+  "instructionCount": 76,
+  "eventCount": 30,
+  "programAddress": "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo",
+  "programAddressValidation": "matched"
+}
