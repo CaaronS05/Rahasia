@@ -21,6 +21,7 @@ type WalletWithFabriq = Wallet & {
     month?: string;
     stats?: Record<string, any>;
     calendar?: any;
+    calendars?: Record<string, any>;
   };
 };
 
@@ -135,6 +136,7 @@ export function PortfolioPage({
   const enrichedWallet = wallet as WalletWithFabriq | undefined;
   const stats = enrichedWallet?.fabriq?.stats ?? {};
   const calendar = enrichedWallet?.fabriq?.calendar;
+  const calendars = enrichedWallet?.fabriq?.calendars;
 
   const metricData = useMemo(() => {
     const positionWin =
@@ -457,7 +459,11 @@ export function PortfolioPage({
                     </button>
                   </div>
 
-                  <PortfolioCalendar data={calendar} month={enrichedWallet?.fabriq?.month} />
+                  <PortfolioCalendar
+                    data={calendar}
+                    calendars={calendars}
+                    month={enrichedWallet?.fabriq?.month}
+                  />
                 </article>
               </section>
 

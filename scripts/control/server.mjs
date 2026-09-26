@@ -18,6 +18,7 @@ const ALLOWED_ORIGINS = new Set([
 
 let currentChild = null;
 let lpAgentChild = null;
+let poolScannerChild = null;
 let runtimeTicker = null;
 const sseClients = new Set();
 
@@ -86,6 +87,28 @@ let lpAgentState = {
     runtimeSeconds: 0,
     logs: [],
 };
+
+let poolScannerState = {
+    status: "idle",
+    stage: "idle",
+    tokenCa: null,
+    startedAt: null,
+    finishedAt: null,
+    exitCode: null,
+    error: null,
+    logs: [],
+};
+
+function poolScannerPublicState() {
+    const isRunning =
+        Boolean(poolScannerChild) &&
+        poolScannerState.status === "running";
+
+    return {
+        ...poolScannerState,
+        running: isRunning,
+    };
+}
 
 function lpAgentPublicState() {
     const isRunning =
@@ -1477,6 +1500,237 @@ async function startLpAgentRefresh({
     }
 }
 
+function addPoolScannerLog(line) {
+    const cleaned = String(line).trimEnd();
+    if (!cleaned) {
+        return;
+    }
+
+    console.log(`[POOL_SCANNER] ${cleaned}`);
+
+    poolScannerState.logs.push(cleaned);
+
+    if (poolScannerState.logs.length > 200) {
+        poolScannerState.logs = poolScannerState.logs.slice(-200);
+    }
+}
+
+function parsePoolScannerLine(line) {
+    if (line.includes("[STAGE 1/4]")) {
+        poolScannerState.stage = "discovery";
+        return;
+    }
+
+    if (line.includes("[STAGE 2/4]")) {
+        poolScannerState.stage = "fabriq";
+        return;
+    }
+
+    if (line.includes("[STAGE 3/4]")) {
+        poolScannerState.stage = "master_upsert";
+        return;
+    }
+
+    if (line.includes("[STAGE 4/4]")) {
+        poolScannerState.stage = "publish";
+        return;
+    }
+
+    if (line.includes("POOL SCANNER PIPELINE COMPLETE")) {
+        poolScannerState.status = "completed";
+        poolScannerState.stage = "completed";
+        return;
+    }
+}
+
+let poolScannerUserStopped = false;
+
+function stopPoolScanner() {
+    if (!poolScannerChild && poolScannerState.status !== "running") {
+        return poolScannerPublicState();
+    }
+
+    poolScannerUserStopped = true;
+    poolScannerState.status = "stopped";
+    poolScannerState.stage = "stopped";
+    poolScannerState.finishedAt = new Date().toISOString();
+    poolScannerState.error = null;
+
+    addPoolScannerLog("[CONTROL] Stopping Pool Scanner pipeline...");
+
+    if (poolScannerChild) {
+        const targetChild = poolScannerChild;
+        const targetPid = targetChild.pid;
+
+        function killProcessTree(sig) {
+            let killedGroup = false;
+            if (targetPid && process.platform !== "win32") {
+                try {
+                    process.kill(-targetPid, sig);
+                    killedGroup = true;
+                } catch {
+                    // process group kill may fail if group doesn't exist
+                }
+            }
+            if (!killedGroup) {
+                try {
+                    targetChild.kill(sig);
+                } catch {
+                    // ignore
+                }
+            }
+        }
+
+        killProcessTree("SIGTERM");
+
+        setTimeout(() => {
+            if (poolScannerChild === targetChild) {
+                killProcessTree("SIGKILL");
+            }
+        }, 3000);
+    }
+
+    return poolScannerPublicState();
+}
+
+function startPoolScanner(tokenCa) {
+    poolScannerUserStopped = false;
+    poolScannerState = {
+        status: "running",
+        stage: "discovery",
+        tokenCa,
+        startedAt: new Date().toISOString(),
+        finishedAt: null,
+        exitCode: null,
+        error: null,
+        logs: [],
+    };
+
+    addPoolScannerLog(
+        `[CONTROL] Starting Pool Scanner pipeline for token: ${tokenCa}`
+    );
+
+    poolScannerChild = spawn(
+        process.execPath,
+        [
+            "scripts/pipeline/run-pool-scanner-pipeline.mjs",
+            "--token",
+            tokenCa,
+        ],
+        {
+            cwd: ROOT,
+            env: {
+                ...process.env,
+            },
+            detached: process.platform !== "win32",
+            stdio: ["ignore", "pipe", "pipe"],
+        }
+    );
+
+    let stdoutBuffer = "";
+    let stderrBuffer = "";
+
+    function consumeBuffer(buffer, chunk, onLine) {
+        buffer += String(chunk);
+        const lines = buffer.split("\n");
+        const remainder = lines.pop() ?? "";
+        for (const line of lines) {
+            const trimmed = line.trimEnd();
+            if (trimmed) {
+                onLine(trimmed);
+            }
+        }
+        return remainder;
+    }
+
+    poolScannerChild.stdout.on("data", (chunk) => {
+        stdoutBuffer = consumeBuffer(stdoutBuffer, chunk, (line) => {
+            addPoolScannerLog(line);
+            parsePoolScannerLine(line);
+        });
+    });
+
+    poolScannerChild.stderr.on("data", (chunk) => {
+        stderrBuffer = consumeBuffer(stderrBuffer, chunk, (line) => {
+            addPoolScannerLog(line);
+            parsePoolScannerLine(line);
+        });
+    });
+
+    poolScannerChild.on("error", (error) => {
+        const wasUserStopped =
+            poolScannerUserStopped || poolScannerState.status === "stopped";
+        poolScannerChild = null;
+
+        if (wasUserStopped) {
+            poolScannerState.status = "stopped";
+            poolScannerState.stage = "stopped";
+            poolScannerState.error = null;
+            return;
+        }
+
+        poolScannerState.status = "error";
+        poolScannerState.stage = "error";
+        poolScannerState.error =
+            error instanceof Error ? error.message : String(error);
+        poolScannerState.finishedAt = new Date().toISOString();
+        addPoolScannerLog(
+            `[CONTROL] Pool Scanner process error: ${poolScannerState.error}`
+        );
+    });
+
+    poolScannerChild.on("exit", (code, signal) => {
+        if (stdoutBuffer.trim()) {
+            const trimmed = stdoutBuffer.trimEnd();
+            addPoolScannerLog(trimmed);
+            parsePoolScannerLine(trimmed);
+            stdoutBuffer = "";
+        }
+        if (stderrBuffer.trim()) {
+            const trimmed = stderrBuffer.trimEnd();
+            addPoolScannerLog(trimmed);
+            parsePoolScannerLine(trimmed);
+            stderrBuffer = "";
+        }
+
+        const wasUserStopped =
+            poolScannerUserStopped || poolScannerState.status === "stopped";
+        poolScannerChild = null;
+
+        if (wasUserStopped) {
+            poolScannerState.status = "stopped";
+            poolScannerState.stage = "stopped";
+            poolScannerState.error = null;
+            if (!poolScannerState.finishedAt) {
+                poolScannerState.finishedAt = new Date().toISOString();
+            }
+            addPoolScannerLog("[CONTROL] Pool Scanner pipeline stopped.");
+            return;
+        }
+
+        poolScannerState.finishedAt = new Date().toISOString();
+        poolScannerState.exitCode = code;
+
+        if (code === 0) {
+            poolScannerState.status = "completed";
+            poolScannerState.stage = "completed";
+            poolScannerState.error = null;
+            addPoolScannerLog(
+                "[CONTROL] Pool Scanner pipeline finished successfully."
+            );
+        } else {
+            poolScannerState.status = "error";
+            poolScannerState.stage = "error";
+            poolScannerState.error =
+                poolScannerState.error ??
+                `Pool Scanner pipeline failed with exit code ${code}${signal ? ` (signal ${signal})` : ""}`;
+            addPoolScannerLog(
+                `[CONTROL] ${poolScannerState.error}`
+            );
+        }
+    });
+}
+
 function discardFabriqCheckpoint() {
     try {
         const fabriqCheckpointPath = path.join(ROOT, "data/checkpoints/fabriq.jsonl");
@@ -2357,6 +2611,148 @@ const server = http.createServer(async (request, response) => {
 
                 ...lpAgentPublicState(),
             },
+        );
+
+        return;
+    }
+
+    // ------------------------------------------------------
+    // GET /api/pool-scanner/status
+    // ------------------------------------------------------
+
+    if (
+        request.method === "GET" &&
+        url.pathname === "/api/pool-scanner/status"
+    ) {
+        json(
+            request,
+            response,
+            200,
+            poolScannerPublicState(),
+        );
+
+        return;
+    }
+
+    // ------------------------------------------------------
+    // POST /api/pool-scanner/start
+    // ------------------------------------------------------
+
+    if (
+        request.method === "POST" &&
+        url.pathname === "/api/pool-scanner/start"
+    ) {
+        if (
+            currentChild ||
+            lpAgentChild ||
+            poolScannerChild ||
+            state.status === "running" ||
+            state.status === "stopping" ||
+            lpAgentState.status === "running" ||
+            lpAgentState.status === "stopping" ||
+            poolScannerState.status === "running"
+        ) {
+            json(
+                request,
+                response,
+                409,
+                {
+                    error:
+                        "Another update process is already running",
+
+                    poolScanner:
+                        poolScannerPublicState(),
+
+                    fabriq:
+                        publicState(),
+
+                    lpagent:
+                        lpAgentPublicState(),
+                },
+            );
+
+            return;
+        }
+
+        let body = {};
+
+        try {
+            body = await readJson(request);
+        } catch {
+            json(
+                request,
+                response,
+                400,
+                {
+                    error: "Invalid JSON body",
+                },
+            );
+
+            return;
+        }
+
+        const rawToken = body?.tokenCa;
+
+        if (
+            typeof rawToken !== "string" ||
+            !rawToken.trim()
+        ) {
+            json(
+                request,
+                response,
+                400,
+                {
+                    error:
+                        "tokenCa must be a non-empty string",
+                },
+            );
+
+            return;
+        }
+
+        const tokenCa = rawToken.trim();
+
+        try {
+            startPoolScanner(tokenCa);
+
+            json(
+                request,
+                response,
+                202,
+                poolScannerPublicState(),
+            );
+        } catch (error) {
+            json(
+                request,
+                response,
+                500,
+                {
+                    error:
+                        error instanceof Error
+                            ? error.message
+                            : String(error),
+                },
+            );
+        }
+
+        return;
+    }
+
+    // ------------------------------------------------------
+    // POST /api/pool-scanner/stop
+    // ------------------------------------------------------
+
+    if (
+        request.method === "POST" &&
+        url.pathname === "/api/pool-scanner/stop"
+    ) {
+        const state = stopPoolScanner();
+
+        json(
+            request,
+            response,
+            200,
+            state,
         );
 
         return;

@@ -1,0 +1,16 @@
+[
+  {
+    "pool": "7THpxneYN3Cp98VgKTJcoawLSKUFK3rGzELEJxVmXTwU",
+    "pair": "DDOS/SOL",
+    "binStep": 100,
+    "tokenX": "HSnCtWsw5YmfAkJo9S3eetWtGHPMrc2pAxvCu24AnQEa",
+    "tokenY": "So11111111111111111111111111111111111111112"
+  },
+  {
+    "pool": "7DqU3fDXuN5owG4cQmveVShzoxvRTg5qNkqGSKm2iv32",
+    "pair": "DDOS/SOL",
+    "binStep": 200,
+    "tokenX": "HSnCtWsw5YmfAkJo9S3eetWtGHPMrc2pAxvCu24AnQEa",
+    "tokenY": "So11111111111111111111111111111111111111112"
+  }
+]

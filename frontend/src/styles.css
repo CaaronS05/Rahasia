@@ -1281,6 +1281,49 @@ button {
   justify-content: space-between;
 }
 
+.calendar-nav-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.calendar-month-title {
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 700;
+  min-width: 105px;
+  text-align: center;
+  user-select: none;
+}
+
+.calendar-nav-btn {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 5px;
+  border: 1px solid #2a2925;
+  background: #111210;
+  color: #a8a29e;
+  cursor: pointer;
+  padding: 0;
+  transition: all 140ms ease;
+}
+
+.calendar-nav-btn:hover:not(:disabled) {
+  background: #1a1c18;
+  border-color: rgba(85, 214, 157, 0.4);
+  color: var(--green);
+}
+
+.calendar-nav-btn:disabled {
+  opacity: 0.28;
+  cursor: not-allowed;
+  border-color: #21201d;
+  color: #55524e;
+}
+
 .calendar-summary strong {
   font-size: 11px;
 }
@@ -1288,6 +1331,12 @@ button {
 .calendar-summary div {
   color: #9b9790;
   font-size: 9px;
+}
+
+.calendar-stats {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
 .calendar-divider {

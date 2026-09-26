@@ -14,6 +14,7 @@ import { getFabriqStatus, subscribeFabriqEvents } from "./lib/fabriqControl";
 import { getLpAgentStatus } from "./lib/lpAgentControl";
 import { loadWalletDataset } from "./lib/walletData";
 import { loadTrackedWallets, saveTrackedWallets } from "./lib/trackedWallets";
+import { PoolScannerPage } from "./pages/PoolScannerPage";
 import { PortfolioPage } from "./pages/PortfolioPage";
 import { TrackPage } from "./pages/TrackPage";
 import type { Wallet } from "./types";
@@ -26,7 +27,7 @@ import {
 } from "./lib/walletMetrics";
 
 type Timeframe = "7d" | "30d" | "all";
-type Page = "explore" | "track" | "portfolio";
+type Page = "explore" | "track" | "portfolio" | "pool-scanner";
 
 function formatUpdatedAt(
   value: string | null,
@@ -75,6 +76,10 @@ function routeFromLocation(): { page: Page; address?: string } {
 
   if (window.location.pathname === "/track") {
     return { page: "track" };
+  }
+
+  if (window.location.pathname === "/pool-scanner") {
+    return { page: "pool-scanner" };
   }
 
   return { page: "explore" };
@@ -400,7 +405,9 @@ export default function App() {
               ? "/portfolio"
               : page === "track"
                 ? "/track"
-                : "/",
+                : page === "pool-scanner"
+                  ? "/pool-scanner"
+                  : "/",
           )
         }
       />
@@ -461,7 +468,9 @@ export default function App() {
           </div>
         </header>
 
-        {route.page === "portfolio" ? (
+        {route.page === "pool-scanner" ? (
+          <PoolScannerPage onDatasetRefreshed={refreshDataset} />
+        ) : route.page === "portfolio" ? (
           <PortfolioPage
             wallets={wallets}
             loading={loading}

@@ -1,24 +1,31 @@
 import fs from "node:fs/promises";
 import { chromium } from "playwright-core";
+import path from "node:path";
 
 // ======================================================
 // CONFIG
 // ======================================================
 
-const DATASET = new URL(
-    "../../data/master/wallets-master.json",
-    import.meta.url
-);
+const DATASET =
+    process.env.FABRIQ_DATASET
+        ? path.resolve(process.env.FABRIQ_DATASET)
+        : path.resolve(
+            "data/master/wallets-master.json"
+        );
 
-const OUTPUT = new URL(
-    "../../data/raw/fabriq/fabriq-enriched.json",
-    import.meta.url
-);
+const OUTPUT =
+    process.env.FABRIQ_OUTPUT
+        ? path.resolve(process.env.FABRIQ_OUTPUT)
+        : path.resolve(
+            "data/raw/fabriq/fabriq-enriched.json"
+        );
 
-const CHECKPOINT = new URL(
-    "../../data/checkpoints/fabriq.jsonl",
-    import.meta.url
-);
+const CHECKPOINT =
+    process.env.FABRIQ_CHECKPOINT
+        ? path.resolve(process.env.FABRIQ_CHECKPOINT)
+        : path.resolve(
+            "data/checkpoints/fabriq.jsonl"
+        );
 
 const CDP_URL = "http://127.0.0.1:9222";
 
@@ -61,6 +68,10 @@ const sleep = (ms) =>
     new Promise((resolve) => setTimeout(resolve, ms));
 
 function getWalletOwner(row) {
+    if (typeof row === "string") {
+        return row;
+    }
+
     return (
         row?.owner ??
         row?.wallet ??
@@ -81,6 +92,62 @@ function extractWalletRows(raw) {
     ];
 
     return candidates.find(Array.isArray) ?? [];
+}
+
+function getJakartaDateParts(date = new Date()) {
+    const parts = new Intl.DateTimeFormat("en-US", {
+        timeZone: TIMEZONE,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+    }).formatToParts(date);
+
+    const year = parts.find((p) => p.type === "year")?.value;
+    const month = parts.find((p) => p.type === "month")?.value;
+    const day = parts.find((p) => p.type === "day")?.value;
+
+    return {
+        year: Number(year),
+        month: Number(month),
+        day: Number(day),
+        dateStr: `${year}-${month}-${day}`,
+        monthStr: `${year}-${month}`,
+    };
+}
+
+function getRolling90DaysRange() {
+    const today = getJakartaDateParts(new Date());
+
+    const dateStrings = [];
+    const monthsSet = new Set();
+
+    for (let i = 89; i >= 0; i--) {
+        const d = new Date(Date.UTC(today.year, today.month - 1, today.day - i));
+        const y = d.getUTCFullYear();
+        const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+        const dt = String(d.getUTCDate()).padStart(2, "0");
+        const ymd = `${y}-${m}-${dt}`;
+        dateStrings.push(ymd);
+        monthsSet.add(`${y}-${m}`);
+    }
+
+    return {
+        todayStr: today.dateStr,
+        currentMonth: today.monthStr,
+        startDate: dateStrings[0],
+        endDate: dateStrings[dateStrings.length - 1],
+        datesSet: new Set(dateStrings),
+        months: Array.from(monthsSet).sort(),
+    };
+}
+
+const ROLLING_WINDOW = getRolling90DaysRange();
+const CURRENT_MONTH = ROLLING_WINDOW.currentMonth;
+const CALENDAR_MONTHS = ROLLING_WINDOW.months;
+const ROLLING_90_DATES = ROLLING_WINDOW.datesSet;
+
+function getCurrentMonth() {
+    return CURRENT_MONTH;
 }
 
 function hasRequiredCalendars(row) {
@@ -140,24 +207,6 @@ function isFabriqFresh(row) {
         1000;
 
     return ageMs < staleAfterMs;
-}
-
-function getCurrentMonth() {
-    const parts = new Intl.DateTimeFormat("en-US", {
-        timeZone: TIMEZONE,
-        year: "numeric",
-        month: "2-digit",
-    }).formatToParts(new Date());
-
-    const year = parts.find(
-        (part) => part.type === "year"
-    )?.value;
-
-    const month = parts.find(
-        (part) => part.type === "month"
-    )?.value;
-
-    return `${year}-${month}`;
 }
 
 function decodeJwtExpiry(token) {
@@ -531,38 +580,6 @@ async function fabriqFetch(
 // WALLET FETCH
 // ======================================================
 
-const CURRENT_MONTH = getCurrentMonth();
-
-function getPreviousMonth(month) {
-    const [year, monthNumber] =
-        month.split("-").map(Number);
-
-    const date = new Date(
-        Date.UTC(
-            year,
-            monthNumber - 2,
-            1,
-        )
-    );
-
-    return [
-        date.getUTCFullYear(),
-        String(
-            date.getUTCMonth() + 1
-        ).padStart(2, "0"),
-    ].join("-");
-}
-
-const PREVIOUS_MONTH =
-    getPreviousMonth(
-        CURRENT_MONTH
-    );
-
-const CALENDAR_MONTHS = [
-    PREVIOUS_MONTH,
-    CURRENT_MONTH,
-];
-
 async function fetchWallet(wallet) {
     const statsUrl =
         `https://apinew.fabriq.trade/portfolio/stats/${wallet}` +
@@ -612,7 +629,8 @@ async function fetchWallet(wallet) {
                     ([date]) =>
                         date.startsWith(
                             `${month}-`
-                        )
+                        ) &&
+                        ROLLING_90_DATES.has(date)
                 )
             );
     }
@@ -637,8 +655,8 @@ async function fetchWallet(wallet) {
 
             calendar:
                 calendars[
-                CURRENT_MONTH
-                ],
+                    CURRENT_MONTH
+                ] || {},
         },
     };
 }

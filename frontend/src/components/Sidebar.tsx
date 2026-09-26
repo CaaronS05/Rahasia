@@ -10,8 +10,8 @@ import {
   WalletCards,
 } from "lucide-react";
 
-type ActivePage = "explore" | "pools" | "track" | "portfolio";
-type AppPage = "explore" | "track" | "portfolio";
+type ActivePage = "explore" | "pools" | "track" | "portfolio" | "pool-scanner";
+type AppPage = "explore" | "track" | "portfolio" | "pool-scanner";
 
 type Props = {
   activePage: ActivePage;
@@ -55,7 +55,12 @@ const watchlist: SidebarItem[] = [
 ];
 
 const tools: SidebarItem[] = [
-  { label: "Screener", icon: CircleGauge },
+  {
+    label: "Pool Scanner",
+    icon: CircleGauge,
+    page: "pool-scanner",
+    activeKey: "pool-scanner",
+  },
   { label: "Alerts", icon: Bell },
   { label: "Settings", icon: Settings },
 ];

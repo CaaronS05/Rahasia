@@ -1,3 +1,6 @@
+import { ChevronLeft, ChevronRight } from "lucide-react";
+import { useEffect, useState } from "react";
+
 type CalendarEntry = {
   date: string;
   pnl: number;
@@ -58,25 +61,80 @@ function money(value: number) {
   return `${value >= 0 ? "+" : "-"}$${abs.toFixed(0)}`;
 }
 
+function getCurrentMonthString(): string {
+  const d = new Date();
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  return `${year}-${month}`;
+}
+
+function addMonths(yearMonth: string, delta: number): string {
+  const [yearStr, monthStr] = yearMonth.split("-");
+  const year = Number(yearStr);
+  const month = Number(monthStr);
+  const date = new Date(Date.UTC(year, month - 1 + delta, 1));
+  const newYear = date.getUTCFullYear();
+  const newMonth = String(date.getUTCMonth() + 1).padStart(2, "0");
+  return `${newYear}-${newMonth}`;
+}
+
 export function PortfolioCalendar({
   data,
+  calendars,
   month,
 }: {
-  data: any;
+  data?: any;
+  calendars?: Record<string, any>;
   month?: string;
 }) {
-  const entries = normalize(data);
+  const currentMonth = getCurrentMonthString();
+  const defaultMonth =
+    month && /^\d{4}-\d{2}$/.test(month) ? month : currentMonth;
+
+  const [selectedMonth, setSelectedMonth] = useState(defaultMonth);
+
+  useEffect(() => {
+    setSelectedMonth(defaultMonth);
+  }, [defaultMonth]);
+
+  const isCurrentMonth = selectedMonth >= currentMonth;
+
+  function handlePrevMonth() {
+    setSelectedMonth((prev) => addMonths(prev, -1));
+  }
+
+  function handleNextMonth() {
+    if (isCurrentMonth) return;
+    setSelectedMonth((prev) => {
+      const next = addMonths(prev, 1);
+      return next > currentMonth ? prev : next;
+    });
+  }
+
+  let selectedData: any = undefined;
+  if (calendars && typeof calendars === "object") {
+    selectedData = calendars[selectedMonth];
+  }
+  // Legacy compatibility fallback only if calendars collection is not present and on default month
+  if (
+    selectedData === undefined &&
+    (!calendars || Object.keys(calendars).length === 0) &&
+    selectedMonth === defaultMonth
+  ) {
+    selectedData = data;
+  }
+
+  const entries = normalize(selectedData);
   const byDate = new Map(entries.map((entry) => [entry.date, entry]));
 
-  const monthDate = month && /^\d{4}-\d{2}$/.test(month)
-    ? new Date(`${month}-01T00:00:00`)
-    : new Date();
-
-  const year = monthDate.getFullYear();
-  const monthIndex = monthDate.getMonth();
-  const daysInMonth = new Date(year, monthIndex + 1, 0).getDate();
-  const firstDay = new Date(year, monthIndex, 1).getDay();
+  const [yearNum, monthNum] = selectedMonth.split("-").map(Number);
+  const monthDate = new Date(Date.UTC(yearNum, monthNum - 1, 1));
+  const year = monthDate.getUTCFullYear();
+  const monthIndex = monthDate.getUTCMonth();
+  const daysInMonth = new Date(Date.UTC(year, monthIndex + 1, 0)).getUTCDate();
+  const firstDay = new Date(Date.UTC(year, monthIndex, 1)).getUTCDay();
   const monthName = new Intl.DateTimeFormat("en-US", {
+    timeZone: "UTC",
     month: "long",
     year: "numeric",
   }).format(monthDate);
@@ -94,28 +152,50 @@ export function PortfolioCalendar({
 
   const total = entries.reduce((sum, entry) => sum + entry.pnl, 0);
   const winDays = entries.filter((entry) => entry.pnl > 0).length;
-  const loseDays = entries.filter(
-    (entry) => entry.pnl < 0,
-  ).length;
-
-  const activeDays =
-    winDays + loseDays;
+  const loseDays = entries.filter((entry) => entry.pnl < 0).length;
+  const activeDays = winDays + loseDays;
 
   return (
     <div className="portfolio-calendar">
       <div className="calendar-summary">
-        <strong>{monthName}</strong>
+        <div className="calendar-nav-wrap">
+          <button
+            type="button"
+            className="calendar-nav-btn"
+            onClick={handlePrevMonth}
+            aria-label="Previous month"
+            title="Previous month"
+          >
+            <ChevronLeft size={13} />
+          </button>
+          <strong className="calendar-month-title">{monthName}</strong>
+          <button
+            type="button"
+            className="calendar-nav-btn"
+            onClick={handleNextMonth}
+            disabled={isCurrentMonth}
+            aria-label="Next month"
+            title={isCurrentMonth ? "Current month" : "Next month"}
+          >
+            <ChevronRight size={13} />
+          </button>
+        </div>
+
         <div className="calendar-stats">
           <span>
             Monthly PnL:{" "}
             <strong
               className={
-                total >= 0
+                entries.length === 0
+                  ? ""
+                  : total > 0
                   ? "positive"
-                  : "negative"
+                  : total < 0
+                  ? "negative"
+                  : ""
               }
             >
-              {money(total)}
+              {entries.length === 0 ? "—" : money(total)}
             </strong>
           </span>
 
@@ -157,12 +237,13 @@ export function PortfolioCalendar({
         {cells.map((cell, index) => (
           <div
             key={`${cell.day ?? "blank"}-${index}`}
-            className={`calendar-cell ${cell.entry
-              ? cell.entry.pnl >= 0
-                ? "profit"
-                : "loss"
-              : ""
-              }`}
+            className={`calendar-cell ${
+              cell.entry
+                ? cell.entry.pnl >= 0
+                  ? "profit"
+                  : "loss"
+                : ""
+            }`}
           >
             {cell.day ? <span className="calendar-day">{cell.day}</span> : null}
             {cell.entry ? (

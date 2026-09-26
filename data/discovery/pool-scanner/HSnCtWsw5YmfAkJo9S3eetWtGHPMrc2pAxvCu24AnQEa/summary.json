@@ -1,0 +1,30 @@
+{
+  "tokenCa": "HSnCtWsw5YmfAkJo9S3eetWtGHPMrc2pAxvCu24AnQEa",
+  "generatedAt": "2026-09-26T07:52:57.928Z",
+  "poolCount": 2,
+  "poolsScanned": 2,
+  "poolsFailed": 0,
+  "uniqueWallets": 589,
+  "pools": [
+    {
+      "pool": "7THpxneYN3Cp98VgKTJcoawLSKUFK3rGzELEJxVmXTwU",
+      "pair": "DDOS/SOL",
+      "binStep": 100,
+      "status": "ok",
+      "walletCount": 404,
+      "reportedTopLpers": 407,
+      "pages": 21,
+      "error": null
+    },
+    {
+      "pool": "7DqU3fDXuN5owG4cQmveVShzoxvRTg5qNkqGSKm2iv32",
+      "pair": "DDOS/SOL",
+      "binStep": 200,
+      "status": "ok",
+      "walletCount": 331,
+      "reportedTopLpers": 332,
+      "pages": 17,
+      "error": null
+    }
+  ]
+}
