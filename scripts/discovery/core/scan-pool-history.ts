@@ -142,6 +142,7 @@ export interface PoolDiscoverySummary {
 export interface ScanPoolHistoryOptions {
     poolAddress: string;
     days?: number;
+    endTime?: number;
     maxTransactions?: number;
     scanMode?: "auto" | "gtfa" | "standard";
     configOverrides?: Partial<DiscoveryConfig>;
@@ -215,9 +216,10 @@ export async function scanPoolHistory(
         );
     }
 
-    const now = Math.floor(Date.now() / 1000);
-    const startTime = now - days * 86400;
-    const endTime = now;
+    const endTime =
+        options.endTime ?? Math.floor(Date.now() / 1000);
+
+    const startTime = endTime - days * 86400;
 
     log(`[SCAN] Target Pool: ${poolAddress} (${poolData.name})`);
     log(`[SCAN] Window: ${new Date(startTime * 1000).toISOString()} to ${new Date(endTime * 1000).toISOString()} (${days} days)`);

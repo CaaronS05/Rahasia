@@ -72,6 +72,22 @@ async function main() {
         "Eio6hAieGTAmKgfvbEfbnXke6o5kfEd74tqHm2Z9SFjf";
 
     const days = args.days ? Number(args.days) : 7;
+
+    const endTimeArg = args["end-time"];
+    let endTime: number | undefined;
+
+    if (endTimeArg) {
+        const parsedEndTime = Date.parse(endTimeArg);
+
+        if (Number.isNaN(parsedEndTime)) {
+            throw new Error(
+                `Invalid --end-time '${endTimeArg}'. Use ISO format, e.g. 2026-09-25T13:44:48Z`
+            );
+        }
+
+        endTime = Math.floor(parsedEndTime / 1000);
+    }
+
     const maxTransactions = args["max-transactions"]
         ? Number(args["max-transactions"])
         : 1000;
@@ -87,6 +103,9 @@ async function main() {
     console.log("========================================");
     console.log(`Pool Address      : ${poolAddress}`);
     console.log(`Time Window (days): ${days}`);
+    if (endTime !== undefined) {
+        console.log(`End Time          : ${new Date(endTime * 1000).toISOString()}`);
+    }
     console.log(`Max Transactions  : ${maxTransactions}`);
     console.log(`Requested Mode    : ${mode}`);
     console.log("----------------------------------------");
@@ -100,6 +119,7 @@ async function main() {
     const result: ScanPoolHistoryResult = await scanPoolHistory({
         poolAddress,
         days,
+        endTime,
         maxTransactions,
         scanMode: mode,
         onLog: (msg) => console.log(msg),
@@ -205,7 +225,7 @@ async function main() {
             poolInLegacyCache = Array.isArray(cache.pools)
                 ? cache.pools.some((p: any) => p.address === poolAddress)
                 : false;
-        } catch {}
+        } catch { }
     }
     const aPass = poolInLegacyCache && summary.pool.pairType === 0;
     assertions.push({
@@ -379,6 +399,14 @@ async function main() {
         details: `Total: ${summary.scan.unknownDiscriminators.total}, IDL Events: ${summary.scan.unknownDiscriminators.idlEvent}, Anchor/Internal: ${summary.scan.unknownDiscriminators.anchorInternal}, Unexplained: ${unexplainedCount}`,
     });
 
+    const ownerMismatchCount = events.filter(
+        (e) => e.verification.status === "OWNER_MISMATCH"
+    ).length;
+
+    const poolMismatchCount = events.filter(
+        (e) => e.verification.status === "POOL_MISMATCH"
+    ).length;
+
     // ========================================================
     // REQUIRED FINAL TERMINAL REPORT (Section 12)
     // ========================================================
@@ -417,8 +445,8 @@ async function main() {
     console.log();
     console.log("Verification:");
     console.log(`PositionV2 matches: ${summary.scan.verificationMatchCount}`);
-    console.log(`Owner mismatches: ${summary.scan.verificationMismatchCount}`);
-    console.log(`Pool mismatches: 0`);
+    console.log(`Owner mismatches: ${ownerMismatchCount}`);
+    console.log(`Pool mismatches: ${poolMismatchCount}`);
     console.log(`Non-Meteora accounts: ${summary.scan.nonMeteoraAccountCount}`);
     console.log(`Deleted/closed: ${summary.scan.deletedOrClosedCount}`);
     console.log();

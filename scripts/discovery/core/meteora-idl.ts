@@ -86,11 +86,25 @@ export async function loadMeteoraIdl(
 ): Promise<MeteoraIdlBundle> {
     let idlJson: any;
     let rawContent: string | null = null;
+    let fetchedAt: string | null = null;
 
     if (fs.existsSync(LOCAL_IDL_PATH)) {
         try {
             rawContent = fs.readFileSync(LOCAL_IDL_PATH, "utf8");
             idlJson = JSON.parse(rawContent);
+            if (fs.existsSync(LOCAL_IDL_META_PATH)) {
+                try {
+                    const existingMeta = JSON.parse(
+                        fs.readFileSync(LOCAL_IDL_META_PATH, "utf8")
+                    );
+
+                    if (typeof existingMeta.fetchedAt === "string") {
+                        fetchedAt = existingMeta.fetchedAt;
+                    }
+                } catch {
+                    // Ignore invalid metadata; IDL cache itself can still be used.
+                }
+            }
         } catch (error) {
             console.warn("[IDL] Local cache read error, re-fetching:", error);
             rawContent = null;
@@ -104,6 +118,7 @@ export async function loadMeteoraIdl(
             throw new Error(`Failed to fetch Meteora IDL: HTTP ${response.status}`);
         }
         rawContent = await response.text();
+        fetchedAt = new Date().toISOString();
         idlJson = JSON.parse(rawContent);
 
         // Cache locally for resilient subsequent runs
@@ -170,7 +185,7 @@ export async function loadMeteoraIdl(
 
     const metadata: IdlMetadata = {
         sourceUrl: METEORA_IDL_URL,
-        fetchedAt: new Date().toISOString(),
+        fetchedAt: fetchedAt ?? new Date().toISOString(),
         sha256,
         instructionCount: instructions.length,
         eventCount: events.length,
