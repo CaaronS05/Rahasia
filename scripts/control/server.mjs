@@ -22,12 +22,59 @@ let poolScannerChild = null;
 let runtimeTicker = null;
 const sseClients = new Set();
 
+function getCurrentJakartaMonth() {
+    const parts = new Intl.DateTimeFormat("en-US", {
+        timeZone: "Asia/Jakarta",
+        year: "numeric",
+        month: "2-digit",
+    }).formatToParts(new Date());
+
+    const year = parts.find((p) => p.type === "year")?.value;
+    const month = parts.find((p) => p.type === "month")?.value;
+    return `${year}-${month}`;
+}
+
+function validateHistoryConfig(historyMode, startMonth) {
+    const mode = historyMode ?? "90d";
+    if (mode !== "90d" && mode !== "custom") {
+        throw new Error('historyMode must be "90d" or "custom"');
+    }
+
+    if (mode === "90d") {
+        return {
+            historyMode: "90d",
+            startMonth: null,
+        };
+    }
+
+    if (!startMonth || typeof startMonth !== "string") {
+        throw new Error('startMonth is required when historyMode is "custom"');
+    }
+
+    const trimmed = startMonth.trim();
+    if (!/^\d{4}-(?:0[1-9]|1[0-2])$/.test(trimmed)) {
+        throw new Error('startMonth must be in strict YYYY-MM format');
+    }
+
+    const curMonth = getCurrentJakartaMonth();
+    if (trimmed > curMonth) {
+        throw new Error(`startMonth (${trimmed}) cannot be later than current month (${curMonth})`);
+    }
+
+    return {
+        historyMode: "custom",
+        startMonth: trimmed,
+    };
+}
+
 let state = {
     status: "idle", // "idle" | "running" | "stopping" | "stopped" | "completed" | "error"
     stage: "idle",  // "idle" | "enrich" | "merge" | "publish" | "completed" | "error"
 
     mode: null,     // "stale" | "full" | null
     concurrency: 10,
+    historyMode: "90d", // "90d" | "custom"
+    startMonth: null,   // string | null
     refreshBefore: null,
 
     startedAt: null,
@@ -53,6 +100,8 @@ let lpAgentState = {
     stage: "idle",
     concurrency: 5,
     fabriqConcurrency: 10,
+    historyMode: "90d", // "90d" | "custom"
+    startMonth: null,   // string | null
 
     startedAt: null,
     finishedAt: null,
@@ -747,18 +796,21 @@ function runChildProcess(
 ) {
     return new Promise(
         (resolve, reject) => {
+            const childEnv = {
+                ...process.env,
+                ...env,
+            };
+            if (!env?.FABRIQ_START_MONTH) {
+                delete childEnv.FABRIQ_START_MONTH;
+            }
+
             currentChild =
                 spawn(
                     command,
                     args,
                     {
                         cwd: ROOT,
-
-                        env: {
-                            ...process.env,
-                            ...env,
-                        },
-
+                        env: childEnv,
                         stdio: [
                             "ignore",
                             "pipe",
@@ -874,7 +926,7 @@ function runChildProcess(
     );
 }
 
-async function startPipeline({ mode, concurrency, resume }) {
+async function startPipeline({ mode, concurrency, resume, historyMode, startMonth }) {
     if (currentChild || state.status === "running" || state.status === "stopping") {
         throw new Error("Fabriq update is already running");
     }
@@ -900,6 +952,12 @@ async function startPipeline({ mode, concurrency, resume }) {
         } else {
             refreshBefore = null;
         }
+    }
+
+    if (!isResume) {
+        const validatedHistory = validateHistoryConfig(historyMode, startMonth);
+        state.historyMode = validatedHistory.historyMode;
+        state.startMonth = validatedHistory.startMonth;
     }
 
     state.status = "running";
@@ -928,6 +986,11 @@ async function startPipeline({ mode, concurrency, resume }) {
     resetEnrichProgress();
 
     addLog(`[CONTROL] Starting pipeline: mode=${safeMode}, workers=${safeConcurrency}, resume=${isResume}`);
+    if (state.historyMode === "custom") {
+        addLog(`[CONTROL] history=custom startMonth=${state.startMonth}`);
+    } else {
+        addLog("[CONTROL] history=90d");
+    }
     if (refreshBefore) {
         addLog(`[CONTROL] refreshBefore=${refreshBefore}`);
     }
@@ -945,6 +1008,9 @@ async function startPipeline({ mode, concurrency, resume }) {
         const enrichEnv = {
             FABRIQ_CONCURRENCY: String(safeConcurrency),
         };
+        if (state.historyMode === "custom" && state.startMonth) {
+            enrichEnv.FABRIQ_START_MONTH = state.startMonth;
+        }
         if (refreshBefore) {
             enrichEnv.FABRIQ_REFRESH_BEFORE = refreshBefore;
         }
@@ -1127,12 +1193,17 @@ async function startPipeline({ mode, concurrency, resume }) {
 
 function runLpAgentChildProcess(command, args, env, lineParser = null) {
     return new Promise((resolve, reject) => {
+        const childEnv = {
+            ...process.env,
+            ...env,
+        };
+        if (!env?.FABRIQ_START_MONTH) {
+            delete childEnv.FABRIQ_START_MONTH;
+        }
+
         lpAgentChild = spawn(command, args, {
             cwd: ROOT,
-            env: {
-                ...process.env,
-                ...env,
-            },
+            env: childEnv,
             stdio: ["ignore", "pipe", "pipe"],
         });
 
@@ -1194,6 +1265,8 @@ function runLpAgentChildProcess(command, args, env, lineParser = null) {
 async function startLpAgentRefresh({
     concurrency,
     fabriqConcurrency,
+    historyMode,
+    startMonth,
 } = {}) {
     if (
         lpAgentChild ||
@@ -1208,6 +1281,7 @@ async function startLpAgentRefresh({
 
     const safeConcurrency = sanitizeConcurrency(concurrency ?? 5);
     const safeFabriqConcurrency = sanitizeConcurrency(fabriqConcurrency ?? 10);
+    const validatedHistory = validateHistoryConfig(historyMode, startMonth);
 
     lpAgentBaseCompletedPages = 0;
     lpAgentSavedPagesThisRun = new Set();
@@ -1217,6 +1291,8 @@ async function startLpAgentRefresh({
         stage: "scrape",
         concurrency: safeConcurrency,
         fabriqConcurrency: safeFabriqConcurrency,
+        historyMode: validatedHistory.historyMode,
+        startMonth: validatedHistory.startMonth,
 
         startedAt: new Date().toISOString(),
         finishedAt: null,
@@ -1251,6 +1327,11 @@ async function startLpAgentRefresh({
     addLpAgentLog(
         `[CONTROL] Starting LP Agent pipeline: LP workers=${safeConcurrency}, Fabriq workers=${safeFabriqConcurrency}`
     );
+    if (lpAgentState.historyMode === "custom") {
+        addLpAgentLog(`[CONTROL] history=custom startMonth=${lpAgentState.startMonth}`);
+    } else {
+        addLpAgentLog("[CONTROL] history=90d");
+    }
 
     try {
         // ----------------------------------------------------
@@ -1343,12 +1424,17 @@ async function startLpAgentRefresh({
             `[CONTROL] Wallet merge succeeded. Enriching missing/stale Fabriq data (workers=${safeFabriqConcurrency})...`
         );
 
+        const enrichEnv = {
+            FABRIQ_CONCURRENCY: String(safeFabriqConcurrency),
+        };
+        if (lpAgentState.historyMode === "custom" && lpAgentState.startMonth) {
+            enrichEnv.FABRIQ_START_MONTH = lpAgentState.startMonth;
+        }
+
         const enrichResult = await runLpAgentChildProcess(
             process.execPath,
             ["scripts/fabriq/enrich-wallets.mjs"],
-            {
-                FABRIQ_CONCURRENCY: String(safeFabriqConcurrency),
-            },
+            enrichEnv,
             parseLpPipelineFabriqLine
         );
 
@@ -2539,11 +2625,36 @@ const server = http.createServer(async (request, response) => {
             return;
         }
 
+        let validatedHistory;
+        try {
+            validatedHistory = validateHistoryConfig(
+                body.historyMode,
+                body.startMonth
+            );
+        } catch (error) {
+            json(
+                request,
+                response,
+                400,
+                {
+                    error:
+                        error instanceof Error
+                            ? error.message
+                            : String(error),
+                }
+            );
+            return;
+        }
+
         startLpAgentRefresh({
             concurrency:
                 body.concurrency,
             fabriqConcurrency:
                 body.fabriqConcurrency,
+            historyMode:
+                validatedHistory.historyMode,
+            startMonth:
+                validatedHistory.startMonth,
         })
             .catch(
                 (error) => {
@@ -2810,11 +2921,22 @@ const server = http.createServer(async (request, response) => {
 
         try {
             const body = await readJson(request);
+            const isResume = Boolean(body.resume);
+
+            let validatedHistory = null;
+            if (!isResume) {
+                validatedHistory = validateHistoryConfig(
+                    body.historyMode,
+                    body.startMonth
+                );
+            }
 
             startPipeline({
                 mode: body.mode,
                 concurrency: body.concurrency,
-                resume: body.resume,
+                resume: isResume,
+                historyMode: validatedHistory?.historyMode,
+                startMonth: validatedHistory?.startMonth,
             }).catch((err) => {
                 console.error("Pipeline background error:", err);
             });

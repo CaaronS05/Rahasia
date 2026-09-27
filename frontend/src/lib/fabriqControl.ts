@@ -21,11 +21,17 @@ export type FabriqStage =
 
 export type FabriqMode = "stale" | "full";
 
+export type FabriqHistoryMode =
+  | "90d"
+  | "custom";
+
 export interface FabriqState {
   status: FabriqStatus;
   stage: FabriqStage;
   mode: FabriqMode | null;
   concurrency: number | null;
+  historyMode: FabriqHistoryMode;
+  startMonth: string | null;
   refreshBefore: string | null;
   startedAt: string | null;
   finishedAt: string | null;
@@ -62,7 +68,12 @@ export async function getFabriqStatus(): Promise<FabriqState> {
 export async function startFabriqRefresh(params: {
   mode: FabriqMode;
   concurrency?: number;
+  historyMode?: FabriqHistoryMode;
+  startMonth?: string | null;
 }): Promise<FabriqState> {
+  const historyMode = params.historyMode ?? "90d";
+  const startMonth = historyMode === "custom" ? (params.startMonth ?? null) : null;
+
   const response = await fetch(`${FABRIQ_API_BASE}/api/fabriq/refresh`, {
     method: "POST",
     headers: {
@@ -72,6 +83,8 @@ export async function startFabriqRefresh(params: {
       mode: params.mode,
       concurrency: params.concurrency ?? 10,
       resume: false,
+      historyMode,
+      startMonth,
     }),
   });
 

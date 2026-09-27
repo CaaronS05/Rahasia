@@ -1,3 +1,5 @@
+import type { FabriqHistoryMode } from "./fabriqControl";
+
 export const LPAGENT_API_BASE = "http://127.0.0.1:8787";
 
 export type LpAgentStatus =
@@ -29,6 +31,8 @@ export interface LpAgentState {
 
   concurrency: number;
   fabriqConcurrency: number;
+  historyMode: FabriqHistoryMode;
+  startMonth: string | null;
 
   startedAt: string | null;
   finishedAt: string | null;
@@ -72,7 +76,12 @@ export async function getLpAgentStatus(): Promise<LpAgentState> {
 export async function startLpAgentRefresh(params: {
   concurrency: number;
   fabriqConcurrency: number;
+  historyMode?: FabriqHistoryMode;
+  startMonth?: string | null;
 }): Promise<LpAgentState> {
+  const historyMode = params.historyMode ?? "90d";
+  const startMonth = historyMode === "custom" ? (params.startMonth ?? null) : null;
+
   const response = await fetch(`${LPAGENT_API_BASE}/api/lpagent/refresh`, {
     method: "POST",
     headers: {
@@ -81,6 +90,8 @@ export async function startLpAgentRefresh(params: {
     body: JSON.stringify({
       concurrency: Math.max(1, Math.floor(params.concurrency)),
       fabriqConcurrency: Math.max(1, Math.floor(params.fabriqConcurrency)),
+      historyMode,
+      startMonth,
     }),
   });
 

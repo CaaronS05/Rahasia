@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import {
+  type FabriqHistoryMode,
   type FabriqMode,
   type FabriqState,
   getFabriqStatus,
@@ -64,6 +65,31 @@ function formatLastUpdatedDate(value: string | null): string {
   }).format(date);
 }
 
+function getCurrentJakartaMonth(): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Jakarta",
+    year: "numeric",
+    month: "2-digit",
+  }).formatToParts(new Date());
+
+  const year = parts.find((p) => p.type === "year")?.value;
+  const month = parts.find((p) => p.type === "month")?.value;
+  return `${year}-${month}`;
+}
+
+function formatMonthName(yearMonth: string, short = false): string {
+  if (!yearMonth || !/^\d{4}-(?:0[1-9]|1[0-2])$/.test(yearMonth.trim())) {
+    return yearMonth;
+  }
+  const [y, m] = yearMonth.trim().split("-").map(Number);
+  const d = new Date(Date.UTC(y, m - 1, 1));
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: "UTC",
+    month: short ? "short" : "long",
+    year: "numeric",
+  }).format(d);
+}
+
 export function FabriqControlModal({
   isOpen,
   onClose,
@@ -80,6 +106,10 @@ export function FabriqControlModal({
   const [lpAgentState, setLpAgentState] = useState<LpAgentState | null>(null);
   const [lpConcurrency, setLpConcurrency] = useState<number>(5);
   const [lpFabriqConcurrency, setLpFabriqConcurrency] = useState<number>(10);
+
+  // Shared Fabriq History State
+  const [historyMode, setHistoryMode] = useState<FabriqHistoryMode>("90d");
+  const [startMonth, setStartMonth] = useState<string>("");
 
   // UI State
   const [showLogs, setShowLogs] =
@@ -115,6 +145,12 @@ export function FabriqControlModal({
           }
           if (initialState.mode) {
             setMode(initialState.mode);
+          }
+          if (initialState.historyMode) {
+            setHistoryMode(initialState.historyMode);
+          }
+          if (initialState.startMonth) {
+            setStartMonth(initialState.startMonth);
           }
         }
       })
@@ -157,6 +193,10 @@ export function FabriqControlModal({
         .then((s) => {
           if (!isMounted) return;
           setLpAgentState(s);
+          if (s.status === "running" || s.status === "stopping" || s.status === "stopped") {
+            if (s.historyMode) setHistoryMode(s.historyMode);
+            if (s.startMonth) setStartMonth(s.startMonth);
+          }
 
           if (
             s.status === "completed" &&
@@ -186,11 +226,6 @@ export function FabriqControlModal({
     }
   }, [showLogs, logsCount]);
 
-  // Early return ONLY after all hooks
-  if (!isOpen) {
-    return null;
-  }
-
   // Derived state for Fabriq
   const isFabriqRunning =
     state?.status === "running" || state?.status === "stopping";
@@ -208,6 +243,64 @@ export function FabriqControlModal({
   const isLpError = lpAgentState?.status === "error";
 
   const isAnyRunning = isFabriqRunning || isLpRunning;
+
+  // 4. Restore historyMode & startMonth when running or stopped
+  useEffect(() => {
+    if (isFabriqRunning || isFabriqStopped) {
+      if (state?.historyMode) setHistoryMode(state.historyMode);
+      if (state?.startMonth) setStartMonth(state.startMonth);
+    } else if (isLpRunning || isLpStopped) {
+      if (lpAgentState?.historyMode) setHistoryMode(lpAgentState.historyMode);
+      if (lpAgentState?.startMonth) setStartMonth(lpAgentState.startMonth);
+    }
+  }, [
+    isFabriqRunning,
+    isFabriqStopped,
+    isLpRunning,
+    isLpStopped,
+    state?.historyMode,
+    state?.startMonth,
+    lpAgentState?.historyMode,
+    lpAgentState?.startMonth,
+  ]);
+
+  // Early return ONLY after all hooks
+  if (!isOpen) {
+    return null;
+  }
+
+  const currentJakartaMonth = getCurrentJakartaMonth();
+
+  const isStartMonthValid =
+    historyMode === "90d" ||
+    (Boolean(startMonth) &&
+      /^\d{4}-(?:0[1-9]|1[0-2])$/.test(startMonth.trim()) &&
+      startMonth.trim() <= currentJakartaMonth);
+
+  const historyValidationMessage = (() => {
+    if (historyMode === "90d") return null;
+    if (!startMonth) return "Please select a start month";
+    if (!/^\d{4}-(?:0[1-9]|1[0-2])$/.test(startMonth.trim())) {
+      return "Invalid month format (expected YYYY-MM)";
+    }
+    if (startMonth.trim() > currentJakartaMonth) {
+      return "Start month cannot be later than current month";
+    }
+    return null;
+  })();
+
+  const historyRangeText = (() => {
+    const activeMode = isLpRunning ? lpAgentState?.historyMode : state?.historyMode;
+    const activeStart = isLpRunning ? lpAgentState?.startMonth : state?.startMonth;
+    const effMode = activeMode || historyMode;
+    const effStart = activeStart || startMonth;
+
+    if (effMode === "custom" && effStart) {
+      const curMonth = getCurrentJakartaMonth();
+      return `${formatMonthName(effStart, true)} → ${formatMonthName(curMonth, true)}`;
+    }
+    return "Last 90 Days";
+  })();
 
   // Active view determination
   let currentView: "idle" | "lp_running" | "lp_stopped" | "lp_completed" | "lp_error" | "fabriq_running" | "fabriq_stopped" | "fabriq_completed" | "fabriq_error" = "idle";
@@ -423,6 +516,7 @@ export function FabriqControlModal({
 
   // Handlers for LP Agent
   const handleStartLp = async () => {
+    if (!isStartMonthValid) return;
     setActionLoading(true);
     setActionError(null);
     try {
@@ -432,6 +526,8 @@ export function FabriqControlModal({
             lpConcurrency,
           fabriqConcurrency:
             lpFabriqConcurrency,
+          historyMode,
+          startMonth: historyMode === "custom" ? startMonth : null,
         });
 
       setLpAgentState(res);
@@ -472,12 +568,15 @@ export function FabriqControlModal({
 
   // Handlers for Fabriq
   const handleStartFabriq = async () => {
+    if (!isStartMonthValid) return;
     setActionLoading(true);
     setActionError(null);
     try {
       const nextState = await startFabriqRefresh({
         mode,
         concurrency,
+        historyMode,
+        startMonth: historyMode === "custom" ? startMonth : null,
       });
       setState(nextState);
       setConfigureNewRun(false);
@@ -682,6 +781,10 @@ export function FabriqControlModal({
                       </div>
                     </div>
                     <div className="fabriq-stat-card">
+                      <div className="stat-label">History</div>
+                      <div className="stat-val text-text">{historyRangeText}</div>
+                    </div>
+                    <div className="fabriq-stat-card">
                       <div className="stat-label">LP Workers</div>
                       <div className="stat-val text-amber">{lpAgentState.concurrency}</div>
                     </div>
@@ -758,6 +861,10 @@ export function FabriqControlModal({
                       <div className={`stat-val ${lpAgentState.fabriqFailed ? "text-red" : "text-muted"}`}>
                         {lpAgentState.fabriqFailed}
                       </div>
+                    </div>
+                    <div className="fabriq-stat-card">
+                      <div className="stat-label">History</div>
+                      <div className="stat-val text-text">{historyRangeText}</div>
                     </div>
                     <div className="fabriq-stat-card">
                       <div className="stat-label">Fabriq Workers</div>
@@ -862,6 +969,10 @@ export function FabriqControlModal({
                 <div className="fabriq-stat-card">
                   <div className="stat-label">Wallets Scraped</div>
                   <div className="stat-val text-green">{lpAgentState?.wallets}</div>
+                </div>
+                <div className="fabriq-stat-card">
+                  <div className="stat-label">History</div>
+                  <div className="stat-val text-text">{historyRangeText}</div>
                 </div>
                 <div className="fabriq-stat-card">
                   <div className="stat-label">Runtime</div>
@@ -1071,6 +1182,10 @@ export function FabriqControlModal({
                   </div>
                 </div>
                 <div className="fabriq-stat-card">
+                  <div className="stat-label">History</div>
+                  <div className="stat-val text-text">{historyRangeText}</div>
+                </div>
+                <div className="fabriq-stat-card">
                   <div className="stat-label">Workers</div>
                   <div className="stat-val text-amber">{state?.concurrency ?? 10}</div>
                 </div>
@@ -1151,6 +1266,10 @@ export function FabriqControlModal({
                 <div className="fabriq-stat-card">
                   <div className="stat-label">Skipped</div>
                   <div className="stat-val text-muted">{(state?.skipped ?? 0).toLocaleString()}</div>
+                </div>
+                <div className="fabriq-stat-card">
+                  <div className="stat-label">History</div>
+                  <div className="stat-val text-text">{historyRangeText}</div>
                 </div>
                 <div className="fabriq-stat-card">
                   <div className="stat-label">Runtime</div>
@@ -1249,6 +1368,10 @@ export function FabriqControlModal({
                   <div className="stat-val text-muted">{(state?.skipped ?? 0).toLocaleString()}</div>
                 </div>
                 <div className="fabriq-stat-card">
+                  <div className="stat-label">History</div>
+                  <div className="stat-val text-text">{historyRangeText}</div>
+                </div>
+                <div className="fabriq-stat-card">
                   <div className="stat-label">Runtime</div>
                   <div className="stat-val text-text">
                     {formatRuntime(state?.runtimeSeconds ?? 0)}
@@ -1323,6 +1446,75 @@ export function FabriqControlModal({
                 </div>
               </div>
 
+              {/* Shared Fabriq History Range Section */}
+              <div className="history-range-card">
+                <div className="history-range-header">
+                  <div className="history-range-title">Fabriq History Range</div>
+                  <span className="history-range-badge">Shared</span>
+                </div>
+
+                <div className="history-options-grid">
+                  <label
+                    className={`history-option-card ${historyMode === "90d" ? "selected" : ""}`}
+                    onClick={() => setHistoryMode("90d")}
+                  >
+                    <div className="mode-radio">
+                      <div className={`radio-dot ${historyMode === "90d" ? "active" : ""}`} />
+                    </div>
+                    <div className="mode-text">
+                      <div className="mode-title">Last 90 Days</div>
+                      <div className="mode-desc">Default rolling window ending today.</div>
+                    </div>
+                  </label>
+
+                  <label
+                    className={`history-option-card ${historyMode === "custom" ? "selected" : ""}`}
+                    onClick={() => setHistoryMode("custom")}
+                  >
+                    <div className="mode-radio">
+                      <div className={`radio-dot ${historyMode === "custom" ? "active" : ""}`} />
+                    </div>
+                    <div className="mode-text">
+                      <div className="mode-title">Custom Start Month</div>
+                      <div className="mode-desc">
+                        Fetch monthly Fabriq history from a selected month through current month.
+                      </div>
+                    </div>
+                  </label>
+                </div>
+
+                {historyMode === "custom" && (
+                  <div className="history-custom-picker">
+                    <div className="history-picker-row">
+                      <label className="history-input-label" htmlFor="history-start-month-input">
+                        Start Month
+                      </label>
+                      <input
+                        id="history-start-month-input"
+                        type="month"
+                        max={currentJakartaMonth}
+                        value={startMonth}
+                        onChange={(e) => setStartMonth(e.target.value)}
+                        disabled={isAnyRunning}
+                        className="history-month-input"
+                      />
+                      {startMonth && /^\d{4}-(?:0[1-9]|1[0-2])$/.test(startMonth.trim()) && startMonth.trim() <= currentJakartaMonth && (
+                        <div className="history-range-summary">
+                          History: <strong>{formatMonthName(startMonth)} → {formatMonthName(currentJakartaMonth)}</strong>
+                        </div>
+                      )}
+                    </div>
+
+                    {historyValidationMessage && (
+                      <div className="history-validation-msg">
+                        <AlertCircle size={13} />
+                        <span>{historyValidationMessage}</span>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
               {/* Two Control Cards Grid */}
               <div className="update-cards-grid">
                 {/* CARD 1: Wallet List (LP Agent) */}
@@ -1383,7 +1575,7 @@ export function FabriqControlModal({
                   <button
                     className="fabriq-btn btn-primary w-full"
                     onClick={handleStartLp}
-                    disabled={actionLoading}
+                    disabled={actionLoading || !isStartMonthValid}
                   >
                     <Play size={14} /> Update Wallet List
                   </button>
@@ -1451,7 +1643,7 @@ export function FabriqControlModal({
                   <button
                     className="fabriq-btn btn-secondary w-full"
                     onClick={handleStartFabriq}
-                    disabled={actionLoading}
+                    disabled={actionLoading || !isStartMonthValid}
                   >
                     <Play size={14} /> Start Fabriq Update
                   </button>

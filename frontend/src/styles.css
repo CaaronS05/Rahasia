@@ -2469,6 +2469,138 @@ button {
   margin: 0 4px;
 }
 
+/* Fabriq History Range Configuration Card */
+.history-range-card {
+  background: #151513;
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.history-range-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.history-range-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.history-range-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: rgba(85, 214, 157, 0.12);
+  color: var(--green);
+  border: 1px solid rgba(85, 214, 157, 0.28);
+}
+
+.history-options-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+@media (max-width: 640px) {
+  .history-options-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.history-option-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  background: #111210;
+  border: 1px solid #272522;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.history-option-card:hover {
+  background: #181816;
+  border-color: #383530;
+}
+
+.history-option-card.selected {
+  background: rgba(85, 214, 157, 0.05);
+  border-color: rgba(85, 214, 157, 0.4);
+}
+
+.history-option-card.selected .mode-radio {
+  border-color: var(--green);
+}
+
+.history-custom-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  background: #111210;
+  border: 1px dashed rgba(85, 214, 157, 0.3);
+  border-radius: 8px;
+}
+
+.history-picker-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.history-input-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.history-month-input {
+  background: #171816;
+  border: 1px solid #2f2d29;
+  border-radius: 6px;
+  color: var(--text);
+  padding: 5px 10px;
+  font-size: 12px;
+  font-family: inherit;
+  outline: none;
+  color-scheme: dark;
+  transition: border-color 0.15s ease;
+}
+
+.history-month-input:focus {
+  border-color: var(--green);
+}
+
+.history-range-summary {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.history-range-summary strong {
+  color: var(--green-bright);
+  font-weight: 600;
+}
+
+.history-validation-msg {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: #f87171;
+  line-height: 1.3;
+}
+
 /* 2-Card Update Grid in Idle View */
 .update-cards-grid {
   display: grid;

@@ -115,9 +115,53 @@ function getJakartaDateParts(date = new Date()) {
     };
 }
 
-function getRolling90DaysRange() {
+const RAW_START_MONTH = process.env.FABRIQ_START_MONTH
+    ? process.env.FABRIQ_START_MONTH.trim()
+    : null;
+
+function getCalendarRange() {
     const today = getJakartaDateParts(new Date());
 
+    if (RAW_START_MONTH) {
+        if (!/^\d{4}-(?:0[1-9]|1[0-2])$/.test(RAW_START_MONTH)) {
+            throw new Error(
+                `Invalid FABRIQ_START_MONTH: "${RAW_START_MONTH}". Expected format YYYY-MM.`
+            );
+        }
+
+        if (RAW_START_MONTH > today.monthStr) {
+            throw new Error(
+                `FABRIQ_START_MONTH (${RAW_START_MONTH}) cannot be later than current month (${today.monthStr}).`
+            );
+        }
+
+        const [startYear, startMonthNum] = RAW_START_MONTH.split("-").map(Number);
+        const [curYear, curMonthNum] = today.monthStr.split("-").map(Number);
+
+        const months = [];
+        let y = startYear;
+        let m = startMonthNum;
+
+        while (y < curYear || (y === curYear && m <= curMonthNum)) {
+            months.push(`${y}-${String(m).padStart(2, "0")}`);
+            m++;
+            if (m > 12) {
+                m = 1;
+                y++;
+            }
+        }
+
+        return {
+            mode: "custom",
+            startMonth: RAW_START_MONTH,
+            todayStr: today.dateStr,
+            currentMonth: today.monthStr,
+            months,
+            datesSet: null,
+        };
+    }
+
+    // Default: Rolling 90 days
     const dateStrings = [];
     const monthsSet = new Set();
 
@@ -132,6 +176,8 @@ function getRolling90DaysRange() {
     }
 
     return {
+        mode: "90d",
+        startMonth: null,
         todayStr: today.dateStr,
         currentMonth: today.monthStr,
         startDate: dateStrings[0],
@@ -141,10 +187,12 @@ function getRolling90DaysRange() {
     };
 }
 
-const ROLLING_WINDOW = getRolling90DaysRange();
-const CURRENT_MONTH = ROLLING_WINDOW.currentMonth;
-const CALENDAR_MONTHS = ROLLING_WINDOW.months;
-const ROLLING_90_DATES = ROLLING_WINDOW.datesSet;
+const CALENDAR_RANGE = getCalendarRange();
+const CURRENT_MONTH = CALENDAR_RANGE.currentMonth;
+const CALENDAR_MONTHS = CALENDAR_RANGE.months;
+const ROLLING_90_DATES = CALENDAR_RANGE.datesSet;
+const TODAY_STR = CALENDAR_RANGE.todayStr;
+const IS_CUSTOM_RANGE = CALENDAR_RANGE.mode === "custom";
 
 function getCurrentMonth() {
     return CURRENT_MONTH;
@@ -614,23 +662,30 @@ async function fetchWallet(wallet) {
 
         if (
             calendarResponse?.success !== true ||
-            !calendarResponse?.data
+            calendarResponse?.data === undefined
         ) {
             throw new Error(
                 `Invalid Fabriq calendar response for ${month}`
             );
         }
 
+        const rawMonthData =
+            calendarResponse.data && typeof calendarResponse.data === "object"
+                ? calendarResponse.data
+                : {};
+
         calendars[month] =
             Object.fromEntries(
                 Object.entries(
-                    calendarResponse.data
+                    rawMonthData
                 ).filter(
                     ([date]) =>
                         date.startsWith(
                             `${month}-`
                         ) &&
-                        ROLLING_90_DATES.has(date)
+                        (IS_CUSTOM_RANGE
+                            ? date <= TODAY_STR
+                            : ROLLING_90_DATES.has(date))
                 )
             );
     }
@@ -744,9 +799,15 @@ console.log(
     `[WORKERS] ${CONCURRENCY}`
 );
 
-console.log(
-    `[CALENDAR] months=${CALENDAR_MONTHS.join(", ")}`
-);
+if (IS_CUSTOM_RANGE) {
+    console.log(
+        `[CALENDAR] mode=custom start=${CALENDAR_RANGE.startMonth} months=${CALENDAR_MONTHS.join(", ")}`
+    );
+} else {
+    console.log(
+        `[CALENDAR] mode=90d months=${CALENDAR_MONTHS.join(", ")}`
+    );
+}
 
 // ======================================================
 // LOAD OLD PROGRESS
