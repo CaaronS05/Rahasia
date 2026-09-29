@@ -34,6 +34,7 @@ const TIMEZONE = "Asia/Jakarta";
 const DELAY_MS = 500;
 const MAX_RETRIES = 3;
 const STALE_AFTER_HOURS = 24;
+const RETRY_404_DELAY_MS = 5000;
 
 const REFRESH_BEFORE =
     process.env.FABRIQ_REFRESH_BEFORE
@@ -301,8 +302,14 @@ async function loadCheckpoint() {
                 const row = JSON.parse(line);
 
                 if (row.owner) {
-                    // last checkpoint for the wallet wins
-                    map.set(row.owner, row);
+                    if (row.status === "ok") {
+                        // last successful checkpoint for the wallet wins
+                        map.set(row.owner, row);
+                    } else if (row.status === "error") {
+                        // Wallets with status "error" must NEVER be treated as completed.
+                        // On the next run/resume they must automatically be processed again.
+                        map.delete(row.owner);
+                    }
                 }
             } catch {
                 // ignore broken line
@@ -487,140 +494,162 @@ async function getToken(
 
 async function fabriqFetch(
     url,
-    attempt = 1
+    initialAttempt = 1
 ) {
-    try {
-        const jwt = await getToken();
+    let attempt = initialAttempt;
 
-        const response = await fetch(url, {
-            headers: {
-                Authorization: `Bearer ${jwt}`,
-                Accept: "application/json",
-            },
-        });
+    while (true) {
+        try {
+            const jwt = await getToken();
 
-        // --------------------------------
-        // JWT expired/rejected
-        // --------------------------------
+            const response = await fetch(url, {
+                headers: {
+                    Authorization: `Bearer ${jwt}`,
+                    Accept: "application/json",
+                },
+            });
 
-        if (response.status === 401) {
-            if (attempt >= MAX_RETRIES) {
+            // --------------------------------
+            // JWT expired/rejected
+            // --------------------------------
+
+            if (response.status === 401) {
+                if (attempt >= MAX_RETRIES) {
+                    throw new Error(
+                        "401 Unauthorized after retries"
+                    );
+                }
+
+                console.log(
+                    "[AUTH] 401 → refreshing JWT"
+                );
+
+                await getToken(true);
+
+                attempt++;
+                continue;
+            }
+
+            // --------------------------------
+            // Rate limit
+            // --------------------------------
+
+            if (response.status === 429) {
+                if (attempt >= MAX_RETRIES) {
+                    throw new Error(
+                        "429 Too Many Requests"
+                    );
+                }
+
+                const retryAfter =
+                    Number(
+                        response.headers.get(
+                            "retry-after"
+                        )
+                    ) || 5;
+
+                console.log(
+                    `[RATE LIMIT] waiting ${retryAfter}s`
+                );
+
+                await sleep(
+                    retryAfter * 1000
+                );
+
+                attempt++;
+                continue;
+            }
+
+            // --------------------------------
+            // Cloudflare / forbidden
+            // --------------------------------
+
+            if (response.status === 403) {
                 throw new Error(
+                    "403 Forbidden. Check the existing Fabriq browser session."
+                );
+            }
+
+            // --------------------------------
+            // 404 Not Found — data not ready
+            // --------------------------------
+
+            if (response.status === 404) {
+                console.log(
+                    "[WAIT] 404 Not Found — wallet data not ready, retrying in 5000ms"
+                );
+
+                await sleep(
+                    RETRY_404_DELAY_MS
+                );
+
+                attempt = 1;
+                continue;
+            }
+
+            // --------------------------------
+            // Server error
+            // --------------------------------
+
+            if (response.status >= 500) {
+                if (attempt >= MAX_RETRIES) {
+                    throw new Error(
+                        `Server error ${response.status}`
+                    );
+                }
+
+                const delay =
+                    attempt * 2000;
+
+                console.log(
+                    `[RETRY] server ${response.status}, waiting ${delay}ms`
+                );
+
+                await sleep(delay);
+
+                attempt++;
+                continue;
+            }
+
+            if (!response.ok) {
+                throw new Error(
+                    `${response.status} ${response.statusText}`
+                );
+            }
+
+            return await response.json();
+        } catch (error) {
+            // network error
+            if (
+                attempt < MAX_RETRIES &&
+                !String(error.message).includes(
+                    "403 Forbidden"
+                ) &&
+                !String(error.message).includes(
                     "401 Unauthorized after retries"
-                );
-            }
-
-            console.log(
-                "[AUTH] 401 → refreshing JWT"
-            );
-
-            await getToken(true);
-
-            return fabriqFetch(
-                url,
-                attempt + 1
-            );
-        }
-
-        // --------------------------------
-        // Rate limit
-        // --------------------------------
-
-        if (response.status === 429) {
-            if (attempt >= MAX_RETRIES) {
-                throw new Error(
+                ) &&
+                !String(error.message).includes(
                     "429 Too Many Requests"
+                ) &&
+                !String(error.message).startsWith(
+                    "Server error"
+                )
+            ) {
+                const delay =
+                    attempt * 2000;
+
+                console.log(
+                    `[RETRY] ${error.message} → ${delay}ms`
                 );
+
+                await sleep(delay);
+
+                attempt++;
+                continue;
             }
 
-            const retryAfter =
-                Number(
-                    response.headers.get(
-                        "retry-after"
-                    )
-                ) || 5;
-
-            console.log(
-                `[RATE LIMIT] waiting ${retryAfter}s`
-            );
-
-            await sleep(
-                retryAfter * 1000
-            );
-
-            return fabriqFetch(
-                url,
-                attempt + 1
-            );
+            throw error;
         }
-
-        // --------------------------------
-        // Cloudflare / forbidden
-        // --------------------------------
-
-        if (response.status === 403) {
-            throw new Error(
-                "403 Forbidden. Check the existing Fabriq browser session."
-            );
-        }
-
-        // --------------------------------
-        // Server error
-        // --------------------------------
-
-        if (response.status >= 500) {
-            if (attempt >= MAX_RETRIES) {
-                throw new Error(
-                    `Server error ${response.status}`
-                );
-            }
-
-            const delay =
-                attempt * 2000;
-
-            console.log(
-                `[RETRY] server ${response.status}, waiting ${delay}ms`
-            );
-
-            await sleep(delay);
-
-            return fabriqFetch(
-                url,
-                attempt + 1
-            );
-        }
-
-        if (!response.ok) {
-            throw new Error(
-                `${response.status} ${response.statusText}`
-            );
-        }
-
-        return await response.json();
-    } catch (error) {
-        // network error
-        if (
-            attempt < MAX_RETRIES &&
-            !String(error.message).includes(
-                "403 Forbidden"
-            )
-        ) {
-            const delay =
-                attempt * 2000;
-
-            console.log(
-                `[RETRY] ${error.message} → ${delay}ms`
-            );
-
-            await sleep(delay);
-
-            return fabriqFetch(
-                url,
-                attempt + 1
-            );
-        }
-
-        throw error;
     }
 }
 

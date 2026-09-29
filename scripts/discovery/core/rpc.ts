@@ -133,6 +133,17 @@ export async function fetchGtfaPage(
     };
 }
 
+export async function fetchTransactionsForAddressPage(
+    config: DiscoveryConfig,
+    address: string,
+    startTime: number,
+    endTime: number,
+    limit: number,
+    paginationToken?: string
+): Promise<GtfaPageResult> {
+    return fetchGtfaPage(config, address, startTime, endTime, limit, paginationToken);
+}
+
 export interface StandardSignatureInfo {
     signature: string;
     blockTime: number | null;
@@ -157,6 +168,15 @@ export async function fetchStandardSignatures(
     );
 
     return signatures || [];
+}
+
+export async function fetchSignaturesForAddress(
+    config: DiscoveryConfig,
+    address: string,
+    limit: number,
+    before?: string
+): Promise<StandardSignatureInfo[]> {
+    return fetchStandardSignatures(config, address, limit, before);
 }
 
 export async function fetchStandardTransaction(

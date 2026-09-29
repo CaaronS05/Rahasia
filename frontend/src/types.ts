@@ -130,6 +130,90 @@ export type Wallet = {
   };
 
   fabriqDerived?: FabriqDerived;
+  score?: WalletScoreData | null;
+  intelligenceV1?: WalletIntelligenceV1 | null;
+};
+
+export type WalletStyleV1 = "SNIPER" | "FARMER" | "MIXED_UNCLASSIFIED";
+
+export type WalletIntelligenceV1Performance = {
+  totalPnl: number;
+  profitFactor: number;
+  medianPositionPnlPct: number;
+  positionWinRate: number;
+  closedPositionCount: number;
+  pnlConcentrationTop1: number;
+};
+
+export type WalletIntelligenceV1 = {
+  wallet: string;
+  qualityScore: number | null;
+  riskScore: number | null;
+  confidenceScore: number | null;
+  style: WalletStyleV1 | string | null;
+  shortlisted: boolean;
+  performance?: WalletIntelligenceV1Performance | null;
+};
+
+export type WalletIntelligenceV1Dataset = {
+  generatedAt: string;
+  version: string;
+  population: {
+    validWallets: number;
+    shortlistedWallets: number;
+  };
+  shortlistRule: {
+    qualityMinimum: number;
+    riskMaximum: number;
+    confidenceMinimum: number;
+  };
+  wallets: WalletIntelligenceV1[];
+};
+
+export type WalletScoreData = {
+  wallet: string;
+  skill: {
+    score: number | null;
+    version: string;
+    provisional: boolean;
+  };
+  confidence: {
+    generalPct: number | null;
+    performancePct: number | null;
+    rangePct: number | null;
+  };
+  style: {
+    tag: "farmer" | "mixed_unclassified" | string | null;
+    version: string;
+    provisional: boolean;
+  };
+  metrics?: {
+    winRatePosition: number | null;
+    pnlConcentrationTop1Pct: number | null;
+    medianHoldDurationHours: number | null;
+    trueRebalanceFrequency: number | null;
+    sampleSize: number;
+    uniquePools: number;
+  };
+};
+
+export type WalletScoresDataset = {
+  publishedAt?: string;
+  source?: string;
+  status?: string;
+  versions?: {
+    skill?: string;
+    style?: string;
+  };
+  walletCount?: number;
+  methodology?: {
+    skillConfidenceSeparated?: boolean;
+    skillTemporalContract?: string;
+    styleClassification?: string;
+    frontendPublished?: boolean;
+    frontendIntegrated?: boolean;
+  };
+  scores: WalletScoreData[];
 };
 
 export type WalletDataset = {

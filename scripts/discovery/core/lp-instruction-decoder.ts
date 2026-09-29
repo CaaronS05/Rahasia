@@ -132,7 +132,7 @@ export function classifyInstructionCategory(name: string): string | null {
 
 export function decodeLpInstruction(
     ix: NormalizedInstruction,
-    targetPool: string,
+    targetPool: string | null,
     meteoraProgramId: string,
     discriminatorMap: IdlDiscriminatorMap,
     eventMap?: IdlEventDiscriminatorMap
@@ -272,8 +272,8 @@ export function decodeLpInstruction(
         };
     }
 
-    // Exact pool check: decodedPool === targetPool
-    if (pool !== targetPool) {
+    // Exact pool check: decodedPool === targetPool (if targetPool specified)
+    if (targetPool !== null && pool !== targetPool) {
         return {
             status: "WRONG_POOL",
             instructionName,

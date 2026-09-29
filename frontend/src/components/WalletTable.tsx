@@ -20,6 +20,12 @@ import {
 
 export type WalletSortKey =
   | "wallet"
+  | "shortlist"
+  | "quality"
+  | "risk"
+  | "confidence"
+  | "style"
+  | "skill"
   | "pnl7"
   | "win"
   | "winDays"
@@ -35,7 +41,28 @@ export type WalletSortKey =
   | "fees"
   | "last";
 
-type ColumnKey = WalletSortKey;
+type ColumnKey =
+  | "wallet"
+  | "shortlist"
+  | "quality"
+  | "risk"
+  | "confidence"
+  | "style"
+  | "skill"
+  | "pnl7"
+  | "win"
+  | "winDays"
+  | "loseDays"
+  | "pnl30"
+  | "pnlAll"
+  | "positions"
+  | "walletAge"
+  | "age"
+  | "ev"
+  | "invested"
+  | "monthly"
+  | "fees"
+  | "last";
 
 type Props = {
   wallets: Wallet[];
@@ -49,6 +76,12 @@ type Props = {
 
 const labels: Record<ColumnKey, string> = {
   wallet: "Wallet",
+  shortlist: "Shortlist",
+  quality: "Quality",
+  risk: "Risk",
+  confidence: "Confidence",
+  style: "Style",
+  skill: "Skill (Legacy)",
   pnl7: "7D PnL",
   win: "Win Rate",
   winDays: "Win Days",
@@ -67,6 +100,12 @@ const labels: Record<ColumnKey, string> = {
 
 const defaultVisible: Record<ColumnKey, boolean> = {
   wallet: true,
+  shortlist: true,
+  quality: true,
+  risk: true,
+  confidence: true,
+  style: true,
+  skill: false,
   pnl7: true,
   win: true,
   winDays: true,
@@ -82,6 +121,63 @@ const defaultVisible: Record<ColumnKey, boolean> = {
   fees: true,
   last: false,
 };
+
+function formatQualityScore(wallet: Wallet): string {
+  const val = wallet.intelligenceV1?.qualityScore;
+  if (val === null || val === undefined) return "—";
+  return fmt(val, 1);
+}
+
+function formatRiskScore(wallet: Wallet): string {
+  const val = wallet.intelligenceV1?.riskScore;
+  if (val === null || val === undefined) return "—";
+  return fmt(val, 1);
+}
+
+function formatV1ConfidenceScore(wallet: Wallet): string {
+  const val = wallet.intelligenceV1?.confidenceScore;
+  if (val !== null && val !== undefined) return fmt(val, 1);
+  const legacy = wallet.score?.confidence?.generalPct;
+  if (legacy !== null && legacy !== undefined) return `${fmt(legacy, 1)}%`;
+  return "—";
+}
+
+function formatV1StyleTag(wallet: Wallet): string {
+  const style = wallet.intelligenceV1?.style;
+  if (style) {
+    if (style === "SNIPER" || style === "sniper") return "Sniper";
+    if (style === "FARMER" || style === "farmer") return "Farmer";
+    if (style === "MIXED_UNCLASSIFIED" || style === "mixed_unclassified" || style === "mixed") {
+      return "Mixed / Unclassified";
+    }
+    return style;
+  }
+  const tag = wallet.score?.style?.tag;
+  if (!tag) return "—";
+  if (tag === "farmer") return "Farmer";
+  if (tag === "mixed_unclassified") return "Mixed / Unclassified";
+  return tag;
+}
+
+function formatSkillScore(wallet: Wallet): string {
+  const val = wallet.score?.skill?.score;
+  if (val === null || val === undefined) return "—";
+  return fmt(val, 1);
+}
+
+function formatConfidenceScore(wallet: Wallet): string {
+  const val = wallet.score?.confidence?.generalPct;
+  if (val === null || val === undefined) return "—";
+  return `${fmt(val, 1)}%`;
+}
+
+function formatStyleTag(wallet: Wallet): string {
+  const tag = wallet.score?.style?.tag;
+  if (!tag) return "—";
+  if (tag === "farmer") return "Farmer";
+  if (tag === "mixed_unclassified") return "Mixed / Unclassified";
+  return tag;
+}
 
 function signed(value: number, digits = 2) {
   return `${value >= 0 ? "+" : ""}${fmt(value, digits)}`;
@@ -137,7 +233,7 @@ export function WalletTable({
     (key) => visible[key],
   );
 
-  function header(key: ColumnKey) {
+  function header(key: WalletSortKey) {
     return (
       <button className="table-sort" onClick={() => onSort(key)}>
         {labels[key].toUpperCase()}
@@ -217,6 +313,16 @@ export function WalletTable({
             <tr>
               <th className="rank-col">#</th>
               {visible.wallet ? <th>{header("wallet")}</th> : null}
+              {visible.shortlist ? <th>{header("shortlist")}</th> : null}
+              {visible.quality ? <th>{header("quality")}</th> : null}
+              {visible.risk ? (
+                <th title="0–100. Higher means higher observed historical risk.">
+                  {header("risk")}
+                </th>
+              ) : null}
+              {visible.confidence ? <th>{header("confidence")}</th> : null}
+              {visible.style ? <th>{header("style")}</th> : null}
+              {visible.skill ? <th>{header("skill")}</th> : null}
               {visible.pnl7 ? <th>{header("pnl7")}</th> : null}
               {visible.win ? <th>{header("win")}</th> : null}
               {visible.winDays ? (
@@ -334,6 +440,50 @@ export function WalletTable({
                         </button>
                       </div>
                     </td>
+                  ) : null}
+
+                  {visible.shortlist ? (
+                    <td style={{ textAlign: "center" }}>
+                      {wallet.intelligenceV1?.shortlisted ? (
+                        <span
+                          className="v1-shortlist-badge"
+                          title="Passes V1 historical monitoring criteria"
+                        >
+                          Shortlisted
+                        </span>
+                      ) : (
+                        <span className="v1-unshortlist">—</span>
+                      )}
+                    </td>
+                  ) : null}
+
+                  {visible.quality ? (
+                    <td className="numeric">{formatQualityScore(wallet)}</td>
+                  ) : null}
+
+                  {visible.risk ? (
+                    <td
+                      className="numeric"
+                      title="0–100. Higher means higher observed historical risk."
+                    >
+                      {formatRiskScore(wallet)}
+                    </td>
+                  ) : null}
+
+                  {visible.confidence ? (
+                    <td className="numeric">{formatV1ConfidenceScore(wallet)}</td>
+                  ) : null}
+
+                  {visible.style ? (
+                    <td>
+                      <span className="v1-style-tag">
+                        {formatV1StyleTag(wallet)}
+                      </span>
+                    </td>
+                  ) : null}
+
+                  {visible.skill ? (
+                    <td className="numeric">{formatSkillScore(wallet)}</td>
                   ) : null}
 
                   {visible.pnl7 ? (

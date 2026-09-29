@@ -25,3 +25,9 @@ data/master/*.before-*.json
 
 # Temporary files
 *.tmp
+# Local / generated datasets
+data/
+.freebuff/
+
+# Generated frontend datasets
+frontend/public/data/*.json

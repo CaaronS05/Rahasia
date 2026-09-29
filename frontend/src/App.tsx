@@ -12,7 +12,13 @@ import { WalletTable, type WalletSortKey } from "./components/WalletTable";
 import { compact, fmt } from "./lib/format";
 import { getFabriqStatus, subscribeFabriqEvents } from "./lib/fabriqControl";
 import { getLpAgentStatus } from "./lib/lpAgentControl";
-import { loadWalletDataset } from "./lib/walletData";
+import {
+  loadWalletDataset,
+  loadWalletScores,
+  joinWalletsWithScores,
+  loadWalletIntelligenceV1,
+  joinWalletsWithIntelligenceV1,
+} from "./lib/walletData";
 import { loadTrackedWallets, saveTrackedWallets } from "./lib/trackedWallets";
 import { PoolScannerPage } from "./pages/PoolScannerPage";
 import { PortfolioPage } from "./pages/PortfolioPage";
@@ -136,9 +142,27 @@ export default function App() {
   const dataUpdateRunning = fabriqRunning || lpAgentRunning;
 
   const refreshDataset = useCallback(() => {
-    return loadWalletDataset()
-      .then((dataset) => {
-        setWallets(dataset.wallets);
+    return Promise.all([
+      loadWalletDataset(),
+      loadWalletScores().catch((err) => {
+        console.warn(
+          "Failed to load wallet scores, continuing with unscored wallets:",
+          err,
+        );
+        return null;
+      }),
+      loadWalletIntelligenceV1().catch((err) => {
+        console.warn(
+          "Failed to load V1 wallet intelligence, continuing without V1 data:",
+          err,
+        );
+        return null;
+      }),
+    ])
+      .then(([dataset, scoresData, intelData]) => {
+        const withScores = joinWalletsWithScores(dataset.wallets, scoresData);
+        const joined = joinWalletsWithIntelligenceV1(withScores, intelData);
+        setWallets(joined);
         setDataUpdatedAt(dataset.meta?.publishedAt ?? null);
       })
       .catch((err) => {
@@ -262,6 +286,18 @@ export default function App() {
       switch (key) {
         case "wallet":
           return wallet.owner;
+        case "shortlist":
+          return wallet.intelligenceV1?.shortlisted ? 1 : 0;
+        case "quality":
+          return wallet.intelligenceV1?.qualityScore ?? -1;
+        case "risk":
+          return wallet.intelligenceV1?.riskScore ?? -1;
+        case "confidence":
+          return wallet.intelligenceV1?.confidenceScore ?? (wallet.score?.confidence?.generalPct ?? -1);
+        case "style":
+          return wallet.intelligenceV1?.style ?? (wallet.score?.style?.tag ?? "");
+        case "skill":
+          return wallet.score?.skill?.score ?? -1;
         case "pnl7":
           return wallet.total_pnl_native_7d;
         case "win":

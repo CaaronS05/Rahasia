@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import { FormEvent, useMemo, useState } from "react";
 import type { Wallet } from "../types";
+import { fmt } from "../lib/format";
 import { PortfolioCalendar } from "../components/portfolio/PortfolioCalendar";
 import {
   CumulativePnlChart,
@@ -65,6 +66,24 @@ function number(value: unknown, digits = 2) {
 function shortWallet(address: string) {
   if (address.length <= 12) return address;
   return `${address.slice(0, 6)}...${address.slice(-5)}`;
+}
+
+function formatStyleDisplay(style?: string | null): string {
+  if (!style) return "—";
+  if (style === "SNIPER" || style === "sniper") return "Sniper";
+  if (style === "FARMER" || style === "farmer") return "Farmer";
+  if (
+    style === "MIXED_UNCLASSIFIED" ||
+    style === "mixed_unclassified" ||
+    style === "mixed"
+  ) {
+    return "Mixed / Unclassified";
+  }
+  return style;
+}
+
+function formatStyleTag(tag?: string | null): string {
+  return formatStyleDisplay(tag);
 }
 
 function clampPercent(value: unknown) {
@@ -133,7 +152,15 @@ export function PortfolioPage({
   const [search, setSearch] = useState(requestedAddress ?? "");
   const [tab, setTab] = useState("Overview");
 
-  const enrichedWallet = wallet as WalletWithFabriq | undefined;
+  const currentWallet = useMemo(() => {
+    if (wallet) return wallet;
+    if (requestedAddress) {
+      return wallets.find((w) => w.owner === requestedAddress);
+    }
+    return undefined;
+  }, [wallet, requestedAddress, wallets]);
+
+  const enrichedWallet = currentWallet as WalletWithFabriq | undefined;
   const stats = enrichedWallet?.fabriq?.stats ?? {};
   const calendar = enrichedWallet?.fabriq?.calendar;
   const calendars = enrichedWallet?.fabriq?.calendars;
@@ -225,7 +252,7 @@ export function PortfolioPage({
           <h2>Open a wallet portfolio</h2>
           <p>Paste a wallet address above, or click a wallet from Wallet Explorer.</p>
         </section>
-      ) : !wallet ? (
+      ) : !currentWallet ? (
         <section className="portfolio-empty">
           <Search size={32} />
           <h2>Wallet not found</h2>
@@ -247,17 +274,17 @@ export function PortfolioPage({
 
               <div>
                 <div className="wallet-address-line">
-                  <h2>{shortWallet(wallet.owner)}</h2>
+                  <h2>{shortWallet(currentWallet.owner)}</h2>
                   <button
                     className="copy-wallet portfolio-copy"
-                    onClick={() => navigator.clipboard.writeText(wallet.owner)}
+                    onClick={() => navigator.clipboard.writeText(currentWallet.owner)}
                   >
                     <Copy size={13} />
                   </button>
                   <button
                     className={`portfolio-track-button ${isTracked ? "tracked" : ""
                       }`}
-                    onClick={() => onToggleTrack(wallet.owner)}
+                    onClick={() => onToggleTrack(currentWallet.owner)}
                   >
                     <Star
                       size={13}
@@ -306,8 +333,8 @@ export function PortfolioPage({
                     {usd(metricData.netPnl)}
                   </strong>
                   <small className="positive">
-                    {wallet.total_pnl_native >= 0 ? "+" : ""}
-                    {number(wallet.total_pnl_native, 2)} SOL all-time
+                    {currentWallet.total_pnl_native >= 0 ? "+" : ""}
+                    {number(currentWallet.total_pnl_native, 2)} SOL all-time
                   </small>
                   <TrendingUp size={18} />
                 </article>
@@ -403,6 +430,257 @@ export function PortfolioPage({
                 </article>
               </section>
 
+              <article className="portfolio-panel" style={{ marginBottom: "11px" }}>
+                <div className="panel-title">
+                  <h3>LP Intelligence</h3>
+                  <span>ⓘ</span>
+                </div>
+
+                {currentWallet.intelligenceV1 ? (
+                  <div>
+                    <div className="v1-intel-grid">
+                      <div className="v1-intel-card">
+                        <span>Quality Score</span>
+                        <strong>
+                          {currentWallet.intelligenceV1.qualityScore !== null &&
+                          currentWallet.intelligenceV1.qualityScore !== undefined
+                            ? fmt(currentWallet.intelligenceV1.qualityScore, 1)
+                            : "—"}
+                        </strong>
+                        <small>Cohort relative (0–100)</small>
+                      </div>
+
+                      <div className="v1-intel-card">
+                        <span>Risk Score</span>
+                        <strong>
+                          {currentWallet.intelligenceV1.riskScore !== null &&
+                          currentWallet.intelligenceV1.riskScore !== undefined
+                            ? fmt(currentWallet.intelligenceV1.riskScore, 1)
+                            : "—"}
+                        </strong>
+                        <small>Historical loss risk (0–100)</small>
+                      </div>
+
+                      <div className="v1-intel-card">
+                        <span>Confidence Score</span>
+                        <strong>
+                          {currentWallet.intelligenceV1.confidenceScore !== null &&
+                          currentWallet.intelligenceV1.confidenceScore !== undefined
+                            ? fmt(currentWallet.intelligenceV1.confidenceScore, 1)
+                            : "—"}
+                        </strong>
+                        <small>Evidence sample & span (0–100)</small>
+                      </div>
+
+                      <div className="v1-intel-card">
+                        <span>Style</span>
+                        <strong style={{ fontSize: "16px", marginTop: "8px" }}>
+                          {formatStyleDisplay(currentWallet.intelligenceV1.style)}
+                        </strong>
+                        <small>Historical DLMM behavior</small>
+                      </div>
+
+                      <div className="v1-intel-card">
+                        <span>Shortlist Status</span>
+                        <div style={{ marginTop: "7px" }}>
+                          {currentWallet.intelligenceV1.shortlisted ? (
+                            <span
+                              className="v1-shortlist-badge"
+                              title="Passes V1 historical monitoring criteria"
+                            >
+                              Shortlisted
+                            </span>
+                          ) : (
+                            <span className="v1-not-shortlist-badge">
+                              Not Shortlisted
+                            </span>
+                          )}
+                        </div>
+                        <small>
+                          {currentWallet.intelligenceV1.shortlisted
+                            ? "Passes V1 historical monitoring criteria"
+                            : "Monitoring criteria not met"}
+                        </small>
+                      </div>
+                    </div>
+
+                    {currentWallet.intelligenceV1.performance ? (
+                      <div className="v1-perf-strip">
+                        <div className="v1-perf-item">
+                          <span>Total PnL</span>
+                          <strong
+                            className={
+                              currentWallet.intelligenceV1.performance.totalPnl >= 0
+                                ? "positive"
+                                : "negative"
+                            }
+                          >
+                            {currentWallet.intelligenceV1.performance.totalPnl >= 0 ? "+" : ""}
+                            {fmt(currentWallet.intelligenceV1.performance.totalPnl, 2)} SOL
+                          </strong>
+                        </div>
+
+                        <div className="v1-perf-item">
+                          <span>Profit Factor</span>
+                          <strong>
+                            {fmt(currentWallet.intelligenceV1.performance.profitFactor, 2)}
+                          </strong>
+                        </div>
+
+                        <div className="v1-perf-item">
+                          <span>Median Position PnL %</span>
+                          <strong
+                            className={
+                              currentWallet.intelligenceV1.performance.medianPositionPnlPct >= 0
+                                ? "positive"
+                                : "negative"
+                            }
+                          >
+                            {currentWallet.intelligenceV1.performance.medianPositionPnlPct >= 0
+                              ? "+"
+                              : ""}
+                            {fmt(currentWallet.intelligenceV1.performance.medianPositionPnlPct, 2)}%
+                          </strong>
+                        </div>
+
+                        <div className="v1-perf-item">
+                          <span>Win Rate</span>
+                          <strong>
+                            {fmt(currentWallet.intelligenceV1.performance.positionWinRate, 1)}%
+                          </strong>
+                        </div>
+
+                        <div className="v1-perf-item">
+                          <span>Closed Positions</span>
+                          <strong>
+                            {currentWallet.intelligenceV1.performance.closedPositionCount}
+                          </strong>
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : currentWallet.score?.skill?.score !== null &&
+                currentWallet.score?.skill?.score !== undefined ? (
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+                      gap: "16px",
+                      padding: "16px 18px",
+                    }}
+                  >
+                    <div>
+                      <span
+                        style={{
+                          color: "#9a968f",
+                          fontSize: "10px",
+                          display: "block",
+                          textTransform: "uppercase",
+                        }}
+                      >
+                        Skill Score
+                      </span>
+                      <strong
+                        style={{
+                          fontSize: "22px",
+                          display: "block",
+                          marginTop: "6px",
+                        }}
+                      >
+                        {fmt(currentWallet.score.skill.score, 1)}
+                      </strong>
+                      <small
+                        style={{
+                          color: "#66625c",
+                          fontSize: "10px",
+                          display: "block",
+                          marginTop: "4px",
+                        }}
+                      >
+                        Skill {currentWallet.score.skill.version ?? "v1.2-provisional"}
+                      </small>
+                    </div>
+
+                    <div>
+                      <span
+                        style={{
+                          color: "#9a968f",
+                          fontSize: "10px",
+                          display: "block",
+                          textTransform: "uppercase",
+                        }}
+                      >
+                        General Confidence
+                      </span>
+                      <strong
+                        style={{
+                          fontSize: "22px",
+                          display: "block",
+                          marginTop: "6px",
+                        }}
+                      >
+                        {currentWallet.score.confidence?.generalPct !== null &&
+                        currentWallet.score.confidence?.generalPct !== undefined
+                          ? `${fmt(currentWallet.score.confidence.generalPct, 1)}%`
+                          : "—"}
+                      </strong>
+                      <small
+                        style={{
+                          color: "#66625c",
+                          fontSize: "10px",
+                          display: "block",
+                          marginTop: "4px",
+                        }}
+                      >
+                        Evidence Confidence
+                      </small>
+                    </div>
+
+                    <div>
+                      <span
+                        style={{
+                          color: "#9a968f",
+                          fontSize: "10px",
+                          display: "block",
+                          textTransform: "uppercase",
+                        }}
+                      >
+                        Style
+                      </span>
+                      <strong
+                        style={{
+                          fontSize: "22px",
+                          display: "block",
+                          marginTop: "6px",
+                        }}
+                      >
+                        {formatStyleTag(currentWallet.score.style?.tag)}
+                      </strong>
+                      <small
+                        style={{
+                          color: "#66625c",
+                          fontSize: "10px",
+                          display: "block",
+                          marginTop: "4px",
+                        }}
+                      >
+                        Style {currentWallet.score.style?.version ?? "v0.1-provisional"}
+                      </small>
+                    </div>
+                  </div>
+                ) : (
+                  <div
+                    style={{
+                      padding: "20px 18px",
+                      color: "#9a968f",
+                      fontSize: "12px",
+                    }}
+                  >
+                    Not scored yet
+                  </div>
+                )}
+              </article>
+
               <section className="portfolio-middle-grid">
                 <article className="portfolio-panel performance-panel">
                   <div className="panel-title">
@@ -478,7 +756,7 @@ export function PortfolioPage({
                       <button>ALL</button>
                     </div>
                   </div>
-                  <CumulativePnlChart points={wallet.pnl_chart ?? []} />
+                  <CumulativePnlChart points={currentWallet.pnl_chart ?? []} />
                 </article>
 
                 <article className="portfolio-panel chart-panel">
@@ -491,7 +769,7 @@ export function PortfolioPage({
                       <button>ALL</button>
                     </div>
                   </div>
-                  <DailyPnlChart points={wallet.pnl_chart ?? []} />
+                  <DailyPnlChart points={currentWallet.pnl_chart ?? []} />
                 </article>
 
                 <article className="portfolio-panel weekly-panel">
@@ -510,29 +788,29 @@ export function PortfolioPage({
                     <div>
                       <span>Recent 7D</span>
                       <strong className="positive">
-                        {wallet.total_pnl_native_7d >= 0 ? "+" : ""}
-                        {number(wallet.total_pnl_native_7d, 2)} SOL
+                        {currentWallet.total_pnl_native_7d >= 0 ? "+" : ""}
+                        {number(currentWallet.total_pnl_native_7d, 2)} SOL
                       </strong>
-                      <span>{percent(wallet.win_rate_native * 100)}</span>
-                      <span>{wallet.total_lp_7d}</span>
+                      <span>{percent(currentWallet.win_rate_native * 100)}</span>
+                      <span>{currentWallet.total_lp_7d}</span>
                     </div>
                     <div>
                       <span>30D</span>
                       <strong className="positive">
-                        {wallet.total_pnl_native_30d >= 0 ? "+" : ""}
-                        {number(wallet.total_pnl_native_30d, 2)} SOL
+                        {currentWallet.total_pnl_native_30d >= 0 ? "+" : ""}
+                        {number(currentWallet.total_pnl_native_30d, 2)} SOL
                       </strong>
                       <span>—</span>
-                      <span>{wallet.total_lp_30d}</span>
+                      <span>{currentWallet.total_lp_30d}</span>
                     </div>
                     <div>
                       <span>All-time</span>
                       <strong className="positive">
-                        {wallet.total_pnl_native >= 0 ? "+" : ""}
-                        {number(wallet.total_pnl_native, 2)} SOL
+                        {currentWallet.total_pnl_native >= 0 ? "+" : ""}
+                        {number(currentWallet.total_pnl_native, 2)} SOL
                       </strong>
-                      <span>{percent(wallet.win_rate_native * 100)}</span>
-                      <span>{wallet.total_lp}</span>
+                      <span>{percent(currentWallet.win_rate_native * 100)}</span>
+                      <span>{currentWallet.total_lp}</span>
                     </div>
                   </div>
                 </article>
