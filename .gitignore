@@ -7,27 +7,13 @@ output/*.json
 # macOS
 .DS_Store
 
-# Runtime checkpoints
-data/checkpoints/*.jsonl
-
 # Temporary files
 *.tmp
 
-# Runtime scraped data
-data/raw/
-
-# Runtime checkpoints
-data/checkpoints/
-
-# Master backups
-data/master/*.backup.json
-data/master/*.before-*.json
-
-# Temporary files
-*.tmp
 # Local / generated datasets
 data/
 .freebuff/
 
 # Generated frontend datasets
 frontend/public/data/*.json
+
