@@ -19,6 +19,7 @@ const ALLOWED_ORIGINS = new Set([
 let currentChild = null;
 let lpAgentChild = null;
 let poolScannerChild = null;
+let walletIntelligenceChild = null;
 let runtimeTicker = null;
 const sseClients = new Set();
 
@@ -141,6 +142,7 @@ let poolScannerState = {
     status: "idle",
     stage: "idle",
     tokenCa: null,
+    fabriqWorkers: 2,
     startedAt: null,
     finishedAt: null,
     exitCode: null,
@@ -148,14 +150,66 @@ let poolScannerState = {
     logs: [],
 };
 
-function poolScannerPublicState() {
-    const isRunning =
-        Boolean(poolScannerChild) &&
-        poolScannerState.status === "running";
+function readPoolScannerPipelineState(tokenCa) {
+    if (!tokenCa) return null;
+    const statePath = path.join(
+        ROOT,
+        "data",
+        "discovery",
+        "pool-scanner",
+        tokenCa,
+        "pipeline-state.json"
+    );
+    try {
+        if (!fs.existsSync(statePath)) return null;
+        return JSON.parse(fs.readFileSync(statePath, "utf8"));
+    } catch {
+        return null;
+    }
+}
+
+function checkPoolScannerResumable(tokenCa) {
+    if (!tokenCa) return false;
+    const baseDir = path.join(
+        ROOT,
+        "data",
+        "discovery",
+        "pool-scanner",
+        tokenCa
+    );
+    const statePath = path.join(baseDir, "pipeline-state.json");
+    const walletsPath = path.join(baseDir, "wallets.json");
+    try {
+        if (!fs.existsSync(statePath) || !fs.existsSync(walletsPath)) {
+            return false;
+        }
+        const state = JSON.parse(fs.readFileSync(statePath, "utf8"));
+        return (
+            state.stage1Complete === true &&
+            state.stage2Complete !== true &&
+            state.pipelineComplete !== true
+        );
+    } catch {
+        return false;
+    }
+}
+
+function poolScannerPublicState(queryToken = null) {
+    // Keep the UI lock active until a stopped process tree has actually exited.
+    const isRunning = Boolean(poolScannerChild) || poolScannerState.status === "running";
+
+    const targetToken = queryToken || poolScannerState.tokenCa;
+    const pState = readPoolScannerPipelineState(targetToken);
+    const isResumable = !isRunning && checkPoolScannerResumable(targetToken);
 
     return {
         ...poolScannerState,
         running: isRunning,
+        resumable: isResumable,
+        resumableTokenCa: isResumable ? targetToken : null,
+        stage1Complete: pState?.stage1Complete ?? false,
+        stage2Complete: pState?.stage2Complete ?? false,
+        pipelineComplete: pState?.pipelineComplete ?? false,
     };
 }
 
@@ -927,9 +981,7 @@ function runChildProcess(
 }
 
 async function startPipeline({ mode, concurrency, resume, historyMode, startMonth }) {
-    if (currentChild || state.status === "running" || state.status === "stopping") {
-        throw new Error("Fabriq update is already running");
-    }
+    assertDataPipelineAvailable();
 
     const isResume = Boolean(resume);
     const safeConcurrency = sanitizeConcurrency(concurrency ?? state.concurrency);
@@ -1268,16 +1320,7 @@ async function startLpAgentRefresh({
     historyMode,
     startMonth,
 } = {}) {
-    if (
-        lpAgentChild ||
-        currentChild ||
-        state.status === "running" ||
-        state.status === "stopping" ||
-        lpAgentState.status === "running" ||
-        lpAgentState.status === "stopping"
-    ) {
-        throw new Error("Another update process is already running");
-    }
+    assertDataPipelineAvailable();
 
     const safeConcurrency = sanitizeConcurrency(concurrency ?? 5);
     const safeFabriqConcurrency = sanitizeConcurrency(fabriqConcurrency ?? 10);
@@ -1607,7 +1650,7 @@ function parsePoolScannerLine(line) {
         return;
     }
 
-    if (line.includes("[STAGE 2/4]")) {
+    if (line.includes("[RESUME]") || line.includes("[STAGE 2/4]")) {
         poolScannerState.stage = "fabriq";
         return;
     }
@@ -1679,12 +1722,16 @@ function stopPoolScanner() {
     return poolScannerPublicState();
 }
 
-function startPoolScanner(tokenCa) {
+function startPoolScanner(tokenCa, fabriqWorkers = 2) {
+    assertDataPipelineAvailable();
+    const isResuming = checkPoolScannerResumable(tokenCa);
+
     poolScannerUserStopped = false;
     poolScannerState = {
         status: "running",
-        stage: "discovery",
+        stage: isResuming ? "fabriq" : "discovery",
         tokenCa,
+        fabriqWorkers,
         startedAt: new Date().toISOString(),
         finishedAt: null,
         exitCode: null,
@@ -1693,7 +1740,9 @@ function startPoolScanner(tokenCa) {
     };
 
     addPoolScannerLog(
-        `[CONTROL] Starting Pool Scanner pipeline for token: ${tokenCa}`
+        `[CONTROL] Starting Pool Scanner pipeline for token: ${tokenCa}${
+            isResuming ? " (resuming from Stage 2)" : ""
+        } [workers: ${fabriqWorkers}]`
     );
 
     poolScannerChild = spawn(
@@ -1702,6 +1751,8 @@ function startPoolScanner(tokenCa) {
             "scripts/pipeline/run-pool-scanner-pipeline.mjs",
             "--token",
             tokenCa,
+            "--fabriq-workers",
+            String(fabriqWorkers),
         ],
         {
             cwd: ROOT,
@@ -2498,6 +2549,143 @@ function queryPoolExplorer(
     };
 }
 
+// One shared lock covers process lifetime, stage gaps, and stopping process trees.
+function dataPipelineBusy() {
+    return Boolean(currentChild || lpAgentChild || poolScannerChild || walletIntelligenceChild) ||
+        [state, lpAgentState, poolScannerState, walletIntelligenceState]
+            .some((value) => value.status === "running" || value.status === "stopping");
+}
+
+function assertDataPipelineAvailable() {
+    if (dataPipelineBusy()) {
+        const error = new Error("Another data pipeline is currently running");
+        error.statusCode = 409;
+        throw error;
+    }
+}
+
+function rejectBusyDataPipeline(request, response) {
+    if (!dataPipelineBusy()) return false;
+    json(request, response, 409, { error: "Another data pipeline is currently running" });
+    return true;
+}
+
+const WALLET_INTELLIGENCE_STAGES = [
+    "historical_cohort", "quality", "risk_metrics", "risk_score", "confidence",
+    "style_readiness", "style", "shortlist", "publish", "audit",
+];
+let walletIntelligenceState = {
+    status: "idle",
+    stage: "idle",
+    stageStates: Object.fromEntries(WALLET_INTELLIGENCE_STAGES.map((stage) => [stage, "pending"])),
+    startedAt: null,
+    finishedAt: null,
+    exitCode: null,
+    error: null,
+    logs: [],
+};
+
+function walletIntelligencePublicState() {
+    let lastPublishedAt = null;
+    try {
+        const published = JSON.parse(fs.readFileSync(path.join(ROOT, "frontend/public/data/wallet-intelligence-v1.json"), "utf8"));
+        lastPublishedAt = typeof published.generatedAt === "string" ? published.generatedAt : null;
+    } catch { /* No published artifact yet. */ }
+    const end = walletIntelligenceState.finishedAt ? Date.parse(walletIntelligenceState.finishedAt) : Date.now();
+    return {
+        ...walletIntelligenceState,
+        lastPublishedAt,
+        running: Boolean(walletIntelligenceChild) || ["running", "stopping"].includes(walletIntelligenceState.status),
+        runtimeSeconds: walletIntelligenceState.startedAt
+            ? Math.max(0, Math.floor((end - Date.parse(walletIntelligenceState.startedAt)) / 1000)) : 0,
+    };
+}
+
+function addWalletIntelligenceLog(line) {
+    walletIntelligenceState.logs.push(line);
+    if (walletIntelligenceState.logs.length > 2000) walletIntelligenceState.logs.shift();
+    if (!line.startsWith("[WALLET_INTELLIGENCE] ") || walletIntelligenceState.status === "stopping") return;
+    try {
+        const event = JSON.parse(line.slice("[WALLET_INTELLIGENCE] ".length));
+        if (!WALLET_INTELLIGENCE_STAGES.includes(event.stage)) return;
+        if (!["running", "completed", "error"].includes(event.status)) return;
+        walletIntelligenceState.stage = event.stage;
+        walletIntelligenceState.stageStates[event.stage] = event.status;
+        if (event.status === "error") walletIntelligenceState.error = event.error || `${event.stage} failed`;
+    } catch { /* Ordinary logs cannot change control state. */ }
+}
+
+function startWalletIntelligencePipeline() {
+    assertDataPipelineAvailable();
+    walletIntelligenceState = {
+        status: "running", stage: "historical_cohort",
+        stageStates: Object.fromEntries(WALLET_INTELLIGENCE_STAGES.map((stage) => [stage, "pending"])),
+        startedAt: new Date().toISOString(), finishedAt: null, exitCode: null, error: null, logs: [],
+    };
+    addWalletIntelligenceLog("[CONTROL] Starting Wallet Intelligence V1 pipeline.");
+    const child = spawn(process.execPath, ["scripts/v1/run-wallet-intelligence-pipeline.mjs"], {
+        cwd: ROOT, env: { ...process.env }, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"],
+    });
+    walletIntelligenceChild = child;
+    const buffers = { stdout: "", stderr: "" };
+    for (const stream of ["stdout", "stderr"]) {
+        child[stream].on("data", (chunk) => {
+            buffers[stream] += String(chunk);
+            const lines = buffers[stream].split("\n");
+            buffers[stream] = lines.pop() ?? "";
+            for (const line of lines) if (line.trim()) addWalletIntelligenceLog(line.trimEnd());
+        });
+    }
+    child.on("error", (error) => {
+        walletIntelligenceState.error = error.message;
+        addWalletIntelligenceLog(`[CONTROL] Process error: ${error.message}`);
+        // Retain the lock until close confirms that the child and streams ended.
+    });
+    child.on("close", (code, signal) => {
+        for (const stream of ["stdout", "stderr"]) if (buffers[stream].trim()) addWalletIntelligenceLog(buffers[stream].trimEnd());
+        const stopped = walletIntelligenceState.status === "stopping";
+        const audited = walletIntelligenceState.stageStates.audit === "completed";
+        const successful = !stopped && !walletIntelligenceState.error && code === 0 && audited;
+        walletIntelligenceState.status = stopped ? "stopped" : successful ? "completed" : "error";
+        for (const stage of WALLET_INTELLIGENCE_STAGES) {
+            if (walletIntelligenceState.stageStates[stage] === "running") {
+                walletIntelligenceState.stageStates[stage] = stopped ? "stopped" : "error";
+            }
+        }
+        if (!stopped && !successful && !walletIntelligenceState.error) {
+            walletIntelligenceState.error = code === 0 && !audited
+                ? "Pipeline exited without a successful final audit"
+                : `Pipeline failed (${signal || `exit ${code}`})`;
+        }
+        if (stopped) walletIntelligenceState.error = null;
+        walletIntelligenceState.stage = stopped ? "stopped" : successful ? "completed" : "error";
+        walletIntelligenceState.exitCode = code;
+        walletIntelligenceState.finishedAt = new Date().toISOString();
+        walletIntelligenceChild = null;
+        addWalletIntelligenceLog(`[CONTROL] Wallet Intelligence ${walletIntelligenceState.status}.`);
+    });
+}
+
+function stopWalletIntelligencePipeline() {
+    if (!walletIntelligenceChild || walletIntelligenceState.status === "stopping") return false;
+    walletIntelligenceState.status = "stopping";
+    const child = walletIntelligenceChild;
+    const pid = child.pid;
+    const killTree = (signal) => {
+        if (pid && process.platform !== "win32") {
+            try { process.kill(-pid, signal); return; } catch { /* Fall back to child. */ }
+        }
+        try { child.kill(signal); } catch { /* Already exited. */ }
+    };
+    addWalletIntelligenceLog("[CONTROL] Stopping Wallet Intelligence; generated artifacts are preserved.");
+    killTree("SIGTERM");
+    const timer = setTimeout(() => {
+        if (walletIntelligenceChild === child) killTree("SIGKILL");
+    }, 3000);
+    timer.unref();
+    return true;
+}
+
 const server = http.createServer(async (request, response) => {
     if (request.method === "OPTIONS") {
         setCors(request, response);
@@ -2507,6 +2695,30 @@ const server = http.createServer(async (request, response) => {
     }
 
     const url = new URL(request.url, `http://${HOST}:${PORT}`);
+
+    if (request.method === "GET" && url.pathname === "/api/wallet-intelligence/status") {
+        json(request, response, 200, walletIntelligencePublicState());
+        return;
+    }
+    if (request.method === "POST" && url.pathname === "/api/wallet-intelligence/start") {
+        if (rejectBusyDataPipeline(request, response)) return;
+        try {
+            startWalletIntelligencePipeline();
+            json(request, response, 202, walletIntelligencePublicState());
+        } catch (error) {
+            json(request, response, error.statusCode || 500, { error: error.message });
+        }
+        return;
+    }
+    if (request.method === "POST" && url.pathname === "/api/wallet-intelligence/stop") {
+        const stopped = stopWalletIntelligencePipeline();
+        json(request, response, stopped ? 202 : 409, {
+            ...walletIntelligencePublicState(),
+            ...(stopped ? {} : { error: "Wallet Intelligence is not running or is already stopping" }),
+        });
+        return;
+    }
+
 
     // ------------------------------------------------------
     // GET /api/pools
@@ -2577,14 +2789,7 @@ const server = http.createServer(async (request, response) => {
         url.pathname ===
         "/api/lpagent/refresh"
     ) {
-        if (
-            lpAgentChild ||
-            currentChild ||
-            state.status === "running" ||
-            state.status === "stopping" ||
-            lpAgentState.status === "running" ||
-            lpAgentState.status === "stopping"
-        ) {
+        if (dataPipelineBusy()) {
             json(
                 request,
                 response,
@@ -2645,6 +2850,8 @@ const server = http.createServer(async (request, response) => {
             );
             return;
         }
+
+        if (rejectBusyDataPipeline(request, response)) return;
 
         startLpAgentRefresh({
             concurrency:
@@ -2735,11 +2942,12 @@ const server = http.createServer(async (request, response) => {
         request.method === "GET" &&
         url.pathname === "/api/pool-scanner/status"
     ) {
+        const queryToken = url.searchParams.get("token")?.trim() || null;
         json(
             request,
             response,
             200,
-            poolScannerPublicState(),
+            poolScannerPublicState(queryToken),
         );
 
         return;
@@ -2753,16 +2961,7 @@ const server = http.createServer(async (request, response) => {
         request.method === "POST" &&
         url.pathname === "/api/pool-scanner/start"
     ) {
-        if (
-            currentChild ||
-            lpAgentChild ||
-            poolScannerChild ||
-            state.status === "running" ||
-            state.status === "stopping" ||
-            lpAgentState.status === "running" ||
-            lpAgentState.status === "stopping" ||
-            poolScannerState.status === "running"
-        ) {
+        if (dataPipelineBusy()) {
             json(
                 request,
                 response,
@@ -2823,8 +3022,32 @@ const server = http.createServer(async (request, response) => {
 
         const tokenCa = rawToken.trim();
 
+        let fabriqWorkers = 2;
+        if (body?.fabriqWorkers !== undefined && body?.fabriqWorkers !== null) {
+            const rawVal = body.fabriqWorkers;
+            const strVal = String(rawVal).trim();
+            const isValid =
+                (typeof rawVal === "number" && Number.isInteger(rawVal) && rawVal >= 1) ||
+                (typeof rawVal === "string" && /^[1-9]\d*$/.test(strVal));
+
+            if (!isValid) {
+                json(
+                    request,
+                    response,
+                    400,
+                    {
+                        error: "fabriqWorkers must be an integer >= 1",
+                    },
+                );
+
+                return;
+            }
+            fabriqWorkers = Number(strVal);
+        }
+
         try {
-            startPoolScanner(tokenCa);
+            if (rejectBusyDataPipeline(request, response)) return;
+            startPoolScanner(tokenCa, fabriqWorkers);
 
             json(
                 request,
@@ -2903,14 +3126,7 @@ const server = http.createServer(async (request, response) => {
     // POST /api/fabriq/refresh
     // ------------------------------------------------------
     if (request.method === "POST" && url.pathname === "/api/fabriq/refresh") {
-        if (
-            currentChild ||
-            lpAgentChild ||
-            state.status === "running" ||
-            state.status === "stopping" ||
-            lpAgentState.status === "running" ||
-            lpAgentState.status === "stopping"
-        ) {
+        if (dataPipelineBusy()) {
             json(request, response, 409, {
                 error: "Another update process is already running",
                 fabriq: publicState(),
@@ -2931,6 +3147,7 @@ const server = http.createServer(async (request, response) => {
                 );
             }
 
+            if (rejectBusyDataPipeline(request, response)) return;
             startPipeline({
                 mode: body.mode,
                 concurrency: body.concurrency,
@@ -2954,14 +3171,7 @@ const server = http.createServer(async (request, response) => {
     // POST /api/fabriq/resume
     // ------------------------------------------------------
     if (request.method === "POST" && url.pathname === "/api/fabriq/resume") {
-        if (
-            currentChild ||
-            lpAgentChild ||
-            state.status === "running" ||
-            state.status === "stopping" ||
-            lpAgentState.status === "running" ||
-            lpAgentState.status === "stopping"
-        ) {
+        if (dataPipelineBusy()) {
             json(request, response, 409, {
                 error: "Another update process is already running",
                 fabriq: publicState(),
@@ -2973,6 +3183,7 @@ const server = http.createServer(async (request, response) => {
         try {
             const body = await readJson(request);
 
+            if (rejectBusyDataPipeline(request, response)) return;
             startPipeline({
                 mode: state.mode || "stale",
                 concurrency: body.concurrency,

@@ -21,16 +21,25 @@ export interface PoolScannerState {
   status: PoolScannerStatus;
   stage: PoolScannerStage;
   tokenCa: string | null;
+  fabriqWorkers?: number;
   startedAt: string | null;
   finishedAt: string | null;
   exitCode: number | null;
   error: string | null;
   logs: string[];
   running: boolean;
+  resumable?: boolean;
+  resumableTokenCa?: string | null;
+  stage1Complete?: boolean;
+  stage2Complete?: boolean;
+  pipelineComplete?: boolean;
 }
 
-export async function getPoolScannerStatus(): Promise<PoolScannerState> {
-  const response = await fetch(`${POOL_SCANNER_API_BASE}/api/pool-scanner/status`, {
+export async function getPoolScannerStatus(tokenCa?: string): Promise<PoolScannerState> {
+  const url = tokenCa
+    ? `${POOL_SCANNER_API_BASE}/api/pool-scanner/status?token=${encodeURIComponent(tokenCa)}`
+    : `${POOL_SCANNER_API_BASE}/api/pool-scanner/status`;
+  const response = await fetch(url, {
     cache: "no-store",
   });
   if (!response.ok) {
@@ -44,13 +53,19 @@ export async function getPoolScannerStatus(): Promise<PoolScannerState> {
   return response.json();
 }
 
-export async function startPoolScanner(tokenCa: string): Promise<PoolScannerState> {
+export async function startPoolScanner(
+  tokenCa: string,
+  fabriqWorkers = 2
+): Promise<PoolScannerState> {
   const response = await fetch(`${POOL_SCANNER_API_BASE}/api/pool-scanner/start`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ tokenCa: tokenCa.trim() }),
+    body: JSON.stringify({
+      tokenCa: tokenCa.trim(),
+      fabriqWorkers,
+    }),
   });
 
   const payload = await response.json().catch(() => null);

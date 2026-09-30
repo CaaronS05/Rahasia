@@ -32,6 +32,8 @@ const SOL_MINT = "So11111111111111111111111111111111111111112";
 
 export interface PoolScannerPageProps {
   onDatasetRefreshed?: () => void;
+  embedded?: boolean;
+  startDisabled?: boolean;
 }
 
 type StepStatus = "pending" | "running" | "completed" | "stopped" | "error";
@@ -126,7 +128,7 @@ function computePipelineProgress(
         activeStep = 3;
         break;
       }
-      if (line.includes("[STAGE 2/4]")) {
+      if (line.includes("[STAGE 2/4]") || line.includes("[RESUME]")) {
         activeStep = 2;
         break;
       }
@@ -207,8 +209,9 @@ function computePipelineProgress(
   };
 }
 
-export function PoolScannerPage({ onDatasetRefreshed }: PoolScannerPageProps) {
+export function PoolScannerPage({ onDatasetRefreshed, embedded = false, startDisabled = false }: PoolScannerPageProps) {
   const [tokenCa, setTokenCa] = useState("");
+  const [fabriqWorkers, setFabriqWorkers] = useState<number | string>(2);
   const [state, setState] = useState<PoolScannerState | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [stopping, setStopping] = useState(false);
@@ -230,14 +233,32 @@ export function PoolScannerPage({ onDatasetRefreshed }: PoolScannerPageProps) {
     [cleanedToken]
   );
 
+  const workersRaw = String(fabriqWorkers).trim();
+  const workersValid = useMemo(
+    () => /^[1-9]\d*$/.test(workersRaw),
+    [workersRaw]
+  );
+
   const isRunning = Boolean(state?.running || submitting);
   const isCompleted = state?.status === "completed" && !isRunning;
   const isStopped = state?.status === "stopped" && !isRunning;
   const isError = (state?.status === "error" || Boolean(apiError)) && !isRunning;
 
-  const fetchStatus = useCallback(async () => {
+  const isResumableSession = useMemo(() => {
+    if (isRunning) return false;
+    if (!tokenLooksValid) return false;
+    const target = state?.resumableTokenCa || state?.tokenCa;
+    const isMatchingToken = Boolean(target && cleanedToken === target);
+    const hasResumableState = Boolean(
+      state?.resumable ||
+        (state?.stage1Complete && !state?.stage2Complete && !state?.pipelineComplete)
+    );
+    return isMatchingToken && hasResumableState;
+  }, [isRunning, tokenLooksValid, state, cleanedToken]);
+
+  const fetchStatus = useCallback(async (token?: string) => {
     try {
-      const s = await getPoolScannerStatus();
+      const s = await getPoolScannerStatus(token);
       setState(s);
       setApiError(null);
       return s;
@@ -253,8 +274,13 @@ export function PoolScannerPage({ onDatasetRefreshed }: PoolScannerPageProps) {
 
     async function initialLoad() {
       const s = await fetchStatus();
-      if (mounted && s?.tokenCa) {
-        setTokenCa((prev) => (prev ? prev : s.tokenCa!));
+      if (mounted) {
+        if (s?.tokenCa) {
+          setTokenCa((prev) => (prev ? prev : s.tokenCa!));
+        }
+        if (typeof s?.fabriqWorkers === "number" && s.fabriqWorkers >= 1) {
+          setFabriqWorkers(String(s.fabriqWorkers));
+        }
       }
     }
 
@@ -267,6 +293,19 @@ export function PoolScannerPage({ onDatasetRefreshed }: PoolScannerPageProps) {
       }
     };
   }, [fetchStatus]);
+
+  // Token CA resume detection (debounced when idle and valid token entered)
+  useEffect(() => {
+    if (isRunning || !tokenLooksValid) return;
+
+    const timer = setTimeout(() => {
+      fetchStatus(cleanedToken);
+    }, 350);
+
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [isRunning, tokenLooksValid, cleanedToken, fetchStatus]);
 
   // Polling loop while running
   useEffect(() => {
@@ -287,7 +326,7 @@ export function PoolScannerPage({ onDatasetRefreshed }: PoolScannerPageProps) {
     return () => {
       clearTimeout(timer);
     };
-  }, [state?.running, state?.logs?.length, fetchStatus]);
+  }, [state, fetchStatus]);
 
   // Call onDatasetRefreshed exactly once when transitioning running -> completed
   useEffect(() => {
@@ -324,16 +363,18 @@ export function PoolScannerPage({ onDatasetRefreshed }: PoolScannerPageProps) {
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
-    if (!tokenLooksValid || isRunning || submitting) {
+    if (!tokenLooksValid || !workersValid || isRunning || submitting || startDisabled) {
       return;
     }
 
     setSubmitting(true);
     setApiError(null);
-    lastActiveStepRef.current = 1;
+    lastActiveStepRef.current = isResumableSession ? 2 : 1;
+
+    const workerCount = Number(workersRaw);
 
     try {
-      const s = await startPoolScanner(cleanedToken);
+      const s = await startPoolScanner(cleanedToken, workerCount);
       setState(s);
     } catch (err) {
       setApiError(err instanceof Error ? err.message : String(err));
@@ -420,8 +461,8 @@ export function PoolScannerPage({ onDatasetRefreshed }: PoolScannerPageProps) {
   const activeTokenCa = state?.tokenCa || (isRunning ? cleanedToken : null);
 
   return (
-    <div className="pool-scanner-page">
-      <section className="pool-scanner-hero">
+    <div className={`pool-scanner-page ${embedded ? "pool-scanner-embedded" : ""}`}>
+      {!embedded && <section className="pool-scanner-hero">
         <div>
           <div className="pool-scanner-kicker">
             <Radar size={13} />
@@ -448,7 +489,7 @@ export function PoolScannerPage({ onDatasetRefreshed }: PoolScannerPageProps) {
           )}
           {heroBadgeText}
         </div>
-      </section>
+      </section>}
 
       <div className="pool-scanner-layout">
         <section className="pool-scanner-main-card">
@@ -498,15 +539,47 @@ export function PoolScannerPage({ onDatasetRefreshed }: PoolScannerPageProps) {
               </span>
             </div>
 
+            <div className="pool-scanner-field-group">
+              <label htmlFor="pool-scanner-workers">FABRIQ WORKERS</label>
+              <div
+                className={`pool-scanner-input-wrap compact ${
+                  isRunning ? "disabled" : ""
+                }`}
+              >
+                <input
+                  id="pool-scanner-workers"
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={fabriqWorkers}
+                  onChange={(event) => setFabriqWorkers(event.target.value)}
+                  disabled={isRunning}
+                />
+              </div>
+            </div>
+
+            {isResumableSession ? (
+              <div className="pool-scanner-resume-indicator">
+                <CheckCircle2 size={13} />
+                <span>Resume available — Stage 1 complete</span>
+              </div>
+            ) : null}
+
             <button
               type="submit"
               className="pool-scanner-start"
-              disabled={!tokenLooksValid || isRunning}
+              disabled={!tokenLooksValid || !workersValid || isRunning || startDisabled}
             >
               {isRunning ? (
                 <>
                   <Loader2 size={17} className="spin" />
                   Scanning...
+                </>
+              ) : isResumableSession ? (
+                <>
+                  <Sparkles size={17} />
+                  Resume Pool Scan
+                  <ArrowRight size={16} />
                 </>
               ) : (
                 <>

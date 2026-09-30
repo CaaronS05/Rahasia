@@ -313,13 +313,15 @@ export function PoolExplorerPage() {
     setSortOrder("desc");
   }
 
-  function navigateApp(pageName: "explore" | "track" | "portfolio") {
+  function navigateApp(pageName: "explore" | "track" | "portfolio" | "data") {
     const path =
       pageName === "track"
         ? "/track"
         : pageName === "portfolio"
           ? "/portfolio"
-          : "/";
+          : pageName === "data"
+            ? "/data"
+            : "/";
 
     window.location.assign(path);
   }

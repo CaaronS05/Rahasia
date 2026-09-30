@@ -1,4 +1,6 @@
 import { spawn } from "node:child_process";
+import fs from "node:fs/promises";
+import { existsSync } from "node:fs";
 import path from "node:path";
 
 function getArg(name) {
@@ -21,9 +23,20 @@ if (!TOKEN_CA) {
     );
 }
 
-const FABRIQ_CONCURRENCY =
+const rawWorkers =
+    getArg("--fabriq-workers") ??
     process.env.POOL_SCANNER_FABRIQ_CONCURRENCY ??
     "2";
+
+const trimmedWorkers = String(rawWorkers).trim();
+
+if (!/^[1-9]\d*$/.test(trimmedWorkers)) {
+    throw new Error(
+        `Invalid --fabriq-workers: "${rawWorkers}". Must be an integer >= 1.`
+    );
+}
+
+const FABRIQ_CONCURRENCY = trimmedWorkers;
 
 const BASE_DIR = path.join(
     "data",
@@ -55,6 +68,29 @@ const FABRIQ_CHECKPOINT =
         FABRIQ_DIR,
         "checkpoint.jsonl"
     );
+
+const PIPELINE_STATE_PATH =
+    path.join(
+        BASE_DIR,
+        "pipeline-state.json"
+    );
+
+async function writePipelineState(state) {
+    await fs.mkdir(BASE_DIR, { recursive: true });
+    const tempPath = `${PIPELINE_STATE_PATH}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
+    const payload = JSON.stringify(state, null, 2) + "\n";
+    await fs.writeFile(tempPath, payload, "utf8");
+    await fs.rename(tempPath, PIPELINE_STATE_PATH);
+}
+
+async function readPipelineState() {
+    try {
+        const text = await fs.readFile(PIPELINE_STATE_PATH, "utf8");
+        return JSON.parse(text);
+    } catch {
+        return null;
+    }
+}
 
 function run(
     command,
@@ -120,22 +156,56 @@ async function main() {
         TOKEN_CA
     );
 
-    // ==================================================
-    // STAGE 1 — DISCOVERY
-    // ==================================================
+    const existingState = await readPipelineState();
+    const walletsExist = existsSync(WALLETS_PATH);
 
-    console.log(
-        "\n[STAGE 1/4] POOL + WALLET DISCOVERY"
-    );
+    const shouldResumeStage2 =
+        Boolean(existingState) &&
+        existingState.stage1Complete === true &&
+        existingState.stage2Complete !== true &&
+        existingState.pipelineComplete !== true &&
+        walletsExist;
 
-    await run(
-        process.execPath,
-        [
-            "scripts/pool-scanner-v1.mjs",
-            "--token",
-            TOKEN_CA,
-        ]
-    );
+    if (shouldResumeStage2) {
+        console.log(
+            "\n[RESUME] Stage 1 already complete — resuming from Stage 2"
+        );
+    } else {
+        await writePipelineState({
+            tokenCa: TOKEN_CA,
+            stage1Complete: false,
+            stage2Complete: false,
+            pipelineComplete: false,
+            currentStage: "discovery",
+            updatedAt: new Date().toISOString(),
+        });
+
+        // ==================================================
+        // STAGE 1 — DISCOVERY
+        // ==================================================
+
+        console.log(
+            "\n[STAGE 1/4] POOL + WALLET DISCOVERY"
+        );
+
+        await run(
+            process.execPath,
+            [
+                "scripts/pool-scanner-v1.mjs",
+                "--token",
+                TOKEN_CA,
+            ]
+        );
+
+        await writePipelineState({
+            tokenCa: TOKEN_CA,
+            stage1Complete: true,
+            stage2Complete: false,
+            pipelineComplete: false,
+            currentStage: "fabriq",
+            updatedAt: new Date().toISOString(),
+        });
+    }
 
     // ==================================================
     // STAGE 2 — FABRIQ
@@ -143,6 +213,10 @@ async function main() {
 
     console.log(
         "\n[STAGE 2/4] FABRIQ ENRICHMENT"
+    );
+
+    console.log(
+        `[POOL_SCANNER] Fabriq workers: ${FABRIQ_CONCURRENCY}`
     );
 
     await run(
@@ -168,6 +242,15 @@ async function main() {
         }
     );
 
+    await writePipelineState({
+        tokenCa: TOKEN_CA,
+        stage1Complete: true,
+        stage2Complete: true,
+        pipelineComplete: false,
+        currentStage: "master_upsert",
+        updatedAt: new Date().toISOString(),
+    });
+
     // ==================================================
     // STAGE 3 — MASTER UPSERT
     // ==================================================
@@ -187,6 +270,15 @@ async function main() {
         ]
     );
 
+    await writePipelineState({
+        tokenCa: TOKEN_CA,
+        stage1Complete: true,
+        stage2Complete: true,
+        pipelineComplete: false,
+        currentStage: "publish",
+        updatedAt: new Date().toISOString(),
+    });
+
     // ==================================================
     // STAGE 4 — FRONTEND PUBLISH
     // ==================================================
@@ -203,6 +295,15 @@ async function main() {
             "scripts/pipeline/publish-wallets.ts",
         ]
     );
+
+    await writePipelineState({
+        tokenCa: TOKEN_CA,
+        stage1Complete: true,
+        stage2Complete: true,
+        pipelineComplete: true,
+        currentStage: "completed",
+        updatedAt: new Date().toISOString(),
+    });
 
     console.log(
         "\n========================================"

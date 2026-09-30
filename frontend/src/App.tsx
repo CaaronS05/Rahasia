@@ -4,21 +4,19 @@ import {
   Search,
   SlidersHorizontal,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { FabriqControlModal } from "./components/FabriqControlModal";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Filters, defaultFilters, type FilterState } from "./components/Filters";
 import { Sidebar } from "./components/Sidebar";
 import { WalletTable, type WalletSortKey } from "./components/WalletTable";
 import { compact, fmt } from "./lib/format";
-import { getFabriqStatus, subscribeFabriqEvents } from "./lib/fabriqControl";
-import { getLpAgentStatus } from "./lib/lpAgentControl";
+import { useDataPipelineStatus } from "./lib/dataPipelineStatus";
 import {
   loadWalletDataset,
   loadWalletIntelligenceV1,
   joinWalletsWithIntelligenceV1,
 } from "./lib/walletData";
 import { loadTrackedWallets, saveTrackedWallets } from "./lib/trackedWallets";
-import { PoolScannerPage } from "./pages/PoolScannerPage";
+import { DataPage, resolveDataTab, type DataTab } from "./pages/DataPage";
 import { PortfolioPage } from "./pages/PortfolioPage";
 import { TrackPage } from "./pages/TrackPage";
 import type { Wallet } from "./types";
@@ -31,7 +29,7 @@ import {
 } from "./lib/walletMetrics";
 
 type Timeframe = "7d" | "30d" | "all";
-type Page = "explore" | "track" | "portfolio" | "pool-scanner";
+type Page = "explore" | "track" | "portfolio" | "data";
 
 function formatUpdatedAt(
   value: string | null,
@@ -65,7 +63,7 @@ function num(value: string) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function routeFromLocation(): { page: Page; address?: string } {
+function routeFromLocation(): { page: Page; address?: string; dataTab?: DataTab } {
   const match = window.location.pathname.match(/^\/portfolio\/([^/]+)$/);
   if (match) {
     return {
@@ -83,7 +81,11 @@ function routeFromLocation(): { page: Page; address?: string } {
   }
 
   if (window.location.pathname === "/pool-scanner") {
-    return { page: "pool-scanner" };
+    return { page: "data", dataTab: "pool-scanner" };
+  }
+
+  if (window.location.pathname === "/data") {
+    return { page: "data", dataTab: resolveDataTab(new URLSearchParams(window.location.search).get("tab")) };
   }
 
   return { page: "explore" };
@@ -132,12 +134,7 @@ export default function App() {
   const [trackedOwners, setTrackedOwners] = useState<Set<string>>(
     () => new Set(loadTrackedWallets()),
   );
-  const [fabriqModalOpen, setFabriqModalOpen] = useState(false);
-  const [fabriqRunning, setFabriqRunning] = useState(false);
-  const [lpAgentRunning, setLpAgentRunning] = useState(false);
-  const prevLpStatusRef = useRef<string>("idle");
-
-  const dataUpdateRunning = fabriqRunning || lpAgentRunning;
+  const [intelligenceUpdatedAt, setIntelligenceUpdatedAt] = useState<string | null>(null);
 
   const refreshDataset = useCallback(() => {
     return Promise.all([
@@ -153,6 +150,7 @@ export default function App() {
       .then(([dataset, intelData]) => {
         const joined = joinWalletsWithIntelligenceV1(dataset.wallets, intelData);
         setWallets(joined);
+        setIntelligenceUpdatedAt(intelData?.generatedAt ?? null);
         setDataUpdatedAt(dataset.meta?.publishedAt ?? null);
       })
       .catch((err) => {
@@ -172,52 +170,8 @@ export default function App() {
     refreshDataset();
   }, [refreshDataset]);
 
-  useEffect(() => {
-    let mounted = true;
-
-    getFabriqStatus()
-      .then((s) => {
-        if (mounted) setFabriqRunning(s.running);
-      })
-      .catch(() => {});
-
-    const unsubscribe = subscribeFabriqEvents((event) => {
-      if (!mounted) return;
-      setFabriqRunning(event.state.running);
-      if (event.state.status === "completed") {
-        refreshDataset();
-      }
-    });
-
-    const checkLpStatus = async () => {
-      try {
-        const s = await getLpAgentStatus();
-        if (!mounted) return;
-        setLpAgentRunning(s.running);
-
-        if (prevLpStatusRef.current !== s.status) {
-          if (
-            (prevLpStatusRef.current === "running" || prevLpStatusRef.current === "stopping") &&
-            s.status === "completed"
-          ) {
-            refreshDataset();
-          }
-          prevLpStatusRef.current = s.status;
-        }
-      } catch {
-        // Control server might not be running yet, ignore
-      }
-    };
-
-    checkLpStatus();
-    const interval = setInterval(checkLpStatus, 2500);
-
-    return () => {
-      mounted = false;
-      unsubscribe();
-      clearInterval(interval);
-    };
-  }, [refreshDataset]);
+  const pipelines = useDataPipelineStatus(refreshDataset);
+  const dataUpdateRunning = pipelines.anyRunning;
 
   useEffect(() => {
     saveTrackedWallets([...trackedOwners]);
@@ -429,8 +383,8 @@ export default function App() {
               ? "/portfolio"
               : page === "track"
                 ? "/track"
-                : page === "pool-scanner"
-                  ? "/pool-scanner"
+                : page === "data"
+                  ? "/data"
                   : "/",
           )
         }
@@ -479,7 +433,7 @@ export default function App() {
 
             <button
               className={`icon-btn bordered ${dataUpdateRunning ? "fabriq-active" : ""}`}
-              onClick={() => setFabriqModalOpen(true)}
+              onClick={() => navigate("/data?tab=wallet-data")}
               title={
                 dataUpdateRunning
                   ? "Update pipeline is running — click to view progress"
@@ -492,8 +446,16 @@ export default function App() {
           </div>
         </header>
 
-        {route.page === "pool-scanner" ? (
-          <PoolScannerPage onDatasetRefreshed={refreshDataset} />
+        {route.page === "data" ? (
+          <DataPage
+            tab={route.dataTab ?? "overview"}
+            onTabChange={(tab) => navigate(`/data?tab=${tab}`)}
+            walletCount={loading || error ? null : wallets.length}
+            lastUpdated={dataUpdatedAt}
+            intelligenceUpdatedAt={intelligenceUpdatedAt}
+            pipelines={pipelines}
+            onDatasetRefreshed={refreshDataset}
+          />
         ) : route.page === "portfolio" ? (
           <PortfolioPage
             wallets={wallets}
@@ -646,13 +608,7 @@ export default function App() {
         )}
       </main>
 
-      <FabriqControlModal
-        isOpen={fabriqModalOpen}
-        onClose={() => setFabriqModalOpen(false)}
-        walletCount={wallets.length}
-        lastUpdated={dataUpdatedAt}
-        onDatasetRefreshed={refreshDataset}
-      />
+
     </div>
   );
 }

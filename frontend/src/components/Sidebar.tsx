@@ -2,7 +2,7 @@ import {
   Activity,
   Bell,
   ChartNoAxesCombined,
-  CircleGauge,
+  Database,
   Coins,
   Settings,
   ShieldCheck,
@@ -10,8 +10,8 @@ import {
   WalletCards,
 } from "lucide-react";
 
-type ActivePage = "explore" | "pools" | "track" | "portfolio" | "pool-scanner";
-type AppPage = "explore" | "track" | "portfolio" | "pool-scanner";
+type ActivePage = "explore" | "pools" | "track" | "portfolio" | "data";
+type AppPage = "explore" | "track" | "portfolio" | "data";
 
 type Props = {
   activePage: ActivePage;
@@ -56,10 +56,10 @@ const watchlist: SidebarItem[] = [
 
 const tools: SidebarItem[] = [
   {
-    label: "Pool Scanner",
-    icon: CircleGauge,
-    page: "pool-scanner",
-    activeKey: "pool-scanner",
+    label: "Data",
+    icon: Database,
+    page: "data",
+    activeKey: "data",
   },
   { label: "Alerts", icon: Bell },
   { label: "Settings", icon: Settings },

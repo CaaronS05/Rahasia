@@ -390,74 +390,84 @@ let tokenRefreshPromise =
     null;
 
 async function refreshTokenFromBrowser() {
-    const result =
-        await page.evaluate(
-            async () => {
-                const response =
-                    await fetch(
-                        "/auth/verify",
-                        {
-                            credentials:
-                                "include",
+    while (true) {
+        const result =
+            await page.evaluate(
+                async () => {
+                    const response =
+                        await fetch(
+                            "/auth/verify",
+                            {
+                                credentials:
+                                    "include",
 
-                            cache:
-                                "no-store",
-                        }
-                    );
+                                cache:
+                                    "no-store",
+                            }
+                        );
 
-                return {
-                    status:
-                        response.status,
+                    return {
+                        status:
+                            response.status,
 
-                    text:
-                        await response.text(),
-                };
-            }
-        );
+                        text:
+                            await response.text(),
+                    };
+                }
+            );
 
-    if (result.status !== 200) {
-        throw new Error(
-            `/auth/verify failed: ${result.status} ${result.text.slice(
+        if (result.status === 403) {
+            console.log(
+                "[AUTH WAIT] /auth/verify blocked by Cloudflare (403) — retrying in 5s"
+            );
+            await sleep(5000);
+            continue;
+        }
+
+        if (result.status !== 200) {
+            throw new Error(
+                `/auth/verify failed: ${result.status} ${result.text.slice(
+                    0,
+                    200
+                )}`
+            );
+        }
+
+        const json =
+            JSON.parse(
+                result.text
+            );
+
+        if (!json.token) {
+            throw new Error(
+                "JWT missing from /auth/verify"
+            );
+        }
+
+        token =
+            json.token;
+
+        tokenExpiresAt =
+            decodeJwtExpiry(token) ||
+            Date.now() + 45_000;
+
+        const secondsLeft =
+            Math.max(
                 0,
-                200
-            )}`
+                Math.floor(
+                    (
+                        tokenExpiresAt -
+                        Date.now()
+                    ) / 1000
+                )
+            );
+
+        console.log(
+            `[AUTH] JWT refreshed (${secondsLeft}s)`
         );
+
+        return token;
     }
-
-    const json =
-        JSON.parse(
-            result.text
-        );
-
-    if (!json.token) {
-        throw new Error(
-            "JWT missing from /auth/verify"
-        );
-    }
-
-    token =
-        json.token;
-
-    tokenExpiresAt =
-        decodeJwtExpiry(token) ||
-        Date.now() + 45_000;
-
-    const secondsLeft =
-        Math.max(
-            0,
-            Math.floor(
-                (
-                    tokenExpiresAt -
-                    Date.now()
-                ) / 1000
-            )
-        );
-
-    console.log(
-        `[AUTH] JWT refreshed (${secondsLeft}s)`
-    );
-
-    return token;
 }
 
 async function getToken(
@@ -841,6 +851,9 @@ if (IS_CUSTOM_RANGE) {
 // ======================================================
 // LOAD OLD PROGRESS
 // ======================================================
+
+await fs.mkdir(path.dirname(CHECKPOINT), { recursive: true });
+await fs.mkdir(path.dirname(OUTPUT), { recursive: true });
 
 const checkpoint =
     await loadCheckpoint();
