@@ -1,0 +1,1700 @@
+import {
+  AlertCircle,
+  AlertOctagon,
+  AlertTriangle,
+  CheckCircle2,
+  ChevronDown,
+  ChevronUp,
+  Clock,
+  Cpu,
+  Database,
+  ExternalLink,
+  Layers,
+  Play,
+  RefreshCw,
+  Square,
+  Terminal,
+} from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import {
+  type FabriqHistoryMode,
+  type FabriqMode,
+  type FabriqState,
+  getFabriqStatus,
+  resumeFabriqRefresh,
+  startFabriqRefresh,
+  stopFabriqRefresh,
+  forceStopFabriqRefresh,
+  subscribeFabriqEvents,
+} from "../../lib/fabriqControl";
+import {
+  type LpAgentState,
+  getLpAgentStatus,
+  startLpAgentRefresh,
+  stopLpAgentRefresh,
+  forceStopLpAgentRefresh,
+} from "../../lib/lpAgentControl";
+
+interface WalletDataControlPanelProps {
+  startDisabled?: boolean;
+  walletCount: number | null;
+  lastUpdated: string | null;
+  onDatasetRefreshed: () => void;
+}
+
+function formatRuntime(seconds: number): string {
+  const mins = Math.floor(seconds / 60);
+  const secs = seconds % 60;
+  return `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+}
+
+function formatLastUpdatedDate(value: string | null): string {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return "—";
+
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Jakarta",
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
+function getCurrentJakartaMonth(): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Jakarta",
+    year: "numeric",
+    month: "2-digit",
+  }).formatToParts(new Date());
+
+  const year = parts.find((p) => p.type === "year")?.value;
+  const month = parts.find((p) => p.type === "month")?.value;
+  return `${year}-${month}`;
+}
+
+function formatMonthName(yearMonth: string, short = false): string {
+  if (!yearMonth || !/^\d{4}-(?:0[1-9]|1[0-2])$/.test(yearMonth.trim())) {
+    return yearMonth;
+  }
+  const [y, m] = yearMonth.trim().split("-").map(Number);
+  const d = new Date(Date.UTC(y, m - 1, 1));
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: "UTC",
+    month: short ? "short" : "long",
+    year: "numeric",
+  }).format(d);
+}
+
+export function WalletDataControlPanel({
+  startDisabled = false,
+  walletCount,
+  lastUpdated,
+  onDatasetRefreshed,
+}: WalletDataControlPanelProps) {
+  // Fabriq State
+  const [state, setState] = useState<FabriqState | null>(null);
+  const [mode, setMode] = useState<FabriqMode>("stale");
+  const [concurrency, setConcurrency] = useState<number>(10);
+
+  // LP Agent State
+  const [lpAgentState, setLpAgentState] = useState<LpAgentState | null>(null);
+  const [lpConcurrency, setLpConcurrency] = useState<number>(5);
+  const [lpFabriqConcurrency, setLpFabriqConcurrency] = useState<number>(10);
+
+  // Shared Fabriq History State
+  const [historyMode, setHistoryMode] = useState<FabriqHistoryMode>("90d");
+  const [startMonth, setStartMonth] = useState<string>("");
+
+  // UI State
+  const [showLogs, setShowLogs] =
+    useState(false);
+
+  const [actionLoading, setActionLoading] =
+    useState(false);
+
+  const [actionError, setActionError] =
+    useState<string | null>(null);
+
+  const [
+    configureNewRun,
+    setConfigureNewRun,
+  ] = useState(false);
+
+  const [forceStopTarget, setForceStopTarget] = useState<"lpagent" | "fabriq" | null>(null);
+
+  const logsEndRef = useRef<HTMLDivElement>(null);
+  const prevFabriqStatusRef = useRef<string | null>(null);
+  const prevLpStatusRef = useRef<string | null>(null);
+
+  // 1. Subscribe to Fabriq SSE events & initial fetch
+  useEffect(() => {
+    let isMounted = true;
+
+    getFabriqStatus()
+      .then((initialState) => {
+        if (isMounted) {
+          setState(initialState);
+          if (initialState.concurrency) {
+            setConcurrency(initialState.concurrency);
+          }
+          if (initialState.mode) {
+            setMode(initialState.mode);
+          }
+          if (initialState.historyMode) {
+            setHistoryMode(initialState.historyMode);
+          }
+          if (initialState.startMonth) {
+            setStartMonth(initialState.startMonth);
+          }
+        }
+      })
+      .catch(() => { });
+
+    const unsubscribe = subscribeFabriqEvents(
+      (event) => {
+        if (!isMounted) return;
+        setState(event.state);
+
+        if (
+          event.state.status === "completed" &&
+          prevFabriqStatusRef.current !== "completed"
+        ) {
+          onDatasetRefreshed();
+        }
+        prevFabriqStatusRef.current = event.state.status;
+      },
+      () => {
+        getFabriqStatus()
+          .then((s) => {
+            if (isMounted) setState(s);
+          })
+          .catch(() => { });
+      }
+    );
+
+    return () => {
+      isMounted = false;
+      unsubscribe();
+    };
+  }, [onDatasetRefreshed]);
+
+  // 2. Poll LP Agent status
+  useEffect(() => {
+    let isMounted = true;
+
+    const fetchLpStatus = () => {
+      getLpAgentStatus()
+        .then((s) => {
+          if (!isMounted) return;
+          setLpAgentState(s);
+          if (s.status === "running" || s.status === "stopping" || s.status === "stopped") {
+            if (s.historyMode) setHistoryMode(s.historyMode);
+            if (s.startMonth) setStartMonth(s.startMonth);
+          }
+
+          if (
+            s.status === "completed" &&
+            prevLpStatusRef.current !== "completed"
+          ) {
+            onDatasetRefreshed();
+          }
+          prevLpStatusRef.current = s.status;
+        })
+        .catch(() => { });
+    };
+
+    fetchLpStatus();
+
+    const interval = setInterval(fetchLpStatus, 1000);
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, [onDatasetRefreshed]);
+
+  // 3. Auto-scroll logs
+  const logsCount = (lpAgentState?.logs.length ?? 0) + (state?.logs.length ?? 0);
+  useEffect(() => {
+    if (showLogs && logsEndRef.current) {
+      logsEndRef.current.scrollTop = logsEndRef.current.scrollHeight;
+    }
+  }, [showLogs, logsCount]);
+
+  // Derived state for Fabriq
+  const isFabriqRunning =
+    state?.status === "running" || state?.status === "stopping";
+  const isFabriqStopping = state?.status === "stopping";
+  const isFabriqStopped = state?.status === "stopped";
+  const isFabriqCompleted = state?.status === "completed";
+  const isFabriqError = state?.status === "error";
+
+  // Derived state for LP Agent
+  const isLpRunning =
+    lpAgentState?.status === "running" || lpAgentState?.status === "stopping";
+  const isLpStopping = lpAgentState?.status === "stopping";
+  const isLpStopped = lpAgentState?.status === "stopped";
+  const isLpCompleted = lpAgentState?.status === "completed";
+  const isLpError = lpAgentState?.status === "error";
+
+  const isAnyRunning = isFabriqRunning || isLpRunning;
+
+  // 4. Restore historyMode & startMonth when running or stopped
+  useEffect(() => {
+    if (isFabriqRunning || isFabriqStopped) {
+      if (state?.historyMode) setHistoryMode(state.historyMode);
+      if (state?.startMonth) setStartMonth(state.startMonth);
+    } else if (isLpRunning || isLpStopped) {
+      if (lpAgentState?.historyMode) setHistoryMode(lpAgentState.historyMode);
+      if (lpAgentState?.startMonth) setStartMonth(lpAgentState.startMonth);
+    }
+  }, [
+    isFabriqRunning,
+    isFabriqStopped,
+    isLpRunning,
+    isLpStopped,
+    state?.historyMode,
+    state?.startMonth,
+    lpAgentState?.historyMode,
+    lpAgentState?.startMonth,
+  ]);
+
+
+  const currentJakartaMonth = getCurrentJakartaMonth();
+
+  const isStartMonthValid =
+    historyMode === "90d" ||
+    (Boolean(startMonth) &&
+      /^\d{4}-(?:0[1-9]|1[0-2])$/.test(startMonth.trim()) &&
+      startMonth.trim() <= currentJakartaMonth);
+
+  const historyValidationMessage = (() => {
+    if (historyMode === "90d") return null;
+    if (!startMonth) return "Please select a start month";
+    if (!/^\d{4}-(?:0[1-9]|1[0-2])$/.test(startMonth.trim())) {
+      return "Invalid month format (expected YYYY-MM)";
+    }
+    if (startMonth.trim() > currentJakartaMonth) {
+      return "Start month cannot be later than current month";
+    }
+    return null;
+  })();
+
+  const historyRangeText = (() => {
+    const activeMode = isLpRunning ? lpAgentState?.historyMode : state?.historyMode;
+    const activeStart = isLpRunning ? lpAgentState?.startMonth : state?.startMonth;
+    const effMode = activeMode || historyMode;
+    const effStart = activeStart || startMonth;
+
+    if (effMode === "custom" && effStart) {
+      const curMonth = getCurrentJakartaMonth();
+      return `${formatMonthName(effStart, true)} → ${formatMonthName(curMonth, true)}`;
+    }
+    return "Last 90 Days";
+  })();
+
+  // Active view determination
+  let currentView: "idle" | "lp_running" | "lp_stopped" | "lp_completed" | "lp_error" | "fabriq_running" | "fabriq_stopped" | "fabriq_completed" | "fabriq_error" = "idle";
+
+  if (
+    isLpRunning ||
+    isLpStopping
+  ) {
+    currentView = "lp_running";
+  } else if (
+    isFabriqRunning ||
+    isFabriqStopping
+  ) {
+    currentView =
+      "fabriq_running";
+  } else if (
+    configureNewRun
+  ) {
+    currentView = "idle";
+  } else {
+    const lpFinishedAt =
+      lpAgentState?.finishedAt
+        ? Date.parse(
+          lpAgentState.finishedAt,
+        )
+        : 0;
+
+    const fabriqFinishedAt =
+      state?.finishedAt
+        ? Date.parse(
+          state.finishedAt,
+        )
+        : 0;
+
+    const lpTerminalView =
+      isLpStopped
+        ? "lp_stopped"
+        : isLpCompleted
+          ? "lp_completed"
+          : isLpError
+            ? "lp_error"
+            : null;
+
+    const fabriqTerminalView =
+      isFabriqStopped
+        ? "fabriq_stopped"
+        : isFabriqCompleted
+          ? "fabriq_completed"
+          : isFabriqError
+            ? "fabriq_error"
+            : null;
+
+    if (
+      lpTerminalView &&
+      fabriqTerminalView
+    ) {
+      currentView =
+        lpFinishedAt >=
+          fabriqFinishedAt
+          ? lpTerminalView
+          : fabriqTerminalView;
+    } else if (
+      lpTerminalView
+    ) {
+      currentView =
+        lpTerminalView;
+    } else if (
+      fabriqTerminalView
+    ) {
+      currentView =
+        fabriqTerminalView;
+    }
+  }
+
+  let modalTitle =
+    "Update Wallet Data";
+
+  let stageBadgeText =
+    "Idle";
+
+  if (
+    currentView ===
+    "lp_running"
+  ) {
+    modalTitle =
+      "Updating Wallet List";
+
+    if (isLpStopping) {
+      stageBadgeText =
+        lpAgentState?.stopMode === "force"
+          ? "Force Stopping..."
+          : "Stopping LP Agent...";
+    } else if (
+      lpAgentState?.stage ===
+      "scrape"
+    ) {
+      stageBadgeText =
+        "Scraping LP Agent...";
+    } else if (
+      lpAgentState?.stage ===
+      "merge_wallets"
+    ) {
+      stageBadgeText =
+        "Merging Wallets...";
+    } else if (
+      lpAgentState?.stage ===
+      "fabriq_enrich"
+    ) {
+      stageBadgeText =
+        "Enriching Fabriq...";
+    } else if (
+      lpAgentState?.stage ===
+      "fabriq_merge"
+    ) {
+      stageBadgeText =
+        "Merging Fabriq...";
+    } else if (
+      lpAgentState?.stage ===
+      "publish"
+    ) {
+      stageBadgeText =
+        "Publishing Frontend...";
+    } else {
+      stageBadgeText =
+        "Running";
+    }
+  } else if (
+    currentView ===
+    "lp_stopped"
+  ) {
+    modalTitle =
+      "Update Wallet List";
+
+    stageBadgeText =
+      "Stopped";
+  } else if (
+    currentView ===
+    "lp_completed"
+  ) {
+    modalTitle =
+      "Wallet List Updated";
+
+    stageBadgeText =
+      "Completed";
+  } else if (
+    currentView ===
+    "lp_error"
+  ) {
+    modalTitle =
+      "Update Failed";
+
+    stageBadgeText =
+      "Failed";
+  } else if (
+    currentView ===
+    "fabriq_running"
+  ) {
+    modalTitle =
+      "Updating Fabriq";
+
+    if (isFabriqStopping) {
+      stageBadgeText =
+        state?.stopMode === "force"
+          ? "Force Stopping..."
+          : "Stopping Fabriq...";
+    } else if (
+      state?.stage ===
+      "enrich"
+    ) {
+      stageBadgeText =
+        "Enriching Wallets...";
+    } else if (
+      state?.stage ===
+      "merge"
+    ) {
+      stageBadgeText =
+        "Merging Master...";
+    } else if (
+      state?.stage ===
+      "publish"
+    ) {
+      stageBadgeText =
+        "Publishing...";
+    } else {
+      stageBadgeText =
+        "Running";
+    }
+  } else if (
+    currentView ===
+    "fabriq_stopped"
+  ) {
+    stageBadgeText =
+      "Stopped";
+  } else if (
+    currentView ===
+    "fabriq_completed"
+  ) {
+    modalTitle =
+      "Update Completed";
+
+    stageBadgeText =
+      "Completed";
+  } else if (
+    currentView ===
+    "fabriq_error"
+  ) {
+    modalTitle =
+      "Update Failed";
+
+    stageBadgeText =
+      "Failed";
+  }
+
+  // Handlers for LP Agent
+  const handleStartLp = async () => {
+    if (!isStartMonthValid || startDisabled || isAnyRunning) return;
+    setActionLoading(true);
+    setActionError(null);
+    try {
+      const res =
+        await startLpAgentRefresh({
+          concurrency:
+            lpConcurrency,
+          fabriqConcurrency:
+            lpFabriqConcurrency,
+          historyMode,
+          startMonth: historyMode === "custom" ? startMonth : null,
+        });
+
+      setLpAgentState(res);
+      setConfigureNewRun(false);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleStopLp = async () => {
+    setActionLoading(true);
+    setActionError(null);
+    try {
+      const res = await stopLpAgentRefresh();
+      setLpAgentState(res);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleForceStopLp = async () => {
+    setActionLoading(true);
+    setActionError(null);
+    setForceStopTarget(null);
+    try {
+      const res = await forceStopLpAgentRefresh();
+      setLpAgentState(res);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  // Handlers for Fabriq
+  const handleStartFabriq = async () => {
+    if (!isStartMonthValid || startDisabled || isAnyRunning) return;
+    setActionLoading(true);
+    setActionError(null);
+    try {
+      const nextState = await startFabriqRefresh({
+        mode,
+        concurrency,
+        historyMode,
+        startMonth: historyMode === "custom" ? startMonth : null,
+      });
+      setState(nextState);
+      setConfigureNewRun(false);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleStopFabriq = async () => {
+    setActionLoading(true);
+    setActionError(null);
+    try {
+      const nextState = await stopFabriqRefresh();
+      setState(nextState);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleForceStopFabriq = async () => {
+    setActionLoading(true);
+    setActionError(null);
+    setForceStopTarget(null);
+    try {
+      const nextState = await forceStopFabriqRefresh();
+      setState(nextState);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleResumeFabriq = async () => {
+    if (startDisabled || isAnyRunning) return;
+    setActionLoading(true);
+    setActionError(null);
+    try {
+      const nextState = await resumeFabriqRefresh({
+        concurrency,
+      });
+      setState(nextState);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  // Active logs stream
+  const activeLogs = isLpRunning || isLpStopped || isLpCompleted || isLpError
+    ? (lpAgentState?.logs ?? [])
+    : (state?.logs ?? []);
+
+  // Fabriq progress calculation
+  const fabriqTotal = state?.total ?? walletCount;
+  const fabriqCompleted = state?.completed || 0;
+  const fabriqProgressPercent = fabriqTotal !== null && fabriqTotal > 0 ? Math.min(100, Math.round((fabriqCompleted / fabriqTotal) * 100)) : 0;
+
+  return (
+    <section className="wallet-data-panel fabriq-modal-dialog modal-wide" aria-label="Wallet Data controls">
+        {/* Modal Header */}
+        <div className="fabriq-modal-header">
+          <div className="fabriq-modal-title-group">
+            <div className="fabriq-brand-icon">
+              <Database size={18} />
+            </div>
+            <div>
+              <div className="fabriq-modal-title">{modalTitle}</div>
+              <div className="fabriq-modal-subtitle">
+                Automated LP Agent & Fabriq dataset update pipeline
+              </div>
+            </div>
+          </div>
+
+          <div className="fabriq-modal-header-actions">
+            <span className={`fabriq-status-pill status-${isAnyRunning ? "running" : currentView.includes("stopped") ? "stopped" : currentView.includes("completed") ? "completed" : currentView.includes("error") ? "error" : "idle"}`}>
+              {isAnyRunning && <span className="status-dot-pulse" />}
+              {stageBadgeText}
+            </span>
+
+          </div>
+        </div>
+
+        {/* Modal Body */}
+        <div className="fabriq-modal-body">
+          {actionError && (
+            <div className="fabriq-alert-banner alert-error">
+              <AlertCircle size={16} />
+              <span>{actionError}</span>
+            </div>
+          )}
+
+          {/* ======================================================== */}
+          {/* VIEW: LP AGENT RUNNING                                    */}
+          {/* ======================================================== */}
+          {currentView === "lp_running" && (
+            <div className="fabriq-running-section">
+              {/* Stepper (5 stages) */}
+              <div className="fabriq-stepper stepper-5">
+                <div
+                  className={`fabriq-step ${lpAgentState?.stage === "scrape" ? "active" : "done"}`}
+                >
+                  <span className="step-circle">
+                    {lpAgentState?.stage === "scrape" ? <RefreshCw size={11} className="spin" /> : "1"}
+                  </span>
+                  <span className="step-label">LP Agent</span>
+                </div>
+                <div className="step-connector" />
+
+                <div
+                  className={`fabriq-step ${lpAgentState?.stage === "merge_wallets" ? "active" : lpAgentState?.stage === "scrape" ? "" : "done"}`}
+                >
+                  <span className="step-circle">
+                    {lpAgentState?.stage === "merge_wallets" ? <RefreshCw size={11} className="spin" /> : "2"}
+                  </span>
+                  <span className="step-label">Merge Wallets</span>
+                </div>
+                <div className="step-connector" />
+
+                <div
+                  className={`fabriq-step ${lpAgentState?.stage === "fabriq_enrich" ? "active" : ["fabriq_merge", "publish", "completed"].includes(lpAgentState?.stage ?? "") ? "done" : ""}`}
+                >
+                  <span className="step-circle">
+                    {lpAgentState?.stage === "fabriq_enrich" ? <RefreshCw size={11} className="spin" /> : "3"}
+                  </span>
+                  <span className="step-label">Fabriq Enrich</span>
+                </div>
+                <div className="step-connector" />
+
+                <div
+                  className={`fabriq-step ${lpAgentState?.stage === "fabriq_merge" ? "active" : ["publish", "completed"].includes(lpAgentState?.stage ?? "") ? "done" : ""}`}
+                >
+                  <span className="step-circle">
+                    {lpAgentState?.stage === "fabriq_merge" ? <RefreshCw size={11} className="spin" /> : "4"}
+                  </span>
+                  <span className="step-label">Merge Fabriq</span>
+                </div>
+                <div className="step-connector" />
+
+                <div
+                  className={`fabriq-step ${lpAgentState?.stage === "publish" ? "active" : lpAgentState?.stage === "completed" ? "done" : ""}`}
+                >
+                  <span className="step-circle">
+                    {lpAgentState?.stage === "publish" ? <RefreshCw size={11} className="spin" /> : "5"}
+                  </span>
+                  <span className="step-label">Publish</span>
+                </div>
+              </div>
+
+              {/* Stage-specific Progress */}
+              {lpAgentState?.stage === "scrape" && (
+                <>
+                  <div className="fabriq-progress-header">
+                    <div className="fabriq-progress-count">
+                      {lpAgentState.totalPages > 0 ? (
+                        <>
+                          <strong>{lpAgentState.completedPages}</strong> / {lpAgentState.totalPages} pages captured
+                        </>
+                      ) : (
+                        "Detecting pages from LP Agent..."
+                      )}
+                    </div>
+                    <div className="fabriq-progress-percent">
+                      {lpAgentState.totalPages > 0 ? `${lpAgentState.progressPercent}%` : "—"}
+                    </div>
+                  </div>
+
+                  <div className="fabriq-progress-track">
+                    <div
+                      className={`fabriq-progress-fill ${lpAgentState.totalPages === 0 ? "indeterminate" : ""}`}
+                      style={{ width: `${Math.max(5, lpAgentState.progressPercent)}%` }}
+                    />
+                  </div>
+
+                  <div className="fabriq-stats-grid">
+                    <div className="fabriq-stat-card">
+                      <div className="stat-label">Wallets Found</div>
+                      <div className="stat-val text-green">
+                        {(lpAgentState.wallets ?? 0).toLocaleString()}
+                      </div>
+                    </div>
+                    <div className="fabriq-stat-card">
+                      <div className="stat-label">History</div>
+                      <div className="stat-val text-text">{historyRangeText}</div>
+                    </div>
+                    <div className="fabriq-stat-card">
+                      <div className="stat-label">LP Workers</div>
+                      <div className="stat-val text-amber">{lpAgentState.concurrency}</div>
+                    </div>
+                    <div className="fabriq-stat-card">
+                      <div className="stat-label">Runtime</div>
+                      <div className="stat-val text-text">
+                        {formatRuntime(lpAgentState.runtimeSeconds ?? 0)}
+                      </div>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {lpAgentState?.stage === "merge_wallets" && (
+                <>
+                  <div className="fabriq-progress-header">
+                    <div className="fabriq-progress-count">
+                      Merging <strong>{(lpAgentState.wallets ?? 0).toLocaleString()}</strong> scanned wallets into master dataset...
+                    </div>
+                  </div>
+                  <div className="fabriq-progress-track">
+                    <div className="fabriq-progress-fill indeterminate" />
+                  </div>
+                  <div className="fabriq-stats-grid">
+                    <div className="fabriq-stat-card">
+                      <div className="stat-label">Scanned Wallets</div>
+                      <div className="stat-val text-green">{lpAgentState.wallets}</div>
+                    </div>
+                    <div className="fabriq-stat-card">
+                      <div className="stat-label">Runtime</div>
+                      <div className="stat-val text-text">
+                        {formatRuntime(lpAgentState.runtimeSeconds ?? 0)}
+                      </div>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {lpAgentState?.stage === "fabriq_enrich" && (
+                <>
+                  <div className="fabriq-progress-header">
+                    <div className="fabriq-progress-count">
+                      Enriching missing & stale wallets with Fabriq...
+                    </div>
+                    <div className="fabriq-progress-percent">
+                      {lpAgentState.fabriqTotal > 0
+                        ? `${Math.min(100, Math.round((lpAgentState.fabriqCompleted / lpAgentState.fabriqTotal) * 100))}%`
+                        : "—"}
+                    </div>
+                  </div>
+
+                  <div className="fabriq-progress-track">
+                    <div
+                      className={`fabriq-progress-fill ${lpAgentState.fabriqTotal === 0 ? "indeterminate" : ""}`}
+                      style={{
+                        width: lpAgentState.fabriqTotal > 0
+                          ? `${Math.max(5, Math.round((lpAgentState.fabriqCompleted / lpAgentState.fabriqTotal) * 100))}%`
+                          : "30%",
+                      }}
+                    />
+                  </div>
+
+                  <div className="fabriq-stats-grid">
+                    <div className="fabriq-stat-card">
+                      <div className="stat-label">Success</div>
+                      <div className="stat-val text-green">{lpAgentState.fabriqSuccess}</div>
+                    </div>
+                    <div className="fabriq-stat-card">
+                      <div className="stat-label">Skipped</div>
+                      <div className="stat-val text-muted">{lpAgentState.fabriqSkipped}</div>
+                    </div>
+                    <div className="fabriq-stat-card">
+                      <div className="stat-label">Failed</div>
+                      <div className={`stat-val ${lpAgentState.fabriqFailed ? "text-red" : "text-muted"}`}>
+                        {lpAgentState.fabriqFailed}
+                      </div>
+                    </div>
+                    <div className="fabriq-stat-card">
+                      <div className="stat-label">History</div>
+                      <div className="stat-val text-text">{historyRangeText}</div>
+                    </div>
+                    <div className="fabriq-stat-card">
+                      <div className="stat-label">Fabriq Workers</div>
+                      <div className="stat-val text-amber">{lpAgentState.fabriqConcurrency}</div>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {lpAgentState?.stage === "fabriq_merge" && (
+                <>
+                  <div className="fabriq-progress-header">
+                    <div className="fabriq-progress-count">
+                      Merging Fabriq analytics into master dataset...
+                    </div>
+                  </div>
+                  <div className="fabriq-progress-track">
+                    <div className="fabriq-progress-fill indeterminate" />
+                  </div>
+                </>
+              )}
+
+              {lpAgentState?.stage === "publish" && (
+                <>
+                  <div className="fabriq-progress-header">
+                    <div className="fabriq-progress-count">
+                      Publishing frontend wallet dataset...
+                    </div>
+                  </div>
+                  <div className="fabriq-progress-track">
+                    <div className="fabriq-progress-fill indeterminate" />
+                  </div>
+                </>
+              )}
+
+              {/* Stop Actions */}
+              <div className="fabriq-modal-actions lp-stop-actions">
+                <button
+                  className="fabriq-btn btn-secondary"
+                  onClick={handleStopLp}
+                  disabled={actionLoading || isLpStopping}
+                >
+                  {isLpStopping && lpAgentState?.stopMode === "graceful" ? (
+                    <>
+                      <RefreshCw size={14} className="spin" /> Stopping Pipeline...
+                    </>
+                  ) : (
+                    <>
+                      <Square size={14} /> Stop & Save Progress
+                    </>
+                  )}
+                </button>
+                <button
+                  className="fabriq-btn btn-danger"
+                  onClick={() => setForceStopTarget("lpagent")}
+                  disabled={actionLoading || isLpStopping}
+                >
+                  {isLpStopping && lpAgentState?.stopMode === "force" ? (
+                    <>
+                      <RefreshCw size={14} className="spin" /> Force Stopping...
+                    </>
+                  ) : (
+                    <>
+                      <AlertOctagon size={14} /> Force Stop
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* ======================================================== */}
+          {/* VIEW: LP AGENT STOPPED                                   */}
+          {/* ======================================================== */}
+          {currentView === "lp_stopped" && (
+            <div className="fabriq-stopped-section">
+              {lpAgentState?.stopMode === "force" || lpAgentState?.checkpointPreserved === false ? (
+                <div className="fabriq-alert-banner alert-error">
+                  <AlertCircle size={18} />
+                  <div>
+                    <strong>Update force-stopped. Checkpoint discarded.</strong>
+                    <div>The next update will start fresh.</div>
+                  </div>
+                </div>
+              ) : (
+                <div className="fabriq-alert-banner alert-warning">
+                  <AlertCircle size={18} />
+                  <div>
+                    <strong>Update stopped. Progress is saved and can be resumed.</strong>
+                    <div>Starting Update Wallet List again will automatically resume already completed scrape pages.</div>
+                  </div>
+                </div>
+              )}
+
+              <div className="fabriq-stats-grid">
+                <div className="fabriq-stat-card">
+                  <div className="stat-label">Completed Pages</div>
+                  <div className="stat-val text-text">
+                    {lpAgentState?.completedPages} / {lpAgentState?.totalPages || "?"}
+                  </div>
+                </div>
+                <div className="fabriq-stat-card">
+                  <div className="stat-label">Wallets Scraped</div>
+                  <div className="stat-val text-green">{lpAgentState?.wallets}</div>
+                </div>
+                <div className="fabriq-stat-card">
+                  <div className="stat-label">History</div>
+                  <div className="stat-val text-text">{historyRangeText}</div>
+                </div>
+                <div className="fabriq-stat-card">
+                  <div className="stat-label">Runtime</div>
+                  <div className="stat-val text-text">
+                    {formatRuntime(lpAgentState?.runtimeSeconds ?? 0)}
+                  </div>
+                </div>
+              </div>
+
+              <div className="fabriq-modal-actions">
+                <button
+                  className="fabriq-btn btn-primary"
+                  onClick={handleStartLp}
+                  disabled={startDisabled || isAnyRunning || actionLoading}
+                >
+                  {lpAgentState?.stopMode === "force" || lpAgentState?.checkpointPreserved === false ? (
+                    <>
+                      <Play size={14} /> Start Fresh Update
+                    </>
+                  ) : (
+                    <>
+                      <Play size={14} /> Resume / Start Update
+                    </>
+                  )}
+                </button>
+                <button
+                  className="fabriq-btn btn-secondary"
+                  onClick={() => {
+                    setConfigureNewRun(true);
+                    setActionError(null);
+                    setShowLogs(false);
+                  }}
+                >
+                  Configure New Run
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* ======================================================== */}
+          {/* VIEW: LP AGENT COMPLETED                                 */}
+          {/* ======================================================== */}
+          {currentView === "lp_completed" && (
+            <div className="fabriq-completed-section">
+              <div className="fabriq-alert-banner alert-success">
+                <CheckCircle2 size={18} />
+                <div>
+                  <strong>Wallet List Updated Successfully</strong>
+                  <div>
+                    Frontend dataset published. Scraped {(lpAgentState?.wallets ?? 0).toLocaleString()} wallets,
+                    enriched with Fabriq and synced to master dataset.
+                  </div>
+                </div>
+              </div>
+
+              <div className="fabriq-stats-grid">
+                <div className="fabriq-stat-card">
+                  <div className="stat-label">Scanned Wallets</div>
+                  <div className="stat-val text-green">{lpAgentState?.wallets}</div>
+                </div>
+                <div className="fabriq-stat-card">
+                  <div className="stat-label">Unique Incoming</div>
+                  <div className="stat-val text-text">{lpAgentState?.uniqueIncoming}</div>
+                </div>
+                <div className="fabriq-stat-card">
+                  <div className="stat-label">Updated Existing</div>
+                  <div className="stat-val text-amber">{lpAgentState?.updatedExisting}</div>
+                </div>
+                <div className="fabriq-stat-card">
+                  <div className="stat-label">Added New</div>
+                  <div className="stat-val text-green">{lpAgentState?.addedNew}</div>
+                </div>
+                <div className="fabriq-stat-card">
+                  <div className="stat-label">Master Wallets</div>
+                  <div className="stat-val text-text">{lpAgentState?.masterWallets}</div>
+                </div>
+                <div className="fabriq-stat-card">
+                  <div className="stat-label">Fabriq Success</div>
+                  <div className="stat-val text-green">{lpAgentState?.fabriqSuccess}</div>
+                </div>
+                <div className="fabriq-stat-card">
+                  <div className="stat-label">Fabriq Failed</div>
+                  <div className="stat-val text-muted">{lpAgentState?.fabriqFailed ?? 0}</div>
+                </div>
+              </div>
+
+              <div className="fabriq-modal-actions">
+                <button
+                  className="fabriq-btn btn-secondary"
+                  onClick={() => {
+                    setConfigureNewRun(true);
+                    setActionError(null);
+                    setShowLogs(false);
+                  }}
+                >
+                  Configure New Run
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* ======================================================== */}
+          {/* VIEW: LP AGENT ERROR                                     */}
+          {/* ======================================================== */}
+          {currentView === "lp_error" && (
+            <div className="fabriq-error-section">
+              <div className="fabriq-alert-banner alert-error">
+                <AlertCircle size={18} />
+                <div>
+                  <strong>Update Failed at Stage: {lpAgentState?.stage ?? "unknown"}</strong>
+                  <div>{lpAgentState?.error || "An error occurred during pipeline execution."}</div>
+                </div>
+              </div>
+
+              <div className="fabriq-modal-actions">
+                <button
+                  className="fabriq-btn btn-primary"
+                  onClick={handleStartLp}
+                  disabled={startDisabled || isAnyRunning || actionLoading}
+                >
+                  <RefreshCw size={14} /> Retry Update
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* ======================================================== */}
+          {/* VIEW: FABRIQ RUNNING                                     */}
+          {/* ======================================================== */}
+          {currentView === "fabriq_running" && (
+            <div className="fabriq-running-section">
+              <div className="fabriq-progress-header">
+                <div className="fabriq-progress-count">
+                  {state?.total ? (
+                    <>
+                      <strong>{state.completed.toLocaleString()}</strong> / {state.total.toLocaleString()} wallets
+                    </>
+                  ) : (
+                    "Preparing Fabriq update..."
+                  )}
+                </div>
+                <div className="fabriq-progress-percent">
+                  {state?.total ? `${fabriqProgressPercent}%` : "—"}
+                </div>
+              </div>
+
+              <div className="fabriq-progress-track">
+                <div
+                  className={`fabriq-progress-fill ${!state?.total ? "indeterminate" : ""}`}
+                  style={{ width: `${Math.max(5, fabriqProgressPercent)}%` }}
+                />
+              </div>
+
+              <div className="fabriq-stepper">
+                <div
+                  className={`fabriq-step ${state?.stage === "enrich" ? "active" : ["merge", "publish", "completed"].includes(state?.stage ?? "") ? "done" : ""}`}
+                >
+                  <span className="step-circle">
+                    {state?.stage === "enrich" ? <RefreshCw size={11} className="spin" /> : "1"}
+                  </span>
+                  <span className="step-label">Enrich Fabriq</span>
+                </div>
+                <div className="step-connector" />
+
+                <div
+                  className={`fabriq-step ${state?.stage === "merge" ? "active" : ["publish", "completed"].includes(state?.stage ?? "") ? "done" : ""}`}
+                >
+                  <span className="step-circle">
+                    {state?.stage === "merge" ? <RefreshCw size={11} className="spin" /> : "2"}
+                  </span>
+                  <span className="step-label">Merge Master</span>
+                </div>
+                <div className="step-connector" />
+
+                <div
+                  className={`fabriq-step ${state?.stage === "publish" ? "active" : state?.stage === "completed" ? "done" : ""}`}
+                >
+                  <span className="step-circle">
+                    {state?.stage === "publish" ? <RefreshCw size={11} className="spin" /> : "3"}
+                  </span>
+                  <span className="step-label">Publish Wallets</span>
+                </div>
+              </div>
+
+              <div className="fabriq-stats-grid">
+                <div className="fabriq-stat-card">
+                  <div className="stat-label">Success</div>
+                  <div className="stat-val text-green">{(state?.success ?? 0).toLocaleString()}</div>
+                </div>
+                <div className="fabriq-stat-card">
+                  <div className="stat-label">Skipped</div>
+                  <div className="stat-val text-muted">{(state?.skipped ?? 0).toLocaleString()}</div>
+                </div>
+                <div className="fabriq-stat-card">
+                  <div className="stat-label">Failed</div>
+                  <div className={`stat-val ${state?.failed ? "text-red" : "text-muted"}`}>
+                    {(state?.failed ?? 0).toLocaleString()}
+                  </div>
+                </div>
+                <div className="fabriq-stat-card">
+                  <div className="stat-label">History</div>
+                  <div className="stat-val text-text">{historyRangeText}</div>
+                </div>
+                <div className="fabriq-stat-card">
+                  <div className="stat-label">Workers</div>
+                  <div className="stat-val text-amber">{state?.concurrency ?? 10}</div>
+                </div>
+                <div className="fabriq-stat-card">
+                  <div className="stat-label">Runtime</div>
+                  <div className="stat-val text-text">
+                    {formatRuntime(state?.runtimeSeconds ?? 0)}
+                  </div>
+                </div>
+              </div>
+
+              <div className="fabriq-modal-actions lp-stop-actions">
+                <button
+                  className="fabriq-btn btn-secondary"
+                  onClick={handleStopFabriq}
+                  disabled={actionLoading || isFabriqStopping}
+                >
+                  {isFabriqStopping && state?.stopMode === "graceful" ? (
+                    <>
+                      <RefreshCw size={14} className="spin" /> Stopping Pipeline...
+                    </>
+                  ) : (
+                    <>
+                      <Square size={14} /> Stop & Save Progress
+                    </>
+                  )}
+                </button>
+                <button
+                  className="fabriq-btn btn-danger"
+                  onClick={() => setForceStopTarget("fabriq")}
+                  disabled={actionLoading || isFabriqStopping}
+                >
+                  {isFabriqStopping && state?.stopMode === "force" ? (
+                    <>
+                      <RefreshCw size={14} className="spin" /> Force Stopping...
+                    </>
+                  ) : (
+                    <>
+                      <AlertOctagon size={14} /> Force Stop
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* ======================================================== */}
+          {/* VIEW: FABRIQ STOPPED                                     */}
+          {/* ======================================================== */}
+          {currentView === "fabriq_stopped" && (
+            <div className="fabriq-stopped-section">
+              {state?.stopMode === "force" || state?.checkpointPreserved === false ? (
+                <div className="fabriq-alert-banner alert-error">
+                  <AlertCircle size={18} />
+                  <div>
+                    <strong>Fabriq update force-stopped. Checkpoint discarded.</strong>
+                    <div>The next update will start fresh.</div>
+                  </div>
+                </div>
+              ) : (
+                <div className="fabriq-alert-banner alert-warning">
+                  <AlertCircle size={18} />
+                  <div>
+                    <strong>Update stopped. Progress is saved and can be resumed.</strong>
+                  </div>
+                </div>
+              )}
+
+              <div className="fabriq-stats-grid">
+                <div className="fabriq-stat-card">
+                  <div className="stat-label">Completed</div>
+                  <div className="stat-val text-text">{(state?.completed ?? 0).toLocaleString()}</div>
+                </div>
+                <div className="fabriq-stat-card">
+                  <div className="stat-label">Success</div>
+                  <div className="stat-val text-green">{(state?.success ?? 0).toLocaleString()}</div>
+                </div>
+                <div className="fabriq-stat-card">
+                  <div className="stat-label">Skipped</div>
+                  <div className="stat-val text-muted">{(state?.skipped ?? 0).toLocaleString()}</div>
+                </div>
+                <div className="fabriq-stat-card">
+                  <div className="stat-label">History</div>
+                  <div className="stat-val text-text">{historyRangeText}</div>
+                </div>
+                <div className="fabriq-stat-card">
+                  <div className="stat-label">Runtime</div>
+                  <div className="stat-val text-text">
+                    {formatRuntime(state?.runtimeSeconds ?? 0)}
+                  </div>
+                </div>
+              </div>
+
+              <div className="fabriq-config-group">
+                <label className="config-label">
+                  {state?.stopMode === "force" || state?.checkpointPreserved === false
+                    ? "Adjust Workers Before Starting Fresh"
+                    : "Adjust Workers Before Resuming"}
+                </label>
+                <div className="worker-input-wrap">
+                  <input
+                    type="number"
+                    min={1}
+                    step={1}
+                    value={concurrency}
+                    className="worker-number-input"
+                    onChange={(e) => {
+                      const v = e.currentTarget.valueAsNumber;
+                      if (Number.isFinite(v)) setConcurrency(Math.max(1, Math.floor(v)));
+                    }}
+                  />
+                  <span className="worker-limit-hint">Min 1 · No worker limit</span>
+                </div>
+              </div>
+
+              <div className="fabriq-modal-actions">
+                {state?.stopMode === "force" || state?.checkpointPreserved === false ? (
+                  <button
+                    className="fabriq-btn btn-primary"
+                    onClick={handleStartFabriq}
+                    disabled={startDisabled || isAnyRunning || actionLoading}
+                  >
+                    <Play size={14} /> Start Fresh Update
+                  </button>
+                ) : (
+                  <button
+                    className="fabriq-btn btn-primary"
+                    onClick={handleResumeFabriq}
+                    disabled={startDisabled || isAnyRunning || actionLoading}
+                  >
+                    <Play size={14} /> Resume Update
+                  </button>
+                )}
+                <button
+                  className="fabriq-btn btn-secondary"
+                  onClick={() => {
+                    setConfigureNewRun(true);
+                    setActionError(null);
+                    setShowLogs(false);
+                  }}
+                >
+                  Configure New Run
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* ======================================================== */}
+          {/* VIEW: FABRIQ COMPLETED                                   */}
+          {/* ======================================================== */}
+          {currentView === "fabriq_completed" && (
+            <div className="fabriq-completed-section">
+              <div className="fabriq-alert-banner alert-success">
+                <CheckCircle2 size={18} />
+                <div>
+                  <strong>Fabriq Update Completed Successfully</strong>
+                  <div>
+                    Enriched {(state?.success ?? 0).toLocaleString()} wallets. Master dataset
+                    merged and published to frontend.
+                  </div>
+                </div>
+              </div>
+
+              <div className="fabriq-stats-grid">
+                <div className="fabriq-stat-card">
+                  <div className="stat-label">Total Wallets</div>
+                  <div className="stat-val text-text">
+                    {(state?.total ?? walletCount)?.toLocaleString() ?? "—"}
+                  </div>
+                </div>
+                <div className="fabriq-stat-card">
+                  <div className="stat-label">Success</div>
+                  <div className="stat-val text-green">{(state?.success ?? 0).toLocaleString()}</div>
+                </div>
+                <div className="fabriq-stat-card">
+                  <div className="stat-label">Skipped</div>
+                  <div className="stat-val text-muted">{(state?.skipped ?? 0).toLocaleString()}</div>
+                </div>
+                <div className="fabriq-stat-card">
+                  <div className="stat-label">History</div>
+                  <div className="stat-val text-text">{historyRangeText}</div>
+                </div>
+                <div className="fabriq-stat-card">
+                  <div className="stat-label">Runtime</div>
+                  <div className="stat-val text-text">
+                    {formatRuntime(state?.runtimeSeconds ?? 0)}
+                  </div>
+                </div>
+              </div>
+
+              <div className="fabriq-modal-actions">
+                <button
+                  className="fabriq-btn btn-secondary"
+                  onClick={() => {
+                    setConfigureNewRun(true);
+                    setActionError(null);
+                    setShowLogs(false);
+                  }}
+                >
+                  Configure New Run
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* ======================================================== */}
+          {/* VIEW: FABRIQ ERROR                                       */}
+          {/* ======================================================== */}
+          {currentView === "fabriq_error" && (
+            <div className="fabriq-error-section">
+              <div className="fabriq-alert-banner alert-error">
+                <AlertCircle size={18} />
+                <div>
+                  <strong>Fabriq Update Failed at Stage: {state?.stage ?? "unknown"}</strong>
+                  <div>{state?.error || "An unknown error occurred during process execution."}</div>
+                </div>
+              </div>
+
+              <div className="fabriq-modal-actions">
+                <button
+                  className="fabriq-btn btn-primary"
+                  onClick={handleStartFabriq}
+                  disabled={startDisabled || isAnyRunning || actionLoading}
+                >
+                  <RefreshCw size={14} /> Retry Update
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* ======================================================== */}
+          {/* VIEW: IDLE — DUA CONTROL CARD (Section 19)               */}
+          {/* ======================================================== */}
+          {currentView === "idle" && (
+            <div className="fabriq-idle-section">
+              {/* Global Metadata Banner */}
+              <div className="fabriq-meta-card">
+                <div className="meta-row">
+                  <span className="meta-key">
+                    <Layers size={14} /> Master Wallets
+                  </span>
+                  <span className="meta-val highlight">{walletCount?.toLocaleString() ?? "—"}</span>
+                </div>
+                <div className="meta-row">
+                  <span className="meta-key">
+                    <Clock size={14} /> Last Published Dataset
+                  </span>
+                  <span className="meta-val">{formatLastUpdatedDate(lastUpdated)}</span>
+                </div>
+              </div>
+
+              {/* Shared Fabriq History Range Section */}
+              <div className="history-range-card">
+                <div className="history-range-header">
+                  <div className="history-range-title">Fabriq History Range</div>
+                  <span className="history-range-badge">Shared</span>
+                </div>
+
+                <div className="history-options-grid">
+                  <label
+                    className={`history-option-card ${historyMode === "90d" ? "selected" : ""}`}
+                    onClick={() => setHistoryMode("90d")}
+                  >
+                    <div className="mode-radio">
+                      <div className={`radio-dot ${historyMode === "90d" ? "active" : ""}`} />
+                    </div>
+                    <div className="mode-text">
+                      <div className="mode-title">Last 90 Days</div>
+                      <div className="mode-desc">Default rolling window ending today.</div>
+                    </div>
+                  </label>
+
+                  <label
+                    className={`history-option-card ${historyMode === "custom" ? "selected" : ""}`}
+                    onClick={() => setHistoryMode("custom")}
+                  >
+                    <div className="mode-radio">
+                      <div className={`radio-dot ${historyMode === "custom" ? "active" : ""}`} />
+                    </div>
+                    <div className="mode-text">
+                      <div className="mode-title">Custom Start Month</div>
+                      <div className="mode-desc">
+                        Fetch monthly Fabriq history from a selected month through current month.
+                      </div>
+                    </div>
+                  </label>
+                </div>
+
+                {historyMode === "custom" && (
+                  <div className="history-custom-picker">
+                    <div className="history-picker-row">
+                      <label className="history-input-label" htmlFor="history-start-month-input">
+                        Start Month
+                      </label>
+                      <input
+                        id="history-start-month-input"
+                        type="month"
+                        max={currentJakartaMonth}
+                        value={startMonth}
+                        onChange={(e) => setStartMonth(e.target.value)}
+                        disabled={isAnyRunning}
+                        className="history-month-input"
+                      />
+                      {startMonth && /^\d{4}-(?:0[1-9]|1[0-2])$/.test(startMonth.trim()) && startMonth.trim() <= currentJakartaMonth && (
+                        <div className="history-range-summary">
+                          History: <strong>{formatMonthName(startMonth)} → {formatMonthName(currentJakartaMonth)}</strong>
+                        </div>
+                      )}
+                    </div>
+
+                    {historyValidationMessage && (
+                      <div className="history-validation-msg">
+                        <AlertCircle size={13} />
+                        <span>{historyValidationMessage}</span>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Two Control Cards Grid */}
+              <div className="update-cards-grid">
+                {/* CARD 1: Wallet List (LP Agent) */}
+                <div className="update-card">
+                  <div className="update-card-header">
+                    <div className="update-card-title">Wallet List</div>
+                    <span className="source-tag source-lp">LP Agent Smart LP</span>
+                  </div>
+
+                  <div className="update-card-desc">
+                    Pull the latest filtered Solana Smart LP wallets, merge them into the master dataset,
+                    enrich missing Fabriq data, then publish the frontend dataset.
+                  </div>
+
+                  <div className="warning-callout">
+                    <AlertTriangle size={14} />
+                    <span>
+                      Before updating: Open LP Agent in Brave and make sure the desired Solana filter/table is already active.
+                    </span>
+                  </div>
+
+                  <div className="update-card-inputs">
+                    <div className="worker-input-row">
+                      <label className="input-row-label">
+                        <Cpu size={13} /> LP Agent Workers
+                      </label>
+                      <input
+                        type="number"
+                        min={1}
+                        step={1}
+                        value={lpConcurrency}
+                        className="worker-number-input"
+                        onChange={(e) => {
+                          const v = e.currentTarget.valueAsNumber;
+                          if (Number.isFinite(v)) setLpConcurrency(Math.max(1, Math.floor(v)));
+                        }}
+                      />
+                    </div>
+
+                    <div className="worker-input-row">
+                      <label className="input-row-label">
+                        <Cpu size={13} /> Fabriq Workers
+                      </label>
+                      <input
+                        type="number"
+                        min={1}
+                        step={1}
+                        value={lpFabriqConcurrency}
+                        className="worker-number-input"
+                        onChange={(e) => {
+                          const v = e.currentTarget.valueAsNumber;
+                          if (Number.isFinite(v)) setLpFabriqConcurrency(Math.max(1, Math.floor(v)));
+                        }}
+                      />
+                    </div>
+                  </div>
+
+                  <button
+                    className="fabriq-btn btn-primary w-full"
+                    onClick={handleStartLp}
+                    disabled={startDisabled || isAnyRunning || actionLoading || !isStartMonthValid}
+                  >
+                    <Play size={14} /> Update Wallet List
+                  </button>
+                </div>
+
+                {/* CARD 2: Fabriq Analytics */}
+                <div className="update-card">
+                  <div className="update-card-header">
+                    <div className="update-card-title">Fabriq Analytics</div>
+                    <span className="source-tag source-fabriq">Fabriq Portfolio</span>
+                  </div>
+
+                  <div className="update-card-desc">
+                    Refresh portfolio performance metrics, PnL calendars, token holdings and trading stats
+                    for all registered wallets in master database.
+                  </div>
+
+                  <div className="mode-options compact">
+                    <label
+                      className={`mode-option-card ${mode === "stale" ? "selected" : ""}`}
+                      onClick={() => setMode("stale")}
+                    >
+                      <div className="mode-radio">
+                        <div className={`radio-dot ${mode === "stale" ? "active" : ""}`} />
+                      </div>
+                      <div className="mode-text">
+                        <div className="mode-title">Refresh Stale Wallets</div>
+                        <div className="mode-desc">Only wallets missing Fabriq or older than 24h.</div>
+                      </div>
+                    </label>
+
+                    <label
+                      className={`mode-option-card ${mode === "full" ? "selected" : ""}`}
+                      onClick={() => setMode("full")}
+                    >
+                      <div className="mode-radio">
+                        <div className={`radio-dot ${mode === "full" ? "active" : ""}`} />
+                      </div>
+                      <div className="mode-text">
+                        <div className="mode-title">Refresh All Wallets</div>
+                        <div className="mode-desc">Forces full fresh scrape for all {walletCount?.toLocaleString() ?? "—"} wallets.</div>
+                      </div>
+                    </label>
+                  </div>
+
+                  <div className="update-card-inputs">
+                    <div className="worker-input-row">
+                      <label className="input-row-label">
+                        <Cpu size={13} /> Fabriq Workers
+                      </label>
+                      <input
+                        type="number"
+                        min={1}
+                        step={1}
+                        value={concurrency}
+                        className="worker-number-input"
+                        onChange={(e) => {
+                          const v = e.currentTarget.valueAsNumber;
+                          if (Number.isFinite(v)) setConcurrency(Math.max(1, Math.floor(v)));
+                        }}
+                      />
+                    </div>
+                  </div>
+
+                  <button
+                    className="fabriq-btn btn-secondary w-full"
+                    onClick={handleStartFabriq}
+                    disabled={startDisabled || isAnyRunning || actionLoading || !isStartMonthValid}
+                  >
+                    <Play size={14} /> Start Fabriq Update
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ======================================================== */}
+          {/* COLLAPSIBLE LOGS TERMINAL (Section 27)                   */}
+          {/* ======================================================== */}
+          <div className="fabriq-logs-container">
+            <button
+              type="button"
+              className="fabriq-logs-toggle"
+              onClick={() => setShowLogs((prev) => !prev)}
+            >
+              <div className="toggle-left">
+                <Terminal size={14} />
+                <span>View Process Logs</span>
+                {activeLogs.length > 0 && (
+                  <span className="logs-count-badge">{activeLogs.length} lines</span>
+                )}
+              </div>
+              {showLogs ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
+            </button>
+
+            {showLogs && (
+              <div className="fabriq-logs-console" ref={logsEndRef}>
+                {activeLogs.length > 0 ? (
+                  activeLogs.map((line, idx) => (
+                    <div key={idx} className="log-line">
+                      {line}
+                    </div>
+                  ))
+                ) : (
+                  <div className="log-empty">No process logs available for this session.</div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Force Stop Confirmation Dialog */}
+        {forceStopTarget && (
+          <div className="force-stop-overlay">
+            <div className="force-stop-card">
+              <div className="force-stop-header">
+                <div className="force-stop-icon-wrap">
+                  <AlertTriangle size={20} className="text-red" />
+                </div>
+                <div className="force-stop-title">
+                  {forceStopTarget === "fabriq" ? "Force Stop Fabriq Update?" : "Force Stop Update?"}
+                </div>
+              </div>
+
+              <div className="force-stop-body">
+                <p>
+                  {forceStopTarget === "fabriq"
+                    ? "This will immediately stop the current Fabriq pipeline and discard its resumable checkpoint."
+                    : "This will immediately stop the current pipeline and discard its resumable checkpoint."}
+                </p>
+                <p>
+                  {forceStopTarget === "fabriq"
+                    ? "The next Fabriq update will start fresh."
+                    : "The next update will start fresh."}
+                </p>
+                <p className="force-stop-sub">
+                  Already completed merge/publish stages will not be rolled back.
+                </p>
+              </div>
+
+              <div className="fabriq-modal-actions force-stop-actions">
+                <button
+                  type="button"
+                  className="fabriq-btn btn-secondary"
+                  onClick={() => setForceStopTarget(null)}
+                  disabled={actionLoading}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="fabriq-btn btn-danger"
+                  onClick={forceStopTarget === "fabriq" ? handleForceStopFabriq : handleForceStopLp}
+                  disabled={actionLoading}
+                >
+                  <AlertOctagon size={14} /> Force Stop
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+    </section>
+  );
+}
