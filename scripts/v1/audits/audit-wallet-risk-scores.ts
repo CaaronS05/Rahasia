@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { buildRiskScores, RISK_FORMULA_WEIGHTS } from "./build-wallet-risk-scores.ts";
+import { buildRiskScores, RISK_FORMULA_WEIGHTS } from "../build-wallet-risk-scores.ts";
 
 interface CliOptions {
     scoresPath: string;

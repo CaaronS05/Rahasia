@@ -96,7 +96,7 @@ export function parseCliArgs(): CliOptions {
         return fallback;
     };
 
-    const projectRoot = path.resolve(__dirname, "../..");
+    const projectRoot = path.resolve(__dirname, "../../..");
     return {
         datasetPath: getArg(
             "--dataset",

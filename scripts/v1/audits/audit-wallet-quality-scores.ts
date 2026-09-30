@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { buildQualityScores } from "./build-wallet-quality-scores.ts";
+import { buildQualityScores } from "../build-wallet-quality-scores.ts";
 
 interface CliOptions {
     scoresPath: string;

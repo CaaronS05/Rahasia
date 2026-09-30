@@ -4,7 +4,7 @@ import {
     buildStyleReadiness,
     type WalletStyleReadinessOutput,
     type DistributionStats,
-} from "./build-wallet-style-readiness.ts";
+} from "../build-wallet-style-readiness.ts";
 
 interface CliOptions {
     styleReadinessPath: string;

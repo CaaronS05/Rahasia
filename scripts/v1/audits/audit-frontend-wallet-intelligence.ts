@@ -59,7 +59,7 @@ function parseCliArgs(): CliOptions {
         return fallback;
     };
 
-    const projectRoot = path.resolve(__dirname, "../..");
+    const projectRoot = path.resolve(__dirname, "../../..");
     return {
         publishedPath: getArg(
             "--published",

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { buildConfidenceScores, CONFIDENCE_FORMULA } from "./build-wallet-confidence-scores.ts";
+import { buildConfidenceScores, CONFIDENCE_FORMULA } from "../build-wallet-confidence-scores.ts";
 
 interface CliOptions {
     scoresPath: string;

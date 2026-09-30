@@ -4,7 +4,7 @@ import {
     classifyWallets,
     type WalletStyleClassificationOutput,
     type WalletClassificationRecord,
-} from "./build-wallet-style-classifications.ts";
+} from "../build-wallet-style-classifications.ts";
 
 interface CliOptions {
     classificationPath: string;
