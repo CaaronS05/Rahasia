@@ -130,7 +130,6 @@ export type Wallet = {
   };
 
   fabriqDerived?: FabriqDerived;
-  score?: WalletScoreData | null;
   intelligenceV1?: WalletIntelligenceV1 | null;
 };
 
@@ -170,51 +169,6 @@ export type WalletIntelligenceV1Dataset = {
   wallets: WalletIntelligenceV1[];
 };
 
-export type WalletScoreData = {
-  wallet: string;
-  skill: {
-    score: number | null;
-    version: string;
-    provisional: boolean;
-  };
-  confidence: {
-    generalPct: number | null;
-    performancePct: number | null;
-    rangePct: number | null;
-  };
-  style: {
-    tag: "farmer" | "mixed_unclassified" | string | null;
-    version: string;
-    provisional: boolean;
-  };
-  metrics?: {
-    winRatePosition: number | null;
-    pnlConcentrationTop1Pct: number | null;
-    medianHoldDurationHours: number | null;
-    trueRebalanceFrequency: number | null;
-    sampleSize: number;
-    uniquePools: number;
-  };
-};
-
-export type WalletScoresDataset = {
-  publishedAt?: string;
-  source?: string;
-  status?: string;
-  versions?: {
-    skill?: string;
-    style?: string;
-  };
-  walletCount?: number;
-  methodology?: {
-    skillConfidenceSeparated?: boolean;
-    skillTemporalContract?: string;
-    styleClassification?: string;
-    frontendPublished?: boolean;
-    frontendIntegrated?: boolean;
-  };
-  scores: WalletScoreData[];
-};
 
 export type WalletDataset = {
   meta: {

@@ -25,7 +25,6 @@ export type WalletSortKey =
   | "risk"
   | "confidence"
   | "style"
-  | "skill"
   | "pnl7"
   | "win"
   | "winDays"
@@ -48,7 +47,6 @@ type ColumnKey =
   | "risk"
   | "confidence"
   | "style"
-  | "skill"
   | "pnl7"
   | "win"
   | "winDays"
@@ -81,7 +79,6 @@ const labels: Record<ColumnKey, string> = {
   risk: "Risk",
   confidence: "Confidence",
   style: "Style",
-  skill: "Skill (Legacy)",
   pnl7: "7D PnL",
   win: "Win Rate",
   winDays: "Win Days",
@@ -105,7 +102,6 @@ const defaultVisible: Record<ColumnKey, boolean> = {
   risk: true,
   confidence: true,
   style: true,
-  skill: false,
   pnl7: true,
   win: true,
   winDays: true,
@@ -137,8 +133,6 @@ function formatRiskScore(wallet: Wallet): string {
 function formatV1ConfidenceScore(wallet: Wallet): string {
   const val = wallet.intelligenceV1?.confidenceScore;
   if (val !== null && val !== undefined) return fmt(val, 1);
-  const legacy = wallet.score?.confidence?.generalPct;
-  if (legacy !== null && legacy !== undefined) return `${fmt(legacy, 1)}%`;
   return "—";
 }
 
@@ -152,31 +146,7 @@ function formatV1StyleTag(wallet: Wallet): string {
     }
     return style;
   }
-  const tag = wallet.score?.style?.tag;
-  if (!tag) return "—";
-  if (tag === "farmer") return "Farmer";
-  if (tag === "mixed_unclassified") return "Mixed / Unclassified";
-  return tag;
-}
-
-function formatSkillScore(wallet: Wallet): string {
-  const val = wallet.score?.skill?.score;
-  if (val === null || val === undefined) return "—";
-  return fmt(val, 1);
-}
-
-function formatConfidenceScore(wallet: Wallet): string {
-  const val = wallet.score?.confidence?.generalPct;
-  if (val === null || val === undefined) return "—";
-  return `${fmt(val, 1)}%`;
-}
-
-function formatStyleTag(wallet: Wallet): string {
-  const tag = wallet.score?.style?.tag;
-  if (!tag) return "—";
-  if (tag === "farmer") return "Farmer";
-  if (tag === "mixed_unclassified") return "Mixed / Unclassified";
-  return tag;
+  return "—";
 }
 
 function signed(value: number, digits = 2) {
@@ -322,7 +292,6 @@ export function WalletTable({
               ) : null}
               {visible.confidence ? <th>{header("confidence")}</th> : null}
               {visible.style ? <th>{header("style")}</th> : null}
-              {visible.skill ? <th>{header("skill")}</th> : null}
               {visible.pnl7 ? <th>{header("pnl7")}</th> : null}
               {visible.win ? <th>{header("win")}</th> : null}
               {visible.winDays ? (
@@ -480,10 +449,6 @@ export function WalletTable({
                         {formatV1StyleTag(wallet)}
                       </span>
                     </td>
-                  ) : null}
-
-                  {visible.skill ? (
-                    <td className="numeric">{formatSkillScore(wallet)}</td>
                   ) : null}
 
                   {visible.pnl7 ? (

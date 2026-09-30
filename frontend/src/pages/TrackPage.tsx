@@ -20,6 +20,11 @@ type Props = {
 function sortValue(wallet: Wallet, key: WalletSortKey): string | number {
   switch (key) {
     case "wallet": return wallet.owner;
+    case "shortlist": return wallet.intelligenceV1?.shortlisted ? 1 : 0;
+    case "quality": return wallet.intelligenceV1?.qualityScore ?? -1;
+    case "risk": return wallet.intelligenceV1?.riskScore ?? -1;
+    case "confidence": return wallet.intelligenceV1?.confidenceScore ?? -1;
+    case "style": return wallet.intelligenceV1?.style ?? "";
     case "pnl7":
       return walletPnl7d(wallet);
     case "win":

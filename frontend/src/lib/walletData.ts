@@ -3,8 +3,6 @@ import type {
   WalletDataset,
   WalletIntelligenceV1,
   WalletIntelligenceV1Dataset,
-  WalletScoreData,
-  WalletScoresDataset,
 } from "../types";
 
 export async function loadWalletDataset(): Promise<WalletDataset> {
@@ -15,88 +13,6 @@ export async function loadWalletDataset(): Promise<WalletDataset> {
     throw new Error(`Failed to load wallet dataset (${response.status})`);
   }
   return response.json();
-}
-
-export async function loadWalletScores(): Promise<WalletScoresDataset | null> {
-  try {
-    const response = await fetch(`/data/wallet-scores.json?t=${Date.now()}`, {
-      cache: "no-store",
-    });
-    if (!response.ok) {
-      console.warn(`[walletData] Failed to load wallet scores (${response.status})`);
-      return null;
-    }
-    const data = await response.json();
-    if (!data || !Array.isArray(data.scores)) {
-      console.warn("[walletData] Invalid wallet scores payload format");
-      return null;
-    }
-    return data as WalletScoresDataset;
-  } catch (err) {
-    console.warn("[walletData] Error fetching wallet scores, proceeding unscored:", err);
-    return null;
-  }
-}
-
-export function buildWalletScoreMap(
-  scoresDataset: WalletScoresDataset | null,
-): Map<string, WalletScoreData> {
-  const map = new Map<string, WalletScoreData>();
-  if (!scoresDataset?.scores || !Array.isArray(scoresDataset.scores)) {
-    return map;
-  }
-
-  for (const item of scoresDataset.scores) {
-    if (!item || typeof item.wallet !== "string") {
-      continue;
-    }
-    const address = item.wallet;
-    if (map.has(address)) {
-      console.error(
-        `[walletData] Data corruption: duplicate score record detected for wallet ${address}`,
-      );
-      // Do not overwrite earlier record with later duplicate
-      continue;
-    }
-    map.set(address, item);
-  }
-
-  return map;
-}
-
-export function joinWalletsWithScores(
-  wallets: Wallet[],
-  scoresDataset: WalletScoresDataset | null,
-): Wallet[] {
-  if (!wallets || wallets.length === 0) {
-    return [];
-  }
-
-  const scoreMap = buildWalletScoreMap(scoresDataset);
-  let matchedCount = 0;
-
-  const joined = wallets.map((wallet) => {
-    const score = scoreMap.get(wallet.owner);
-    if (score !== undefined) {
-      matchedCount++;
-      return {
-        ...wallet,
-        score,
-      };
-    }
-    // Unscored wallet: preserve exactly as existing wallet, score remains undefined
-    return wallet;
-  });
-
-  if (import.meta.env?.DEV) {
-    console.debug(
-      `[walletData] Score join completed: ${wallets.length} wallets, ` +
-        `${scoreMap.size} scores loaded, ${matchedCount} matched, ` +
-        `${wallets.length - matchedCount} unscored.`,
-    );
-  }
-
-  return joined;
 }
 
 export async function loadWalletIntelligenceV1(): Promise<WalletIntelligenceV1Dataset | null> {
@@ -165,7 +81,7 @@ export function joinWalletsWithIntelligenceV1(
         intelligenceV1,
       };
     }
-    // Unjoined/unscored wallet: remains null, no fabricated zero scores
+    // Unjoined wallet: remains null, no fabricated zero scores
     return {
       ...wallet,
       intelligenceV1: null,

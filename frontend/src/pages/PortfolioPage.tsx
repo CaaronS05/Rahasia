@@ -82,9 +82,6 @@ function formatStyleDisplay(style?: string | null): string {
   return style;
 }
 
-function formatStyleTag(tag?: string | null): string {
-  return formatStyleDisplay(tag);
-}
 
 function clampPercent(value: unknown) {
   const parsed = Number(value);
@@ -559,115 +556,6 @@ export function PortfolioPage({
                       </div>
                     ) : null}
                   </div>
-                ) : currentWallet.score?.skill?.score !== null &&
-                currentWallet.score?.skill?.score !== undefined ? (
-                  <div
-                    style={{
-                      display: "grid",
-                      gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-                      gap: "16px",
-                      padding: "16px 18px",
-                    }}
-                  >
-                    <div>
-                      <span
-                        style={{
-                          color: "#9a968f",
-                          fontSize: "10px",
-                          display: "block",
-                          textTransform: "uppercase",
-                        }}
-                      >
-                        Skill Score
-                      </span>
-                      <strong
-                        style={{
-                          fontSize: "22px",
-                          display: "block",
-                          marginTop: "6px",
-                        }}
-                      >
-                        {fmt(currentWallet.score.skill.score, 1)}
-                      </strong>
-                      <small
-                        style={{
-                          color: "#66625c",
-                          fontSize: "10px",
-                          display: "block",
-                          marginTop: "4px",
-                        }}
-                      >
-                        Skill {currentWallet.score.skill.version ?? "v1.2-provisional"}
-                      </small>
-                    </div>
-
-                    <div>
-                      <span
-                        style={{
-                          color: "#9a968f",
-                          fontSize: "10px",
-                          display: "block",
-                          textTransform: "uppercase",
-                        }}
-                      >
-                        General Confidence
-                      </span>
-                      <strong
-                        style={{
-                          fontSize: "22px",
-                          display: "block",
-                          marginTop: "6px",
-                        }}
-                      >
-                        {currentWallet.score.confidence?.generalPct !== null &&
-                        currentWallet.score.confidence?.generalPct !== undefined
-                          ? `${fmt(currentWallet.score.confidence.generalPct, 1)}%`
-                          : "—"}
-                      </strong>
-                      <small
-                        style={{
-                          color: "#66625c",
-                          fontSize: "10px",
-                          display: "block",
-                          marginTop: "4px",
-                        }}
-                      >
-                        Evidence Confidence
-                      </small>
-                    </div>
-
-                    <div>
-                      <span
-                        style={{
-                          color: "#9a968f",
-                          fontSize: "10px",
-                          display: "block",
-                          textTransform: "uppercase",
-                        }}
-                      >
-                        Style
-                      </span>
-                      <strong
-                        style={{
-                          fontSize: "22px",
-                          display: "block",
-                          marginTop: "6px",
-                        }}
-                      >
-                        {formatStyleTag(currentWallet.score.style?.tag)}
-                      </strong>
-                      <small
-                        style={{
-                          color: "#66625c",
-                          fontSize: "10px",
-                          display: "block",
-                          marginTop: "4px",
-                        }}
-                      >
-                        Style {currentWallet.score.style?.version ?? "v0.1-provisional"}
-                      </small>
-                    </div>
-                  </div>
                 ) : (
                   <div
                     style={{
@@ -676,7 +564,7 @@ export function PortfolioPage({
                       fontSize: "12px",
                     }}
                   >
-                    Not scored yet
+                    No V1 intelligence available
                   </div>
                 )}
               </article>

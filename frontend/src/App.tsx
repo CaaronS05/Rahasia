@@ -14,8 +14,6 @@ import { getFabriqStatus, subscribeFabriqEvents } from "./lib/fabriqControl";
 import { getLpAgentStatus } from "./lib/lpAgentControl";
 import {
   loadWalletDataset,
-  loadWalletScores,
-  joinWalletsWithScores,
   loadWalletIntelligenceV1,
   joinWalletsWithIntelligenceV1,
 } from "./lib/walletData";
@@ -144,13 +142,6 @@ export default function App() {
   const refreshDataset = useCallback(() => {
     return Promise.all([
       loadWalletDataset(),
-      loadWalletScores().catch((err) => {
-        console.warn(
-          "Failed to load wallet scores, continuing with unscored wallets:",
-          err,
-        );
-        return null;
-      }),
       loadWalletIntelligenceV1().catch((err) => {
         console.warn(
           "Failed to load V1 wallet intelligence, continuing without V1 data:",
@@ -159,9 +150,8 @@ export default function App() {
         return null;
       }),
     ])
-      .then(([dataset, scoresData, intelData]) => {
-        const withScores = joinWalletsWithScores(dataset.wallets, scoresData);
-        const joined = joinWalletsWithIntelligenceV1(withScores, intelData);
+      .then(([dataset, intelData]) => {
+        const joined = joinWalletsWithIntelligenceV1(dataset.wallets, intelData);
         setWallets(joined);
         setDataUpdatedAt(dataset.meta?.publishedAt ?? null);
       })
@@ -293,11 +283,9 @@ export default function App() {
         case "risk":
           return wallet.intelligenceV1?.riskScore ?? -1;
         case "confidence":
-          return wallet.intelligenceV1?.confidenceScore ?? (wallet.score?.confidence?.generalPct ?? -1);
+          return wallet.intelligenceV1?.confidenceScore ?? -1;
         case "style":
-          return wallet.intelligenceV1?.style ?? (wallet.score?.style?.tag ?? "");
-        case "skill":
-          return wallet.score?.skill?.score ?? -1;
+          return wallet.intelligenceV1?.style ?? "";
         case "pnl7":
           return wallet.total_pnl_native_7d;
         case "win":
