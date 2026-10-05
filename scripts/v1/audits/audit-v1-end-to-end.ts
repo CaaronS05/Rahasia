@@ -6,6 +6,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 export interface CliOptions {
+    masterPath: string;
     datasetPath: string;
     qualityPath: string;
     riskPath: string;
@@ -98,6 +99,10 @@ export function parseCliArgs(): CliOptions {
 
     const projectRoot = path.resolve(__dirname, "../../..");
     return {
+        masterPath: getArg(
+            "--master",
+            path.join(projectRoot, "data/master/wallets-master.json")
+        ),
         datasetPath: getArg(
             "--dataset",
             path.join(projectRoot, "data/v1/wallet-screening-dataset.json")
@@ -158,6 +163,33 @@ function atomicWriteJson(targetPath: string, payload: unknown): void {
     fs.renameSync(tempPath, targetPath);
 }
 
+function isValidSolanaAddress(address: string): boolean {
+    if (typeof address !== "string") return false;
+    const trimmed = address.trim();
+    if (trimmed.length < 32 || trimmed.length > 44) return false;
+    return /^[1-9A-HJ-NP-Za-km-z]+$/.test(trimmed);
+}
+
+function loadMasterUniqueValidAddresses(masterPath: string): Set<string> {
+    if (!fs.existsSync(masterPath)) {
+        throw new Error(`Master wallets dataset not found: ${masterPath}`);
+    }
+    const raw = JSON.parse(fs.readFileSync(masterPath, "utf8"));
+    const rows: any[] = Array.isArray(raw?.wallets) ? raw.wallets : [];
+    const uniqueValidSet = new Set<string>();
+
+    for (const r of rows) {
+        const rawAddr = r?.owner ?? r?.wallet ?? r?.wallet_address;
+        if (typeof rawAddr === "string") {
+            const trimmed = rawAddr.trim();
+            if (isValidSolanaAddress(trimmed)) {
+                uniqueValidSet.add(trimmed);
+            }
+        }
+    }
+    return uniqueValidSet;
+}
+
 export function runV1EndToEndAudit(
     datasetRaw: any,
     qualityRaw: any,
@@ -166,7 +198,8 @@ export function runV1EndToEndAudit(
     styleRaw: any,
     shortlistRaw: any,
     publishedRaw: any,
-    frontendDir: string
+    frontendDir: string,
+    masterPath?: string
 ): EndToEndAuditReport {
     const allBlockers: string[] = [];
 
@@ -181,18 +214,26 @@ export function runV1EndToEndAudit(
     const validCount = validWallets.length;
     const invalidCount = invalidWallets.length;
 
-    if (candidateCount !== 83) {
-        check1Blockers.push(`Expected 83 candidate wallets, found ${candidateCount}`);
-    }
-    if (validCount !== 65) {
-        check1Blockers.push(`Expected 65 valid wallets, found ${validCount}`);
-    }
-    if (invalidCount !== 18) {
-        check1Blockers.push(`Expected 18 invalid wallets, found ${invalidCount}`);
-    }
     const sumMatches = validCount + invalidCount === candidateCount;
     if (!sumMatches) {
         check1Blockers.push(`valid (${validCount}) + invalid (${invalidCount}) != candidates (${candidateCount})`);
+    }
+
+    const candidateAddresses = allDatasetWallets.map((w: any) => String(w.wallet).trim());
+    const candidateAddressSet = new Set<string>();
+    const duplicateCandidateAddresses: string[] = [];
+    for (const addr of candidateAddresses) {
+        if (!addr) {
+            check1Blockers.push("Empty candidate wallet address detected in screening dataset");
+            continue;
+        }
+        if (candidateAddressSet.has(addr)) {
+            duplicateCandidateAddresses.push(addr);
+        }
+        candidateAddressSet.add(addr);
+    }
+    if (duplicateCandidateAddresses.length > 0) {
+        check1Blockers.push(`Found ${duplicateCandidateAddresses.length} duplicate candidate wallet addresses: ${duplicateCandidateAddresses.join(", ")}`);
     }
 
     const validAddresses = validWallets.map((w: any) => String(w.wallet).trim());
@@ -214,15 +255,51 @@ export function runV1EndToEndAudit(
 
     // Cross-verify population metadata block if present
     if (datasetRaw?.population) {
-        if (datasetRaw.population.candidateWallets !== 83) {
-            check1Blockers.push(`Screening metadata candidateWallets is ${datasetRaw.population.candidateWallets}, expected 83`);
+        if (datasetRaw.population.candidateWallets !== candidateCount) {
+            check1Blockers.push(`Screening metadata candidateWallets is ${datasetRaw.population.candidateWallets}, expected ${candidateCount}`);
         }
-        if (datasetRaw.population.validWallets !== 65) {
-            check1Blockers.push(`Screening metadata validWallets is ${datasetRaw.population.validWallets}, expected 65`);
+        if (datasetRaw.population.validWallets !== validCount) {
+            check1Blockers.push(`Screening metadata validWallets is ${datasetRaw.population.validWallets}, expected ${validCount}`);
         }
-        if (datasetRaw.population.invalidWallets !== 18) {
-            check1Blockers.push(`Screening metadata invalidWallets is ${datasetRaw.population.invalidWallets}, expected 18`);
+        if (datasetRaw.population.invalidWallets !== invalidCount) {
+            check1Blockers.push(`Screening metadata invalidWallets is ${datasetRaw.population.invalidWallets}, expected ${invalidCount}`);
         }
+    }
+
+    // Master population validation
+    const sourceMetadata = datasetRaw?.source;
+    const selectionMode = sourceMetadata?.selectionMode ?? "full_master";
+    const resolvedMasterPath = masterPath || path.resolve(sourceMetadata?.path || "data/master/wallets-master.json");
+
+    if (fs.existsSync(resolvedMasterPath)) {
+        const masterValidSet = loadMasterUniqueValidAddresses(resolvedMasterPath);
+
+        if (selectionMode === "full_master") {
+            if (candidateAddressSet.size !== masterValidSet.size) {
+                check1Blockers.push(`Candidate count (${candidateAddressSet.size}) does not match master unique valid address count (${masterValidSet.size})`);
+            }
+            for (const addr of masterValidSet) {
+                if (!candidateAddressSet.has(addr)) {
+                    check1Blockers.push(`Master valid wallet ${addr} missing from screening candidates`);
+                }
+            }
+            for (const addr of candidateAddressSet) {
+                if (!masterValidSet.has(addr)) {
+                    check1Blockers.push(`Screening candidate wallet ${addr} not found in master valid wallet set`);
+                }
+            }
+        } else {
+            for (const addr of candidateAddressSet) {
+                if (!masterValidSet.has(addr)) {
+                    check1Blockers.push(`Candidate wallet ${addr} not found in master dataset`);
+                }
+            }
+            if (sourceMetadata?.selectedCandidates !== undefined && sourceMetadata.selectedCandidates !== candidateCount) {
+                check1Blockers.push(`Selected candidates count (${sourceMetadata.selectedCandidates}) != candidate count (${candidateCount})`);
+            }
+        }
+    } else if (selectionMode === "full_master") {
+        check1Blockers.push(`Master wallets file not found at ${resolvedMasterPath}`);
     }
 
     const check1Pass = check1Blockers.length === 0;
@@ -255,8 +332,8 @@ export function runV1EndToEndAudit(
             seen.add(addr);
             map.set(addr, item);
         }
-        if (records.length !== 65) {
-            check2Blockers.push(`${name} total record count is ${records.length}, expected 65`);
+        if (records.length !== validCount) {
+            check2Blockers.push(`${name} total record count is ${records.length}, expected ${validCount}`);
         }
         return map;
     };
@@ -301,10 +378,10 @@ export function runV1EndToEndAudit(
         }
     }
 
-    if (qualityCoverage !== 65) check2Blockers.push(`Quality coverage is ${qualityCoverage}/65, expected 65`);
-    if (riskCoverage !== 65) check2Blockers.push(`Risk coverage is ${riskCoverage}/65, expected 65`);
-    if (confidenceCoverage !== 65) check2Blockers.push(`Confidence coverage is ${confidenceCoverage}/65, expected 65`);
-    if (styleCoverage !== 65) check2Blockers.push(`Style coverage is ${styleCoverage}/65, expected 65`);
+    if (qualityCoverage !== validCount) check2Blockers.push(`Quality coverage is ${qualityCoverage}/${validCount}, expected ${validCount}`);
+    if (riskCoverage !== validCount) check2Blockers.push(`Risk coverage is ${riskCoverage}/${validCount}, expected ${validCount}`);
+    if (confidenceCoverage !== validCount) check2Blockers.push(`Confidence coverage is ${confidenceCoverage}/${validCount}, expected ${validCount}`);
+    if (styleCoverage !== validCount) check2Blockers.push(`Style coverage is ${styleCoverage}/${validCount}, expected ${validCount}`);
 
     const check2Pass = check2Blockers.length === 0;
     allBlockers.push(...check2Blockers);
@@ -351,11 +428,12 @@ export function runV1EndToEndAudit(
     const artifactShortlistRaw: any[] = shortlistRaw?.wallets || [];
     const artifactShortlistWallets = artifactShortlistRaw.map((w: any) => String(w.wallet).trim());
 
-    if (dynamicShortlistWallets.length !== 7) {
-        check3Blockers.push(`Dynamic shortlist calculated ${dynamicShortlistWallets.length} wallets, expected 7`);
-    }
-    if (artifactShortlistWallets.length !== 7) {
-        check3Blockers.push(`Shortlist artifact contains ${artifactShortlistWallets.length} wallets, expected 7`);
+    // Verify dynamic shortlist wallet SET === artifact shortlist wallet SET
+    const dynamicSet = new Set(dynamicShortlistWallets);
+    const artifactSet = new Set(artifactShortlistWallets);
+
+    if (dynamicShortlistWallets.length !== artifactShortlistWallets.length) {
+        check3Blockers.push(`Dynamic shortlist count (${dynamicShortlistWallets.length}) != artifact count (${artifactShortlistWallets.length})`);
     }
 
     // Cross-check thresholds recorded in shortlist artifact against dynamic calculation
@@ -378,14 +456,13 @@ export function runV1EndToEndAudit(
         check3Blockers.push(`Shortlist artifact confidenceMinimum (${artifactConfMin}) != required threshold (${computedConfidenceMin})`);
     }
 
-    const dynamicSet = new Set(dynamicShortlistWallets);
     for (const addr of artifactShortlistWallets) {
         if (!dynamicSet.has(addr)) {
             check3Blockers.push(`Shortlist artifact wallet ${addr} does not match dynamically calculated qualifiers`);
         }
     }
     for (const addr of dynamicShortlistWallets) {
-        if (!artifactShortlistWallets.includes(addr)) {
+        if (!artifactSet.has(addr)) {
             check3Blockers.push(`Dynamically calculated qualifier ${addr} missing from shortlist artifact`);
         }
     }
@@ -403,8 +480,8 @@ export function runV1EndToEndAudit(
     let scoreMismatchesCount = 0;
     let performanceMismatchesCount = 0;
 
-    if (publishedWalletsCount !== 65) {
-        check4Blockers.push(`Published wallet count is ${publishedWalletsCount}, expected 65`);
+    if (publishedWalletsCount !== validCount) {
+        check4Blockers.push(`Published wallet count is ${publishedWalletsCount}, expected ${validCount}`);
     }
 
     const publishedMap = new Map<string, any>();
@@ -416,8 +493,9 @@ export function runV1EndToEndAudit(
         }
     }
 
-    if (publishedShortlistedCount !== 7) {
-        check4Blockers.push(`Published shortlist count is ${publishedShortlistedCount}, expected 7`);
+    const expectedShortlistCount = artifactShortlistWallets.length;
+    if (publishedShortlistedCount !== expectedShortlistCount) {
+        check4Blockers.push(`Published shortlist count is ${publishedShortlistedCount}, expected ${expectedShortlistCount}`);
     }
 
     for (const w of validWallets) {
@@ -677,7 +755,7 @@ export function runV1EndToEndAudit(
             riskCoverage,
             confidenceCoverage,
             styleCoverage,
-            expectedCount: 65,
+            expectedCount: validCount,
             blockers: check2Blockers,
         },
         check3Shortlist: {
@@ -730,17 +808,17 @@ export function printEndToEndAuditReport(report: EndToEndAuditReport): void {
     console.log("==================================================");
     console.log("");
     console.log(`Population                     : ${report.check1Population.pass ? "PASS" : "FAIL"}`);
-    console.log(`  • Candidates                 : ${report.check1Population.candidateCount} / 83`);
-    console.log(`  • Valid Wallets              : ${report.check1Population.validCount} / 65`);
-    console.log(`  • Invalid Wallets            : ${report.check1Population.invalidCount} / 18`);
+    console.log(`  • Candidates                 : ${report.check1Population.candidateCount}`);
+    console.log(`  • Valid Wallets              : ${report.check1Population.validCount}`);
+    console.log(`  • Invalid Wallets            : ${report.check1Population.invalidCount}`);
     console.log(`  • Valid + Invalid = Total    : ${report.check1Population.sumMatches ? "PASS" : "FAIL"}`);
     console.log(`  • Duplicate Valid Wallets    : ${report.check1Population.duplicateValidCount}`);
     console.log("");
     console.log(`Analytics Coverage             : ${report.check2AnalyticsCoverage.pass ? "PASS" : "FAIL"}`);
-    console.log(`  • Quality Scores Coverage    : ${report.check2AnalyticsCoverage.qualityCoverage} / 65`);
-    console.log(`  • Risk Scores Coverage       : ${report.check2AnalyticsCoverage.riskCoverage} / 65`);
-    console.log(`  • Confidence Scores Coverage : ${report.check2AnalyticsCoverage.confidenceCoverage} / 65`);
-    console.log(`  • Style Classifications      : ${report.check2AnalyticsCoverage.styleCoverage} / 65`);
+    console.log(`  • Quality Scores Coverage    : ${report.check2AnalyticsCoverage.qualityCoverage} / ${report.check2AnalyticsCoverage.expectedCount}`);
+    console.log(`  • Risk Scores Coverage       : ${report.check2AnalyticsCoverage.riskCoverage} / ${report.check2AnalyticsCoverage.expectedCount}`);
+    console.log(`  • Confidence Scores Coverage : ${report.check2AnalyticsCoverage.confidenceCoverage} / ${report.check2AnalyticsCoverage.expectedCount}`);
+    console.log(`  • Style Classifications      : ${report.check2AnalyticsCoverage.styleCoverage} / ${report.check2AnalyticsCoverage.expectedCount}`);
     console.log("");
     console.log(`Shortlist Integrity            : ${report.check3Shortlist.pass ? "PASS" : "FAIL"}`);
     console.log(`  • Dynamic STRICT Qualifiers  : ${report.check3Shortlist.dynamicShortlistCount}`);
@@ -751,8 +829,8 @@ export function printEndToEndAuditReport(report: EndToEndAuditReport): void {
     console.log(`  • Thresholds Match Artifact  : ${report.check3Shortlist.thresholdsMatch ? "PASS" : "FAIL"}`);
     console.log("");
     console.log(`Published Artifact Integrity   : ${report.check4PublishedData.pass ? "PASS" : "FAIL"}`);
-    console.log(`  • Published Valid Wallets    : ${report.check4PublishedData.publishedWalletsCount} / 65`);
-    console.log(`  • Published Shortlisted      : ${report.check4PublishedData.publishedShortlistedCount} / 7`);
+    console.log(`  • Published Valid Wallets    : ${report.check4PublishedData.publishedWalletsCount} / ${report.check2AnalyticsCoverage.expectedCount}`);
+    console.log(`  • Published Shortlisted      : ${report.check4PublishedData.publishedShortlistedCount} / ${report.check3Shortlist.artifactShortlistCount}`);
     console.log(`  • Score/Style Join Mismatches: ${report.check4PublishedData.scoreMismatchesCount}`);
     console.log(`  • Contextual Perf Mismatches : ${report.check4PublishedData.performanceMismatchesCount}`);
     console.log("");
@@ -820,7 +898,8 @@ export async function main(): Promise<void> {
         styleRaw,
         shortlistRaw,
         publishedRaw,
-        cli.frontendDir
+        cli.frontendDir,
+        cli.masterPath
     );
 
     atomicWriteJson(cli.outputPath, report);

@@ -49,9 +49,333 @@
 .data-page .wallet-data-panel .force-stop-overlay { position: fixed; border-radius: 0; }
 .data-page .pool-scanner-embedded { padding: 0; max-width: none; }
 [hidden] { display: none !important; }
+
+/* Build Configuration Section */
+.intelligence-config-section {
+  margin: 20px 0;
+  padding: 20px 0;
+  border-top: 1px solid var(--border);
+}
+
+.intelligence-config-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.config-section-tag {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.config-section-tag h3 {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  margin: 0;
+  color: var(--text);
+}
+
+.config-section-tag svg {
+  color: var(--green);
+}
+
+.config-section-subtitle {
+  margin: 4px 0 0;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.config-header-badges {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.config-running-pill {
+  padding: 4px 9px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: var(--amber);
+  background: rgba(241, 200, 77, 0.09);
+  border: 1px solid rgba(241, 200, 77, 0.25);
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+.config-reset-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: #151614;
+  border: 1px solid var(--border-soft);
+  color: var(--muted);
+  font-size: 10.5px;
+  padding: 4px 9px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.config-reset-btn:hover {
+  color: var(--text);
+  border-color: var(--border);
+  background: #1b1c19;
+}
+
+.config-groups-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.config-group-card {
+  background: #11110f;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.config-group-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.config-group-heading h4 {
+  margin: 0;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.config-group-heading svg {
+  color: var(--muted-2);
+}
+
+.config-field {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+}
+
+.config-field.config-subfield {
+  padding-left: 12px;
+  border-left: 2px solid var(--border);
+  margin-top: -4px;
+}
+
+.config-field-info {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  flex: 1;
+}
+
+.config-field-label {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.config-field-helper {
+  font-size: 10px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.config-field-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.config-number-input {
+  width: 76px;
+  height: 32px;
+  padding: 0 8px;
+  background: #151614;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  text-align: right;
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+.config-number-input:hover {
+  border-color: #45463f;
+}
+
+.config-number-input:focus {
+  border-color: var(--green);
+}
+
+.config-select {
+  height: 32px;
+  padding: 0 10px;
+  background: #151614;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 11.5px;
+  font-weight: 500;
+  outline: none;
+  cursor: pointer;
+  transition: border-color 0.15s ease;
+}
+
+.config-select:hover {
+  border-color: #45463f;
+}
+
+.config-select:focus {
+  border-color: var(--green);
+}
+
+.config-slider-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.config-range-input {
+  width: 90px;
+  accent-color: var(--green);
+  cursor: pointer;
+}
+
+.config-locked-formula-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  font-size: 10px;
+  color: var(--muted);
+  line-height: 1.45;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border-soft);
+}
+
+.config-locked-formula-note svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--muted);
+}
+
+/* Advanced details */
+.config-advanced-details {
+  margin-top: 14px;
+  background: #11110f;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+}
+
+.config-advanced-summary {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 14px;
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+}
+
+.config-advanced-summary::-webkit-details-marker {
+  display: none;
+}
+
+.config-advanced-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.config-advanced-details[open] .config-advanced-title {
+  color: var(--text);
+}
+
+.config-advanced-badge {
+  font-size: 10px;
+  color: var(--muted);
+  padding: 2px 7px;
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 4px;
+  letter-spacing: 0.03em;
+}
+
+.config-advanced-content {
+  padding: 14px;
+  border-top: 1px solid var(--border-soft);
+}
+
+/* Toggle Switch */
+.config-toggle-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 8px;
+  background: #161715;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.config-toggle-switch:hover {
+  border-color: #45463f;
+}
+
+.config-toggle-indicator {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--muted);
+  transition: all 0.15s ease;
+}
+
+.config-toggle-text {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.config-toggle-switch.active {
+  background: rgba(85, 214, 157, 0.1);
+  border-color: rgba(85, 214, 157, 0.4);
+}
+
+.config-toggle-switch.active .config-toggle-indicator {
+  background: var(--green);
+  box-shadow: 0 0 6px rgba(85, 214, 157, 0.6);
+}
+
+.config-toggle-switch.active .config-toggle-text {
+  color: var(--green);
+}
+
 @media (max-width: 1280px) {
   .data-page { padding: 24px; }
   .data-overview { gap: 12px; }
   .data-overview-card { padding: 18px; }
   .intelligence-stages { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .config-groups-grid { grid-template-columns: 1fr; }
 }

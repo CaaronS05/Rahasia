@@ -112,36 +112,34 @@ export function buildPublishedWalletIntelligence(
     const validWalletsFromDataset: any[] = (datasetRaw.wallets || []).filter(
         (w: any) => w.valid === true
     );
-    if (validWalletsFromDataset.length !== 65) {
-        throw new Error(
-            `Expected exactly 65 valid wallets in screening dataset, found ${validWalletsFromDataset.length}`
-        );
+    if (validWalletsFromDataset.length === 0) {
+        throw new Error("Screening dataset contains 0 valid wallets to publish");
     }
 
     // 2. Build index maps by exact address
     const qualityMap = new Map<string, any>();
     for (const q of qualityRaw.wallets || []) {
-        qualityMap.set(q.wallet, q);
+        if (q?.wallet) qualityMap.set(String(q.wallet).trim(), q);
     }
 
     const riskMap = new Map<string, any>();
     for (const r of riskRaw.wallets || []) {
-        riskMap.set(r.wallet, r);
+        if (r?.wallet) riskMap.set(String(r.wallet).trim(), r);
     }
 
     const confidenceMap = new Map<string, any>();
     for (const c of confidenceRaw.wallets || []) {
-        confidenceMap.set(c.wallet, c);
+        if (c?.wallet) confidenceMap.set(String(c.wallet).trim(), c);
     }
 
     const styleMap = new Map<string, any>();
     for (const s of styleRaw.wallets || []) {
-        styleMap.set(s.wallet, s);
+        if (s?.wallet) styleMap.set(String(s.wallet).trim(), s);
     }
 
     const shortlistMap = new Map<string, any>();
     for (const sh of shortlistRaw.wallets || []) {
-        shortlistMap.set(sh.wallet, sh);
+        if (sh?.wallet) shortlistMap.set(String(sh.wallet).trim(), sh);
     }
 
     // 3. Read exact shortlist rules from shortlist artifact
@@ -157,12 +155,12 @@ export function buildPublishedWalletIntelligence(
         throw new Error("Invalid or missing shortlist thresholds in shortlist artifact");
     }
 
-    // 4. Join all 65 wallets preserving deterministic dataset order
+    // 4. Join all valid wallets preserving deterministic dataset order
     const publishedWallets: PublishedWalletRecord[] = [];
     let shortlistedCount = 0;
 
     for (const d of validWalletsFromDataset) {
-        const address = d.wallet;
+        const address = String(d.wallet).trim();
         const q = qualityMap.get(address);
         const r = riskMap.get(address);
         const c = confidenceMap.get(address);
@@ -201,14 +199,19 @@ export function buildPublishedWalletIntelligence(
         });
     }
 
-    if (publishedWallets.length !== 65) {
+    if (publishedWallets.length !== validWalletsFromDataset.length) {
         throw new Error(
-            `Expected 65 published records, got ${publishedWallets.length}`
+            `Expected ${validWalletsFromDataset.length} published records matching dataset, got ${publishedWallets.length}`
         );
     }
-    if (shortlistedCount !== 7) {
+
+    const expectedShortlisted = Array.isArray(shortlistRaw.wallets)
+        ? shortlistRaw.wallets.length
+        : Number(shortlistRaw.population?.shortlistedWallets ?? 0);
+
+    if (shortlistedCount !== expectedShortlisted) {
         throw new Error(
-            `Expected 7 shortlisted records, got ${shortlistedCount}`
+            `Expected ${expectedShortlisted} shortlisted records matching shortlist artifact, got ${shortlistedCount}`
         );
     }
 

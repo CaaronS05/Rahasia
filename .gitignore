@@ -11,7 +11,7 @@ output/*.json
 *.tmp
 
 # Local / generated datasets
-data/
+/data/
 .freebuff/
 
 # Generated frontend datasets

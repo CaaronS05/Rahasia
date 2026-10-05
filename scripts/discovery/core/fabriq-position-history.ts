@@ -73,40 +73,50 @@ async function getFabriqPage(log?: (msg: string) => void): Promise<Page> {
 async function refreshTokenFromBrowser(log?: (msg: string) => void): Promise<string> {
     const page = await getFabriqPage(log);
 
-    const result = await page.evaluate(async () => {
-        const response = await fetch("/auth/verify", {
-            credentials: "include",
-            cache: "no-store",
+    while (true) {
+        const result = await page.evaluate(async () => {
+            const response = await fetch("/auth/verify", {
+                credentials: "include",
+                cache: "no-store",
+            });
+
+            return {
+                status: response.status,
+                text: await response.text(),
+            };
         });
 
-        return {
-            status: response.status,
-            text: await response.text(),
-        };
-    });
+        if (result.status === 403) {
+            (log || console.log)(
+                "[AUTH WAIT] /auth/verify blocked by Cloudflare (403) — retrying in 5s"
+            );
+            await sleep(5000);
+            continue;
+        }
 
-    if (result.status !== 200) {
-        throw new Error(
-            `/auth/verify failed: ${result.status} ${result.text.slice(0, 200)}`
+        if (result.status !== 200) {
+            throw new Error(
+                `/auth/verify failed: ${result.status} ${result.text.slice(0, 200)}`
+            );
+        }
+
+        const json = JSON.parse(result.text);
+
+        if (!json.token) {
+            throw new Error("JWT missing from /auth/verify");
+        }
+
+        token = String(json.token);
+        tokenExpiresAt = decodeJwtExpiry(token) || Date.now() + 45_000;
+
+        const secondsLeft = Math.max(
+            0,
+            Math.floor((tokenExpiresAt - Date.now()) / 1000)
         );
+
+        log?.(`[AUTH] JWT refreshed (${secondsLeft}s)`);
+        return token;
     }
-
-    const json = JSON.parse(result.text);
-
-    if (!json.token) {
-        throw new Error("JWT missing from /auth/verify");
-    }
-
-    token = String(json.token);
-    tokenExpiresAt = decodeJwtExpiry(token) || Date.now() + 45_000;
-
-    const secondsLeft = Math.max(
-        0,
-        Math.floor((tokenExpiresAt - Date.now()) / 1000)
-    );
-
-    log?.(`[AUTH] JWT refreshed (${secondsLeft}s)`);
-    return token;
 }
 
 async function getToken(
@@ -216,7 +226,7 @@ export interface FabriqTransactionEvent {
 
 export interface FabriqClosedPositionHistoryScope {
     protocol: "meteora_dlmm";
-    poolUniverse: "legacy_dlmm";
+    poolUniverse: "legacy_dlmm" | "fabriq_dlmm";
     canonicalPoolFilterApplied: boolean;
     fabriqPoolsDiscovered: number;
     eligibleLegacyPools: number;

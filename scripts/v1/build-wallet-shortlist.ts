@@ -7,7 +7,6 @@ interface CliOptions {
     riskPath: string;
     confidencePath: string;
     stylePath: string;
-    auditPath: string;
     outputPath: string;
 }
 
@@ -75,7 +74,6 @@ function parseCliArgs(): CliOptions {
     let riskPath = path.resolve("data/v1/wallet-risk-scores.json");
     let confidencePath = path.resolve("data/v1/wallet-confidence-scores.json");
     let stylePath = path.resolve("data/v1/wallet-style-classifications.json");
-    let auditPath = path.resolve("data/v1/wallet-shortlist-design-audit.json");
     let outputPath = path.resolve("data/v1/wallet-shortlist.json");
 
     for (let i = 0; i < args.length; i++) {
@@ -105,11 +103,6 @@ function parseCliArgs(): CliOptions {
             i++;
         } else if (arg.startsWith("--style=")) {
             stylePath = path.resolve(arg.slice(8));
-        } else if (arg === "--audit" && args[i + 1]) {
-            auditPath = path.resolve(args[i + 1]);
-            i++;
-        } else if (arg.startsWith("--audit=")) {
-            auditPath = path.resolve(arg.slice(8));
         } else if (arg === "--output" && args[i + 1]) {
             outputPath = path.resolve(args[i + 1]);
             i++;
@@ -118,7 +111,7 @@ function parseCliArgs(): CliOptions {
         }
     }
 
-    return { datasetPath, qualityPath, riskPath, confidencePath, stylePath, auditPath, outputPath };
+    return { datasetPath, qualityPath, riskPath, confidencePath, stylePath, outputPath };
 }
 
 function atomicWriteJson(filePath: string, data: any): void {
@@ -147,8 +140,7 @@ export function buildShortlist(
     qualityData: any,
     riskData: any,
     confidenceData: any,
-    styleData: any,
-    designAuditData?: any
+    styleData: any
 ): ShortlistOutput {
     const validDatasetWallets: any[] = Array.isArray(datasetData?.wallets)
         ? datasetData.wallets.filter((w: any) => w?.valid === true)
@@ -188,15 +180,12 @@ export function buildShortlist(
         if (w?.wallet) styleMap.set(String(w.wallet).trim(), w);
     }
 
-    // Determine exact thresholds: read from design audit if available, else recompute dynamically
+    // Determine exact thresholds directly from current cohort percentiles
     const sortedQuality = [...qualityScores].sort((a, b) => a - b);
     const sortedRisk = [...riskScores].sort((a, b) => a - b);
 
-    const computedQualityP75 = Number(computePercentile(sortedQuality, 75).toFixed(2));
-    const computedRiskP25 = Number(computePercentile(sortedRisk, 25).toFixed(2));
-
-    const qualityMinimum = Number(designAuditData?.cohortPercentiles?.qualityP75 ?? computedQualityP75);
-    const riskMaximum = Number(designAuditData?.cohortPercentiles?.riskP25 ?? computedRiskP25);
+    const qualityMinimum = Number(computePercentile(sortedQuality, 75).toFixed(2));
+    const riskMaximum = Number(computePercentile(sortedRisk, 25).toFixed(2));
     const confidenceMinimum = 80;
 
     const shortlisted: ShortlistedWalletRecord[] = [];
@@ -336,11 +325,8 @@ export async function main(): Promise<void> {
     const riskRaw = JSON.parse(fs.readFileSync(cli.riskPath, "utf8"));
     const confidenceRaw = JSON.parse(fs.readFileSync(cli.confidencePath, "utf8"));
     const styleRaw = JSON.parse(fs.readFileSync(cli.stylePath, "utf8"));
-    const auditRaw = fs.existsSync(cli.auditPath)
-        ? JSON.parse(fs.readFileSync(cli.auditPath, "utf8"))
-        : undefined;
 
-    const shortlist = buildShortlist(datasetRaw, qualityRaw, riskRaw, confidenceRaw, styleRaw, auditRaw);
+    const shortlist = buildShortlist(datasetRaw, qualityRaw, riskRaw, confidenceRaw, styleRaw);
 
     atomicWriteJson(cli.outputPath, shortlist);
 

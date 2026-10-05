@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -80,7 +81,35 @@ export interface V1WalletRecord {
     positions: V1PositionRecord[];
 }
 
+export interface V1ScreeningSourceMetadata {
+    type: "wallets-master";
+    path: string;
+    selectionMode: "full_master" | "single_wallet" | "limit";
+    masterRows: number;
+    uniqueValidAddresses: number;
+    duplicateAddresses: number;
+    invalidAddressRows: number;
+    selectedCandidates: number;
+}
+
+export interface V1ScreeningSession {
+    version: "v1";
+    sessionId: string;
+    status: "in_progress" | "completed";
+    startedAt: string;
+    completedAt?: string;
+    referenceEndTime: string;
+    candidateFingerprint: string;
+    candidateCount: number;
+    config: {
+        historyDays: number;
+        maxClosedPositions: number;
+        poolEligibilityRule: "FABRIQ_DLMM";
+    };
+}
+
 export interface V1ScreeningCheckpoint {
+    sessionId: string;
     wallet: string;
     updatedAt: string;
     config: {
@@ -98,6 +127,7 @@ export interface V1ScreeningCheckpoint {
 
 export interface V1ScreeningDatasetOutput {
     generatedAt: string;
+    source: V1ScreeningSourceMetadata;
     contract: V1Contract;
     population: {
         candidateWallets: number;
@@ -119,38 +149,7 @@ interface CliArgs {
     force: boolean;
 }
 
-const KNOWN_30_VALIDATED_WALLETS = [
-    "12xt4kpUmWMGY7rRenFZXLGtQFcpDFJigFXzQx6FTGyZ",
-    "2B1NJ7wNSjJLLCAYKZoJbmaD9Bj6KzcA4NRuABuJd3s4",
-    "2GRztQR3YUBhB6bHwpDqTk35XLRMCxifij2JmHz7kkoa",
-    "2MzqqSFqg17GhJirQwYzxWY1BquKCQgS3U8XLdnNQrjZ",
-    "391RABKxTNJTsBm5As212n74RCvkVVj5bScBHxLsbjPW",
-    "3bv2BLABbZ7Qi9LRHohknFbiB1cKWBDRcbXKntmNBSpA",
-    "47a7Z4Jk5XX4rVWx6UMk7zEof3aJgz9PFdaKBxUQdWtN",
-    "4NRVFcJmh9N53kHm12PJ5hzMRHsJwYXW1aY79ESZPCWH",
-    "4VY2BAdqqvKef6X26gs1cJAZ7575CDBw9hqs2E5o5etD",
-    "4pEhSid6oETEJUoNaxTK3yVmXDBnxKWVgf9nrgQqJZ4c",
-    "4tNE6wAxeCJVfuJYEhjRqobfgnB9b8Ww4xctAPK4gtB5",
-    "5dKiqJ1BYsxSyWRfQcyQxXr5oMtCdjDnY72vujw5pQPn",
-    "5q8HZeR9ZnTyAvqUdtZtvZksL31HzbfNCS9LSqFE8wJ9",
-    "6sHCkP1iDcfWKu2QS12u6yyw1Dowf9vfwTdXzS6bjLn8",
-    "7h179sMa8yWZ6HaMmqHdAj48S4A6bug5AEHQuE7mshMe",
-    "8FZWoB4AbNUi3tahgSCKEiihgnD5ANVgLmhrC2EEzabj",
-    "8pi1WiPDQmFc4uq9WHF7jHXRJEcAPNcpTMsLmckoabZS",
-    "9Ej2xDy9CnAsMtHhTnnmKM5T53dt7KAb94gHbdMsyEBj",
-    "AKiQ6v5DsWTNuTLZAFxK1gtwv8G3dysthfvEqGvgLrTA",
-    "ANvsEBu7b3ehFnGbTkL8gDaaXs2MdyXtg7HRNUAEg3Ur",
-    "BKp5fXwS6tYakw8stQ7si73avzKkNLKZVULoBA9PSrkP",
-    "BabhFegb7dE9VZWQXzW1AAMwTt2uSY5q1tZCfECYpX1B",
-    "BbrLGW9C1y6KJFt2sGm8ZV6MV5w2M9RAsD9pt3geqXkH",
-    "BioKurBAHQbLmKStQZJR93J5EBzqJeVpWJ1hGvaxsqvH",
-    "CE7xfE6puLP6G1pN4NeCR5zK5P1L2xSqbmKR3FjJHz66",
-    "CHZVYWZWsDt17J2d2huasZXrMk7FyaHHYksJ8HN4qtin",
-    "CMRAqyVDTYbUtpMCA7UeAL4z91nsfEtvRtHwXGX59884",
-    "DR2TThuNJHiKseXJL2yXnbTjWEwBtjbLrjS2FB5MN51y",
-    "DfjSTRECcfUqeTQoS11XwXxiJDstDorbvmMxBbwktauJ",
-    "DicCKYqkhbfJYYMaEH82H5kpJ7nUu7vp4VLefZnTRfsU",
-];
+
 
 function sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -329,47 +328,124 @@ class SharedAuthRefreshLock {
 }
 
 // ----------------------------------------------------
-// Candidate Discovery
+// Candidate Discovery from Master Dataset
 // ----------------------------------------------------
-function loadCandidateWallets(): string[] {
-    const candidateSet = new Set<string>();
+interface MasterCandidateResult {
+    candidateWallets: string[];
+    sourceMetadata: {
+        masterRows: number;
+        uniqueValidAddresses: number;
+        duplicateAddresses: number;
+        invalidAddressRows: number;
+    };
+}
 
-    const preflightPath = path.resolve("data/discovery/waldisc-2/legacy-preflight.json");
-    if (fs.existsSync(preflightPath)) {
-        try {
-            const raw = JSON.parse(fs.readFileSync(preflightPath, "utf8"));
-            if (Array.isArray(raw.knownValidatedWallets)) {
-                for (const w of raw.knownValidatedWallets) {
-                    if (isValidSolanaAddress(w)) candidateSet.add(w);
+function loadMasterCandidates(
+    customMasterPath?: string
+): MasterCandidateResult {
+    const masterPath = customMasterPath
+        ? path.resolve(customMasterPath)
+        : path.resolve("data/master/wallets-master.json");
+
+    if (!fs.existsSync(masterPath)) {
+        throw new Error(`Master wallets dataset not found: ${masterPath}`);
+    }
+
+    const raw = JSON.parse(fs.readFileSync(masterPath, "utf8"));
+    const rows: any[] = Array.isArray(raw?.wallets) ? raw.wallets : [];
+
+    const uniqueValidSet = new Set<string>();
+    let duplicateAddresses = 0;
+    let invalidAddressRows = 0;
+
+    for (const r of rows) {
+        const rawAddr = r?.owner ?? r?.wallet ?? r?.wallet_address;
+        if (typeof rawAddr === "string") {
+            const trimmed = rawAddr.trim();
+            if (isValidSolanaAddress(trimmed)) {
+                if (uniqueValidSet.has(trimmed)) {
+                    duplicateAddresses++;
+                } else {
+                    uniqueValidSet.add(trimmed);
                 }
+            } else {
+                invalidAddressRows++;
             }
-            if (Array.isArray(raw.eligibleWallets)) {
-                for (const w of raw.eligibleWallets) {
-                    if (isValidSolanaAddress(w)) candidateSet.add(w);
-                }
+        } else {
+            invalidAddressRows++;
+        }
+    }
+
+    const candidateWallets = Array.from(uniqueValidSet).sort((a, b) =>
+        a.localeCompare(b)
+    );
+
+    return {
+        candidateWallets,
+        sourceMetadata: {
+            masterRows: rows.length,
+            uniqueValidAddresses: candidateWallets.length,
+            duplicateAddresses,
+            invalidAddressRows,
+        },
+    };
+}
+
+// ----------------------------------------------------
+// Session Management & Fingerprint
+// ----------------------------------------------------
+function computeCandidateFingerprint(wallets: string[]): string {
+    return crypto.createHash("sha256").update(wallets.join(",")).digest("hex");
+}
+
+function loadOrCreateScreeningSession(
+    candidates: string[],
+    config: {
+        historyDays: number;
+        maxClosedPositions: number;
+        poolEligibilityRule: "FABRIQ_DLMM";
+    },
+    force: boolean
+): { session: V1ScreeningSession; isResumed: boolean } {
+    const sessionPath = path.resolve("data/v1/screening-session.json");
+    const fingerprint = computeCandidateFingerprint(candidates);
+
+    if (!force && fs.existsSync(sessionPath)) {
+        try {
+            const existing: V1ScreeningSession = JSON.parse(
+                fs.readFileSync(sessionPath, "utf8")
+            );
+            if (
+                existing &&
+                existing.version === "v1" &&
+                existing.status === "in_progress" &&
+                existing.candidateFingerprint === fingerprint &&
+                existing.candidateCount === candidates.length &&
+                existing.config?.historyDays === config.historyDays &&
+                existing.config?.maxClosedPositions === config.maxClosedPositions &&
+                existing.config?.poolEligibilityRule === config.poolEligibilityRule &&
+                typeof existing.sessionId === "string" &&
+                typeof existing.referenceEndTime === "string"
+            ) {
+                return { session: existing, isResumed: true };
             }
         } catch {}
     }
 
-    const expansionPath = path.resolve("data/discovery/waldisc-2/cohort-expansion.json");
-    if (fs.existsSync(expansionPath)) {
-        try {
-            const raw = JSON.parse(fs.readFileSync(expansionPath, "utf8"));
-            if (Array.isArray(raw.results)) {
-                for (const r of raw.results) {
-                    if (r && (r.status === "VALIDATED" || r.status === "ALREADY_VALIDATED")) {
-                        if (isValidSolanaAddress(r.wallet)) candidateSet.add(r.wallet);
-                    }
-                }
-            }
-        } catch {}
-    }
+    const now = new Date();
+    const newSession: V1ScreeningSession = {
+        version: "v1",
+        sessionId: `session_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`,
+        status: "in_progress",
+        startedAt: now.toISOString(),
+        referenceEndTime: now.toISOString(),
+        candidateFingerprint: fingerprint,
+        candidateCount: candidates.length,
+        config,
+    };
 
-    for (const w of KNOWN_30_VALIDATED_WALLETS) {
-        if (isValidSolanaAddress(w)) candidateSet.add(w);
-    }
-
-    return Array.from(candidateSet);
+    atomicWriteJson(sessionPath, newSession);
+    return { session: newSession, isResumed: false };
 }
 
 // ----------------------------------------------------
@@ -402,6 +478,7 @@ function sanitizeDailyRecords(
 }
 
 function loadWalletCheckpoint(
+    sessionId: string,
     wallet: string,
     historyDays: number,
     maxClosedPositions: number,
@@ -414,12 +491,22 @@ function loadWalletCheckpoint(
         const data = JSON.parse(fs.readFileSync(cpFile, "utf8"));
         if (
             data &&
+            data.sessionId === sessionId &&
             data.config &&
             data.config.historyDays === historyDays &&
             data.config.maxClosedPositions === maxClosedPositions &&
             data.config.poolEligibilityRule === POOL_ELIGIBILITY_RULE &&
             typeof data.valid === "boolean"
         ) {
+            // Operational fetch failures must not permanently become a completed wallet checkpoint!
+            if (
+                data.reason &&
+                typeof data.reason === "string" &&
+                data.reason.startsWith("FETCH_FAILED")
+            ) {
+                return null;
+            }
+
             const rawDaily = Array.isArray(data.daily) ? data.daily : [];
             const sanitizedDaily = cutoffDateStr && referenceEndDateStr
                 ? sanitizeDailyRecords(rawDaily, cutoffDateStr, referenceEndDateStr)
@@ -439,16 +526,23 @@ function loadWalletCheckpoint(
 }
 
 function saveWalletCheckpoint(
+    sessionId: string,
     record: V1WalletRecord,
     historyDays: number,
     maxClosedPositions: number
 ): void {
+    // Operational fetch failures must not permanently become a completed wallet checkpoint!
+    if (record.reason && record.reason.startsWith("FETCH_FAILED")) {
+        return;
+    }
+
     const cpDir = path.resolve("data/v1/checkpoints");
     if (!fs.existsSync(cpDir)) {
         fs.mkdirSync(cpDir, { recursive: true });
     }
     const cpFile = path.join(cpDir, `${record.wallet}.json`);
     const cpData: V1ScreeningCheckpoint = {
+        sessionId,
         wallet: record.wallet,
         updatedAt: new Date().toISOString(),
         config: {
@@ -948,19 +1042,47 @@ async function processWallet(
 export async function runHistoricalCohortScreening(): Promise<V1ScreeningDatasetOutput> {
     const cli = parseCliArgs();
 
-    const candidateWallets = cli.wallet
-        ? [cli.wallet]
-        : loadCandidateWallets();
+    const masterResult = loadMasterCandidates();
+    let candidateWallets = masterResult.candidateWallets;
+    let selectionMode: "full_master" | "single_wallet" | "limit" = "full_master";
 
-    const candidatesToProcess = cli.limit !== undefined
-        ? candidateWallets.slice(0, cli.limit)
-        : candidateWallets;
+    if (cli.wallet) {
+        selectionMode = "single_wallet";
+        candidateWallets = [cli.wallet.trim()];
+    } else if (cli.limit !== undefined) {
+        selectionMode = "limit";
+        candidateWallets = candidateWallets.slice(0, cli.limit);
+    }
+
+    const sourceMetadata: V1ScreeningSourceMetadata = {
+        type: "wallets-master",
+        path: "data/master/wallets-master.json",
+        selectionMode,
+        masterRows: masterResult.sourceMetadata.masterRows,
+        uniqueValidAddresses: masterResult.sourceMetadata.uniqueValidAddresses,
+        duplicateAddresses: masterResult.sourceMetadata.duplicateAddresses,
+        invalidAddressRows: masterResult.sourceMetadata.invalidAddressRows,
+        selectedCandidates: candidateWallets.length,
+    };
+
+    const sessionConfig = {
+        historyDays: cli.historyDays,
+        maxClosedPositions: cli.maxClosedPositions,
+        poolEligibilityRule: POOL_ELIGIBILITY_RULE,
+    };
+
+    const { session: activeSession, isResumed } = loadOrCreateScreeningSession(
+        candidateWallets,
+        sessionConfig,
+        cli.force
+    );
+    const sessionPath = path.resolve("data/v1/screening-session.json");
 
     const outDir = path.resolve("data/v1");
     const datasetPath = path.join(outDir, "wallet-screening-dataset.json");
     const checkpointIndexPath = path.resolve("data/v1/checkpoints/screening-checkpoint.json");
 
-    const referenceEndTime = new Date();
+    const referenceEndTime = new Date(activeSession.referenceEndTime);
     const referenceEndTimeMs = referenceEndTime.getTime();
     const cutoffMs = referenceEndTimeMs - cli.historyDays * 86400 * 1000;
     const cutoffDateStr = new Date(cutoffMs).toISOString().slice(0, 10);
@@ -969,10 +1091,11 @@ export async function runHistoricalCohortScreening(): Promise<V1ScreeningDataset
     const processedMap = new Map<string, V1WalletRecord>();
     const pendingWallets: string[] = [];
 
-    // Check for existing valid checkpoints
-    for (const w of candidatesToProcess) {
+    // Check for existing valid checkpoints belonging to this active session
+    for (const w of candidateWallets) {
         if (!cli.force) {
             const cp = loadWalletCheckpoint(
+                activeSession.sessionId,
                 w,
                 cli.historyDays,
                 cli.maxClosedPositions,
@@ -980,7 +1103,6 @@ export async function runHistoricalCohortScreening(): Promise<V1ScreeningDataset
                 referenceEndDateStr
             );
             if (cp) {
-                saveWalletCheckpoint(cp, cli.historyDays, cli.maxClosedPositions);
                 processedMap.set(w, cp);
                 continue;
             }
@@ -991,12 +1113,14 @@ export async function runHistoricalCohortScreening(): Promise<V1ScreeningDataset
     console.log("==================================================");
     console.log("V1 — FABRIQ HISTORICAL SCREENING DATASET BUILDER");
     console.log("==================================================");
+    console.log(`Session ID              : ${activeSession.sessionId} (${isResumed ? "RESUMED" : "NEW"})`);
+    console.log(`Candidate Source        : data/master/wallets-master.json (${selectionMode})`);
     console.log(`History Window          : ${cli.historyDays} days`);
     console.log(`Pool Rule               : ${POOL_ELIGIBILITY_RULE}`);
     console.log(`Max Closed Positions    : ${cli.maxClosedPositions}`);
     console.log(`Alchemy                 : NOT USED`);
     console.log(`Reference Window        : [${cutoffDateStr} to ${referenceEndDateStr}]`);
-    console.log(`Total Candidates        : ${candidatesToProcess.length}`);
+    console.log(`Total Candidates        : ${candidateWallets.length}`);
     console.log(`Checkpointed Previously : ${processedMap.size}`);
     console.log(`Pending Fetch           : ${pendingWallets.length}`);
     console.log(`Workers                 : ${cli.workers}\n`);
@@ -1025,6 +1149,7 @@ export async function runHistoricalCohortScreening(): Promise<V1ScreeningDataset
 
         const outputData: V1ScreeningDatasetOutput = {
             generatedAt: referenceEndTime.toISOString(),
+            source: sourceMetadata,
             contract: {
                 version: "v1",
                 historyDays: cli.historyDays,
@@ -1045,6 +1170,7 @@ export async function runHistoricalCohortScreening(): Promise<V1ScreeningDataset
         atomicWriteJson(datasetPath, outputData);
         atomicWriteJson(checkpointIndexPath, {
             generatedAt: referenceEndTime.toISOString(),
+            sessionId: activeSession.sessionId,
             config: {
                 version: "v1",
                 historyDays: cli.historyDays,
@@ -1058,7 +1184,7 @@ export async function runHistoricalCohortScreening(): Promise<V1ScreeningDataset
 
     function recordProcessed(record: V1WalletRecord): Promise<void> {
         processedMap.set(record.wallet, record);
-        saveWalletCheckpoint(record, cli.historyDays, cli.maxClosedPositions);
+        saveWalletCheckpoint(activeSession.sessionId, record, cli.historyDays, cli.maxClosedPositions);
         writeChain = writeChain.then(async () => {
             persistDatasetAndIndex();
         }).catch(() => {});
@@ -1073,6 +1199,8 @@ export async function runHistoricalCohortScreening(): Promise<V1ScreeningDataset
         try {
             await writeChain;
             persistDatasetAndIndex();
+            // Preserve session manifest in in_progress state
+            atomicWriteJson(sessionPath, activeSession);
         } catch {}
         await closeFabriqConnection().catch(() => {});
         process.exit(130);
@@ -1138,6 +1266,9 @@ export async function runHistoricalCohortScreening(): Promise<V1ScreeningDataset
     const allRecords = Array.from(processedMap.values());
     const validRecords = allRecords.filter((r) => r.valid);
     const invalidRecords = allRecords.filter((r) => !r.valid);
+    const fetchFailedRecords = allRecords.filter(
+        (r) => r.reason && r.reason.startsWith("FETCH_FAILED")
+    );
 
     const totalClosedPositions = validRecords.reduce(
         (sum, r) => sum + (r.metrics?.closedPositionCount ?? r.positions.length),
@@ -1151,6 +1282,19 @@ export async function runHistoricalCohortScreening(): Promise<V1ScreeningDataset
         }
     }
 
+    // Operational fetch failures must not allow Stage 1 to claim successful completion
+    if (fetchFailedRecords.length > 0) {
+        atomicWriteJson(sessionPath, activeSession);
+        throw new Error(
+            `Screening incomplete: ${fetchFailedRecords.length} wallet(s) failed with FETCH_FAILED. Session ${activeSession.sessionId} remains in_progress for resumption.`
+        );
+    }
+
+    // Mark session as completed
+    activeSession.status = "completed";
+    activeSession.completedAt = new Date().toISOString();
+    atomicWriteJson(sessionPath, activeSession);
+
     const finalResultStatus = validRecords.length >= cli.target
         ? "READY_FOR_V1_ANALYTICS"
         : "INSUFFICIENT_VALID_WALLETS";
@@ -1158,6 +1302,7 @@ export async function runHistoricalCohortScreening(): Promise<V1ScreeningDataset
     console.log("\n==================================================");
     console.log("V1 — FABRIQ HISTORICAL SCREENING DATASET");
     console.log("==================================================");
+    console.log(`Session ID              : ${activeSession.sessionId} (COMPLETED)`);
     console.log(`History Window          : ${cli.historyDays} days`);
     console.log(`Pool Rule               : ${POOL_ELIGIBILITY_RULE}`);
     console.log(`Max Closed Positions    : ${cli.maxClosedPositions}`);
@@ -1175,7 +1320,8 @@ export async function runHistoricalCohortScreening(): Promise<V1ScreeningDataset
     console.log(`Dataset Path            : ${datasetPath}\n`);
 
     return {
-        generatedAt: new Date().toISOString(),
+        generatedAt: referenceEndTime.toISOString(),
+        source: sourceMetadata,
         contract: {
             version: "v1",
             historyDays: cli.historyDays,

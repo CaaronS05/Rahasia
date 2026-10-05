@@ -4,8 +4,6 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "scan": "node --experimental-strip-types --env-file=.env src/index.ts",
-    "merge:wallets": "node --experimental-strip-types src/smart-lp-upsert.ts",
     "dev": "vite",
     "build": "vite build"
   },

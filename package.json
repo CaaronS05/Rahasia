@@ -4,7 +4,6 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "legacy:scan": "node --experimental-strip-types --env-file=.env archive/old-meteora-scanner/src/index.ts",
     "scrape:lpagent": "node scripts/lpagent/scrape-smart-lp.mjs",
     "refresh:lpagent": "node scripts/lpagent/scrape-smart-lp.mjs && node --experimental-strip-types scripts/pipeline/merge-wallets.ts data/raw/lpagent/smart-lp-latest.json",
     "merge:wallets": "node --experimental-strip-types scripts/pipeline/merge-wallets.ts",
