@@ -160,6 +160,10 @@ let poolScannerState = {
     fabriqFailed: 0,
     fabriqSkipped: 0,
     fabriqLimit: null,
+    tradeHistoryTotalWallets: 0,
+    tradeHistoryCompletedWallets: 0,
+    tradeHistoryFailedWallets: 0,
+    tradeHistoryTotalTrades: 0,
 };
 
 function readPoolScannerPipelineState(tokenCa) {
@@ -1770,6 +1774,24 @@ function parsePoolScannerLine(line) {
         poolScannerState.stage = "fabriq_completed";
         return;
     }
+
+    const tradeProgressMatch = line.match(
+        /\[TRADE_HISTORY\]\s+PROGRESS\s+completed=(\d+)\s+total=(\d+)\s+failed=(\d+)\s+trades=(\d+)/i
+    );
+    if (tradeProgressMatch) {
+        poolScannerState.stage = "trade_history";
+        poolScannerState.tradeHistoryCompletedWallets = Number(tradeProgressMatch[1]);
+        poolScannerState.tradeHistoryTotalWallets = Number(tradeProgressMatch[2]);
+        poolScannerState.tradeHistoryFailedWallets = Number(tradeProgressMatch[3]);
+        poolScannerState.tradeHistoryTotalTrades = Number(tradeProgressMatch[4]);
+        return;
+    }
+
+    if (line.includes("[TRADE_HISTORY] COMPLETE")) {
+        poolScannerState.status = "completed";
+        poolScannerState.stage = "trade_history_completed";
+        return;
+    }
 }
 
 let poolScannerUserStopped = false;
@@ -2274,6 +2296,165 @@ function startSelectedWalletsEnrichment(tokenCa, fabriqWorkers = 2, limit = null
             poolScannerState.error =
                 poolScannerState.error ??
                 `Selected Wallets Enrichment failed with exit code ${code}${signal ? ` (signal ${signal})` : ""}`;
+            addPoolScannerLog(
+                `[CONTROL] ${poolScannerState.error}`
+            );
+        }
+    });
+}
+
+function startPoolTradeHistory(tokenCa, workers = 2, wallet = null, limit = null) {
+    assertDataPipelineAvailable();
+
+    poolScannerUserStopped = false;
+    poolScannerState = {
+        ...poolScannerState,
+        status: "running",
+        stage: "trade_history",
+        tokenCa,
+        startedAt: new Date().toISOString(),
+        finishedAt: null,
+        exitCode: null,
+        error: null,
+        tradeHistoryTotalWallets: poolScannerState.uniqueWallets || 0,
+        tradeHistoryCompletedWallets: 0,
+        tradeHistoryFailedWallets: 0,
+        tradeHistoryTotalTrades: 0,
+    };
+
+    addPoolScannerLog(
+        `[CONTROL] Starting Pool Trade History extraction for token: ${tokenCa} [workers: ${workers}${
+            wallet ? `, wallet: ${wallet}` : ""
+        }${limit ? `, limit: ${limit}` : ""}]`
+    );
+
+    const args = [
+        "--experimental-strip-types",
+        "scripts/pool/build-pool-trade-history.ts",
+        "--token",
+        tokenCa,
+        "--workers",
+        String(workers),
+    ];
+
+    if (wallet && typeof wallet === "string" && wallet.trim()) {
+        args.push("--wallet", wallet.trim());
+    }
+
+    if (limit && Number.isInteger(limit) && limit >= 1) {
+        args.push("--limit", String(limit));
+    }
+
+    poolScannerChild = spawn(
+        process.execPath,
+        args,
+        {
+            cwd: ROOT,
+            env: {
+                ...process.env,
+            },
+            detached: process.platform !== "win32",
+            stdio: ["ignore", "pipe", "pipe"],
+        }
+    );
+
+    let stdoutBuffer = "";
+    let stderrBuffer = "";
+
+    function consumeBuffer(buffer, chunk, onLine) {
+        buffer += String(chunk);
+        const lines = buffer.split("\n");
+        const remainder = lines.pop() ?? "";
+        for (const line of lines) {
+            const trimmed = line.trimEnd();
+            if (trimmed) {
+                onLine(trimmed);
+            }
+        }
+        return remainder;
+    }
+
+    poolScannerChild.stdout.on("data", (chunk) => {
+        stdoutBuffer = consumeBuffer(stdoutBuffer, chunk, (line) => {
+            addPoolScannerLog(line);
+            parsePoolScannerLine(line);
+        });
+    });
+
+    poolScannerChild.stderr.on("data", (chunk) => {
+        stderrBuffer = consumeBuffer(stderrBuffer, chunk, (line) => {
+            addPoolScannerLog(line);
+            parsePoolScannerLine(line);
+        });
+    });
+
+    poolScannerChild.on("error", (error) => {
+        const wasUserStopped =
+            poolScannerUserStopped || poolScannerState.status === "stopped";
+        poolScannerChild = null;
+
+        if (wasUserStopped) {
+            poolScannerState.status = "stopped";
+            poolScannerState.stage = "stopped";
+            poolScannerState.error = null;
+            return;
+        }
+
+        poolScannerState.status = "error";
+        poolScannerState.stage = "error";
+        poolScannerState.error =
+            error instanceof Error ? error.message : String(error);
+        poolScannerState.finishedAt = new Date().toISOString();
+        addPoolScannerLog(
+            `[CONTROL] Pool Trade History process error: ${poolScannerState.error}`
+        );
+    });
+
+    poolScannerChild.on("exit", (code, signal) => {
+        if (stdoutBuffer.trim()) {
+            const trimmed = stdoutBuffer.trimEnd();
+            addPoolScannerLog(trimmed);
+            parsePoolScannerLine(trimmed);
+            stdoutBuffer = "";
+        }
+        if (stderrBuffer.trim()) {
+            const trimmed = stderrBuffer.trimEnd();
+            addPoolScannerLog(trimmed);
+            parsePoolScannerLine(trimmed);
+            stderrBuffer = "";
+        }
+
+        const wasUserStopped =
+            poolScannerUserStopped || poolScannerState.status === "stopped";
+        poolScannerChild = null;
+
+        if (wasUserStopped) {
+            poolScannerState.status = "stopped";
+            poolScannerState.stage = "stopped";
+            poolScannerState.error = null;
+            if (!poolScannerState.finishedAt) {
+                poolScannerState.finishedAt = new Date().toISOString();
+            }
+            addPoolScannerLog("[CONTROL] Pool Trade History extraction stopped.");
+            return;
+        }
+
+        poolScannerState.finishedAt = new Date().toISOString();
+        poolScannerState.exitCode = code;
+
+        if (code === 0) {
+            poolScannerState.status = "completed";
+            poolScannerState.stage = "trade_history_completed";
+            poolScannerState.error = null;
+            addPoolScannerLog(
+                "[CONTROL] Pool Trade History extraction finished successfully."
+            );
+        } else {
+            poolScannerState.status = "error";
+            poolScannerState.stage = "error";
+            poolScannerState.error =
+                poolScannerState.error ??
+                `Pool Trade History extraction failed with exit code ${code}${signal ? ` (signal ${signal})` : ""}`;
             addPoolScannerLog(
                 `[CONTROL] ${poolScannerState.error}`
             );
@@ -3819,6 +4000,240 @@ const server = http.createServer(async (request, response) => {
                 request,
                 response,
                 202,
+                poolScannerPublicState(),
+            );
+        } catch (error) {
+            json(
+                request,
+                response,
+                500,
+                {
+                    error:
+                        error instanceof Error
+                            ? error.message
+                            : String(error),
+                },
+            );
+        }
+
+        return;
+    }
+
+    // ------------------------------------------------------
+    // POST /api/pool-scanner/trade-history
+    // ------------------------------------------------------
+
+    if (
+        request.method === "POST" &&
+        url.pathname === "/api/pool-scanner/trade-history"
+    ) {
+        if (dataPipelineBusy()) {
+            json(
+                request,
+                response,
+                409,
+                {
+                    error:
+                        "Another update process is already running",
+
+                    poolScanner:
+                        poolScannerPublicState(),
+
+                    fabriq:
+                        publicState(),
+
+                    lpagent:
+                        lpAgentPublicState(),
+                },
+            );
+
+            return;
+        }
+
+        let body = {};
+
+        try {
+            body = await readJson(request);
+        } catch {
+            json(
+                request,
+                response,
+                400,
+                {
+                    error: "Invalid JSON body",
+                },
+            );
+
+            return;
+        }
+
+        const rawToken = body?.tokenCa;
+
+        if (
+            typeof rawToken !== "string" ||
+            !rawToken.trim()
+        ) {
+            json(
+                request,
+                response,
+                400,
+                {
+                    error: "tokenCa must be a non-empty string",
+                },
+            );
+
+            return;
+        }
+
+        const tokenCa = rawToken.trim();
+
+        if (tokenCa.length < 32 || tokenCa.length > 50) {
+            json(
+                request,
+                response,
+                400,
+                {
+                    error: "tokenCa must be a valid Solana address (32-50 characters)",
+                },
+            );
+
+            return;
+        }
+
+        let workers = 2;
+        if (body?.workers !== undefined && body?.workers !== null) {
+            const rawVal = body.workers;
+            const strVal = String(rawVal).trim();
+            const isValid =
+                (typeof rawVal === "number" && Number.isInteger(rawVal) && rawVal >= 1) ||
+                (typeof rawVal === "string" && /^[1-9]\d*$/.test(strVal));
+
+            if (!isValid) {
+                json(
+                    request,
+                    response,
+                    400,
+                    {
+                        error: "workers must be an integer >= 1",
+                    },
+                );
+
+                return;
+            }
+            workers = Math.min(20, Math.max(1, Number(strVal)));
+        }
+
+        let wallet = null;
+        if (body?.wallet !== undefined && body?.wallet !== null) {
+            if (typeof body.wallet !== "string" || !body.wallet.trim()) {
+                json(
+                    request,
+                    response,
+                    400,
+                    {
+                        error: "wallet must be a non-empty string if provided",
+                    },
+                );
+
+                return;
+            }
+            wallet = body.wallet.trim();
+        }
+
+        let limit = null;
+        if (body?.limit !== undefined && body?.limit !== null) {
+            const rawLimit = body.limit;
+            const strLimit = String(rawLimit).trim();
+            const isValid =
+                (typeof rawLimit === "number" && Number.isInteger(rawLimit) && rawLimit >= 1) ||
+                (typeof rawLimit === "string" && /^[1-9]\d*$/.test(strLimit));
+
+            if (!isValid) {
+                json(
+                    request,
+                    response,
+                    400,
+                    {
+                        error: "limit must be an integer >= 1",
+                    },
+                );
+
+                return;
+            }
+            limit = Number(strLimit);
+        }
+
+        if (rejectBusyDataPipeline(request, response)) return;
+
+        const selectedScanDir = path.join(
+            ROOT,
+            "data",
+            "discovery",
+            "pool-scanner",
+            tokenCa,
+            "selected-scan"
+        );
+        const statePath = path.join(selectedScanDir, "scan-state.json");
+        const poolWalletsPath = path.join(selectedScanDir, "pool-wallets.json");
+
+        if (!fs.existsSync(statePath) || !fs.existsSync(poolWalletsPath)) {
+            json(
+                request,
+                response,
+                400,
+                {
+                    error: "Selected pool scan artifacts (scan-state.json, pool-wallets.json) not found. Please complete Step 3B first.",
+                },
+            );
+
+            return;
+        }
+
+        try {
+            const scanState = JSON.parse(fs.readFileSync(statePath, "utf8"));
+            if (scanState.status !== "completed") {
+                json(
+                    request,
+                    response,
+                    400,
+                    {
+                        error: `Selected pool scan is not completed (current status: ${scanState.status}).`,
+                    },
+                );
+
+                return;
+            }
+            if (!scanState.selectionFingerprint || typeof scanState.selectionFingerprint !== "string") {
+                json(
+                    request,
+                    response,
+                    400,
+                    {
+                        error: "selectionFingerprint missing or invalid in scan-state.json.",
+                    },
+                );
+
+                return;
+            }
+        } catch (err) {
+            json(
+                request,
+                response,
+                400,
+                {
+                    error: `Invalid scan-state.json in selected-scan: ${err instanceof Error ? err.message : String(err)}`,
+                },
+            );
+
+            return;
+        }
+
+        try {
+            startPoolTradeHistory(tokenCa, workers, wallet, limit);
+            json(
+                request,
+                response,
+                200,
                 poolScannerPublicState(),
             );
         } catch (error) {

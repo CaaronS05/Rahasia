@@ -14,6 +14,8 @@ export type PoolScannerStage =
   | "extract_completed"
   | "fabriq"
   | "fabriq_completed"
+  | "trade_history"
+  | "trade_history_completed"
   | "master_upsert"
   | "publish"
   | "completed"
@@ -54,6 +56,10 @@ export interface PoolScannerState {
   fabriqFailed?: number;
   fabriqSkipped?: number;
   fabriqLimit?: number | null;
+  tradeHistoryTotalWallets?: number;
+  tradeHistoryCompletedWallets?: number;
+  tradeHistoryFailedWallets?: number;
+  tradeHistoryTotalTrades?: number;
 }
 
 export interface PoolDiscoveryItem {
@@ -205,6 +211,39 @@ export async function enrichSelectedWallets(
   if (!response.ok) {
     throw new Error(
       payload?.error || `Enrich Selected Wallets failed with status ${response.status}`
+    );
+  }
+  return payload;
+}
+
+export async function buildPoolTradeHistory(
+  tokenCa: string,
+  workers = 2,
+  wallet?: string,
+  limit?: number
+): Promise<PoolScannerState> {
+  const body: Record<string, unknown> = {
+    tokenCa: tokenCa.trim(),
+    workers,
+  };
+  if (wallet && typeof wallet === "string" && wallet.trim()) {
+    body.wallet = wallet.trim();
+  }
+  if (limit !== undefined && limit !== null && limit >= 1) {
+    body.limit = limit;
+  }
+  const response = await fetch(`${POOL_SCANNER_API_BASE}/api/pool-scanner/trade-history`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(
+      payload?.error || `Build Pool Trade History failed with status ${response.status}`
     );
   }
   return payload;

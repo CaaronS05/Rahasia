@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  buildPoolTradeHistory,
   discoverTokenPools,
   enrichSelectedWallets,
   getPoolScannerStatus,
@@ -57,6 +58,8 @@ const STAGE_LABELS: Record<string, string> = {
   extract_completed: "Extract Completed",
   fabriq: "02 — Enrich Wallets (Fabriq)",
   fabriq_completed: "Fabriq Enrichment Completed",
+  trade_history: "Pool Trade History",
+  trade_history_completed: "Trade History Completed",
   master_upsert: "03 — Master Upsert",
   publish: "04 — Publish Dataset",
   completed: "Completed",
@@ -233,6 +236,8 @@ export function PoolScannerPage({ onDatasetRefreshed, embedded = false, startDis
   const [copied, setCopied] = useState(false);
   const [logsExpanded, setLogsExpanded] = useState(false);
   const [enrichTestLimit, setEnrichTestLimit] = useState(false);
+  const [tradeHistoryTestLimit, setTradeHistoryTestLimit] = useState(false);
+  const [tradeHistoryTestWallet, setTradeHistoryTestWallet] = useState("");
 
   const logsContainerRef = useRef<HTMLDivElement>(null);
   const prevRunningRef = useRef(false);
@@ -468,6 +473,25 @@ export function PoolScannerPage({ onDatasetRefreshed, embedded = false, startDis
 
     try {
       const s = await enrichSelectedWallets(cleanedToken, workerCount, limit);
+      setState(s);
+    } catch (err) {
+      setApiError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function handleBuildTradeHistory() {
+    if (isRunning || startDisabled || !tokenLooksValid) return;
+    setSubmitting(true);
+    setApiError(null);
+
+    const workerCount = Number(workersRaw) || 2;
+    const limit = tradeHistoryTestLimit ? 1 : undefined;
+    const wallet = tradeHistoryTestWallet.trim() ? tradeHistoryTestWallet.trim() : undefined;
+
+    try {
+      const s = await buildPoolTradeHistory(cleanedToken, workerCount, wallet, limit);
       setState(s);
     } catch (err) {
       setApiError(err instanceof Error ? err.message : String(err));
@@ -1120,6 +1144,96 @@ export function PoolScannerPage({ onDatasetRefreshed, embedded = false, startDis
               <span className="fabriq-substat fail">
                 ✗ {state.fabriqFailed ?? 0} failed
               </span>
+            </div>
+          </div>
+        ) : null}
+
+        {/* Step 3C-B: Trade History Trigger Card (Temporary development action) */}
+        {((state?.stage === "fabriq_completed" ||
+           state?.stage === "extract_completed" ||
+           (state?.status === "completed" && (state?.uniqueWallets || 0) > 0)) &&
+          !isRunning &&
+          state?.stage !== "trade_history") ? (
+          <div className="pool-scanner-enrich-trigger-card trade-history-trigger-card">
+            <div className="enrich-trigger-info">
+              <Clock size={16} className="text-cyan" />
+              <div>
+                <strong>Step 3C-B · Pool Trade History</strong>
+                <p>
+                  Extract closed position history for selected pools across {state?.uniqueWallets || 0} wallets.
+                </p>
+              </div>
+            </div>
+            <div className="enrich-trigger-actions">
+              <div className="trade-history-test-wallet-wrap">
+                <input
+                  type="text"
+                  placeholder="Optional Test Wallet"
+                  value={tradeHistoryTestWallet}
+                  onChange={(e) => setTradeHistoryTestWallet(e.target.value)}
+                  className="trade-history-test-wallet-input"
+                />
+              </div>
+              <label className="enrich-test-limit-label">
+                <input
+                  type="checkbox"
+                  checked={tradeHistoryTestLimit}
+                  onChange={(e) => setTradeHistoryTestLimit(e.target.checked)}
+                />
+                <span>Test mode (limit: 1 wallet)</span>
+              </label>
+              <button
+                type="button"
+                className="pool-scanner-start pool-discovery-scan-btn trade-history-btn"
+                onClick={handleBuildTradeHistory}
+                disabled={isRunning || startDisabled}
+              >
+                <Clock size={15} />
+                Fetch Pool Trade History
+              </button>
+            </div>
+          </div>
+        ) : null}
+
+        {/* Step 3C-B: Trade History Progress Card */}
+        {(state?.stage === "trade_history" ||
+          state?.stage === "trade_history_completed" ||
+          (state?.tradeHistoryCompletedWallets ?? 0) > 0) ? (
+          <div className="pool-scanner-extract-card trade-history-card">
+            <div className="extract-card-header">
+              <div className="extract-card-title">
+                {state?.stage === "trade_history" && isRunning ? (
+                  <>
+                    <Loader2 size={16} className="spin text-cyan" />
+                    <span>Fetching Trade History</span>
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle2 size={16} className="text-cyan" />
+                    <span>Trade History</span>
+                  </>
+                )}
+              </div>
+              <div className="extract-card-stats">
+                <span className="extract-stat-item">
+                  <strong>
+                    {state?.tradeHistoryCompletedWallets ?? 0} / {state?.tradeHistoryTotalWallets || state?.uniqueWallets || 0}
+                  </strong>{" "}
+                  wallets
+                </span>
+                <span className="extract-stat-dot">·</span>
+                <span className="extract-stat-item">
+                  <strong>{state?.tradeHistoryTotalTrades ?? 0}</strong> trades
+                </span>
+                {state?.tradeHistoryFailedWallets ? (
+                  <>
+                    <span className="extract-stat-dot">·</span>
+                    <span className="extract-stat-item text-red">
+                      {state.tradeHistoryFailedWallets} failed
+                    </span>
+                  </>
+                ) : null}
+              </div>
             </div>
           </div>
         ) : null}
