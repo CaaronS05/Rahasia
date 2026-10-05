@@ -20,6 +20,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   discoverTokenPools,
+  enrichSelectedWallets,
   getPoolScannerStatus,
   scanSelectedPools,
   startPoolScanner,
@@ -54,7 +55,8 @@ const STAGE_LABELS: Record<string, string> = {
   discovery: "01 — Discover Pools",
   extract: "Extract Selected Pools",
   extract_completed: "Extract Completed",
-  fabriq: "02 — Enrich Wallets",
+  fabriq: "02 — Enrich Wallets (Fabriq)",
+  fabriq_completed: "Fabriq Enrichment Completed",
   master_upsert: "03 — Master Upsert",
   publish: "04 — Publish Dataset",
   completed: "Completed",
@@ -117,7 +119,7 @@ function computePipelineProgress(
 
   let activeStep = 1;
   if (stage === "discovery" || stage === "extract" || stage === "extract_completed") activeStep = 1;
-  else if (stage === "fabriq") activeStep = 2;
+  else if (stage === "fabriq" || stage === "fabriq_completed") activeStep = 2;
   else if (stage === "master_upsert") activeStep = 3;
   else if (stage === "publish") activeStep = 4;
   else if (stage === "completed" || status === "completed") {
@@ -230,6 +232,7 @@ export function PoolScannerPage({ onDatasetRefreshed, embedded = false, startDis
   const [discoveryError, setDiscoveryError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [logsExpanded, setLogsExpanded] = useState(false);
+  const [enrichTestLimit, setEnrichTestLimit] = useState(false);
 
   const logsContainerRef = useRef<HTMLDivElement>(null);
   const prevRunningRef = useRef(false);
@@ -447,6 +450,24 @@ export function PoolScannerPage({ onDatasetRefreshed, embedded = false, startDis
 
     try {
       const s = await scanSelectedPools(cleanedToken, selectedPoolAddresses);
+      setState(s);
+    } catch (err) {
+      setApiError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function handleEnrichSelectedWallets() {
+    if (isRunning || startDisabled || !tokenLooksValid) return;
+    setSubmitting(true);
+    setApiError(null);
+
+    const workerCount = Number(workersRaw) || 2;
+    const limit = enrichTestLimit ? 1 : undefined;
+
+    try {
+      const s = await enrichSelectedWallets(cleanedToken, workerCount, limit);
       setState(s);
     } catch (err) {
       setApiError(err instanceof Error ? err.message : String(err));
@@ -1014,6 +1035,94 @@ export function PoolScannerPage({ onDatasetRefreshed, embedded = false, startDis
             ) : null}
           </div>
         )}
+
+        {/* Step 3C-A Fabriq Enrichment Trigger (when extraction is complete) */}
+        {((state?.stage === "extract_completed" ||
+          (state?.status === "completed" && (state?.uniqueWallets || 0) > 0)) &&
+          !isRunning &&
+          state?.stage !== "fabriq" &&
+          state?.stage !== "fabriq_completed") ? (
+          <div className="pool-scanner-enrich-trigger-card">
+            <div className="enrich-trigger-info">
+              <Sparkles size={16} className="text-green" />
+              <div>
+                <strong>Step 3C-A · Fabriq Enrichment</strong>
+                <p>
+                  Enrich {state?.uniqueWallets || 0} globally deduplicated wallets using {fabriqWorkers} workers.
+                </p>
+              </div>
+            </div>
+            <div className="enrich-trigger-actions">
+              <label className="enrich-test-limit-label">
+                <input
+                  type="checkbox"
+                  checked={enrichTestLimit}
+                  onChange={(e) => setEnrichTestLimit(e.target.checked)}
+                />
+                <span>Test mode (limit: 1 wallet)</span>
+              </label>
+              <button
+                type="button"
+                className="pool-scanner-start pool-discovery-scan-btn enrich-btn"
+                onClick={handleEnrichSelectedWallets}
+                disabled={isRunning || startDisabled}
+              >
+                <Sparkles size={15} />
+                Enrich Wallets with Fabriq
+              </button>
+            </div>
+          </div>
+        ) : null}
+
+        {/* Fabriq Enrichment Progress Card (Step 3C-A) */}
+        {(state?.stage === "fabriq" || state?.stage === "fabriq_completed") ? (
+          <div className="pool-scanner-extract-card fabriq-enrich-card">
+            <div className="extract-card-header">
+              <div className="extract-card-title">
+                {state.stage === "fabriq" && isRunning ? (
+                  <>
+                    <Loader2 size={16} className="spin text-green" />
+                    <span>Fabriq Enrichment</span>
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle2 size={16} className="text-green" />
+                    <span>Fabriq Enrichment Completed</span>
+                  </>
+                )}
+              </div>
+              <div className="extract-card-stats">
+                <span className="extract-stat-item">
+                  <strong>{state.fabriqCompleted ?? 0} / {state.fabriqTotal || state.uniqueWallets || 0}</strong> wallets
+                </span>
+                <span className="extract-stat-dot">·</span>
+                <span className="extract-stat-item">
+                  Workers: <strong>{state.fabriqWorkers || fabriqWorkers}</strong>
+                </span>
+                {state.fabriqLimit ? (
+                  <>
+                    <span className="extract-stat-dot">·</span>
+                    <span className="extract-stat-item">
+                      Limit: <strong>{state.fabriqLimit}</strong>
+                    </span>
+                  </>
+                ) : null}
+              </div>
+            </div>
+
+            <div className="fabriq-substats-row">
+              <span className="fabriq-substat ok">
+                ✓ {state.fabriqSuccess ?? 0} ok
+              </span>
+              <span className="fabriq-substat skip">
+                ↷ {state.fabriqSkipped ?? 0} skipped / fresh
+              </span>
+              <span className="fabriq-substat fail">
+                ✗ {state.fabriqFailed ?? 0} failed
+              </span>
+            </div>
+          </div>
+        ) : null}
 
         {/* Primary Stage Progress Display */}
         <div className="pool-scanner-progress-card">

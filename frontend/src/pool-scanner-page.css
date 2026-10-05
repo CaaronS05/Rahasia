@@ -1559,5 +1559,94 @@
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
+/* Step 3C-A Fabriq Enrichment Trigger and Progress Cards */
+.pool-scanner-enrich-trigger-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+  padding: 16px 20px;
+  border-radius: 9px;
+  border: 1px solid rgba(85, 214, 157, 0.35);
+  background: linear-gradient(180deg, rgba(23, 33, 27, 0.95), rgba(19, 25, 22, 0.95));
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+}
+
+.enrich-trigger-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.enrich-trigger-info strong {
+  display: block;
+  font-size: 14px;
+  color: var(--text);
+  margin-bottom: 2px;
+}
+
+.enrich-trigger-info p {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.enrich-trigger-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.enrich-test-limit-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #c7d8cf;
+  cursor: pointer;
+}
+
+.enrich-test-limit-label input[type="checkbox"] {
+  accent-color: var(--green);
+  width: 14px;
+  height: 14px;
+}
+
+.enrich-btn {
+  padding: 8px 16px;
+  font-size: 12px;
+}
+
+.fabriq-enrich-card {
+  border-color: rgba(85, 214, 157, 0.35);
+}
+
+.fabriq-substats-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(85, 214, 157, 0.15);
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.fabriq-substat.ok {
+  color: #a7f3d0;
+}
+
+.fabriq-substat.skip {
+  color: #cbd5e1;
+}
+
+.fabriq-substat.fail {
+  color: #fca5a5;
+}
+
+
 
 

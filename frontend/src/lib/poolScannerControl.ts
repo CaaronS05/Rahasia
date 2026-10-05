@@ -13,6 +13,7 @@ export type PoolScannerStage =
   | "extract"
   | "extract_completed"
   | "fabriq"
+  | "fabriq_completed"
   | "master_upsert"
   | "publish"
   | "completed"
@@ -47,6 +48,12 @@ export interface PoolScannerState {
   completedPoolCount?: number;
   uniqueWallets?: number;
   currentPool?: CurrentPoolInfo | null;
+  fabriqTotal?: number;
+  fabriqCompleted?: number;
+  fabriqSuccess?: number;
+  fabriqFailed?: number;
+  fabriqSkipped?: number;
+  fabriqLimit?: number | null;
 }
 
 export interface PoolDiscoveryItem {
@@ -173,4 +180,34 @@ export async function scanSelectedPools(
   }
   return payload;
 }
+
+export async function enrichSelectedWallets(
+  tokenCa: string,
+  fabriqWorkers = 2,
+  limit?: number
+): Promise<PoolScannerState> {
+  const body: Record<string, unknown> = {
+    tokenCa: tokenCa.trim(),
+    fabriqWorkers,
+  };
+  if (limit !== undefined && limit !== null && limit >= 1) {
+    body.limit = limit;
+  }
+  const response = await fetch(`${POOL_SCANNER_API_BASE}/api/pool-scanner/enrich-selected`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(
+      payload?.error || `Enrich Selected Wallets failed with status ${response.status}`
+    );
+  }
+  return payload;
+}
+
 

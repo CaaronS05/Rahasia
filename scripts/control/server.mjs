@@ -154,6 +154,12 @@ let poolScannerState = {
     completedPoolCount: 0,
     uniqueWallets: 0,
     currentPool: null,
+    fabriqTotal: 0,
+    fabriqCompleted: 0,
+    fabriqSuccess: 0,
+    fabriqFailed: 0,
+    fabriqSkipped: 0,
+    fabriqLimit: null,
 };
 
 function readPoolScannerPipelineState(tokenCa) {
@@ -1712,6 +1718,58 @@ function parsePoolScannerLine(line) {
         poolScannerState.stage = "extract_completed";
         return;
     }
+
+    const datasetMatch = line.match(/\[DATASET\]\s+(\d+)\s+total wallets/i);
+    if (datasetMatch) {
+        poolScannerState.fabriqTotal = parseInt(datasetMatch[1], 10);
+        return;
+    }
+
+    const resumeMatch = line.match(/\[RESUME\]\s+(\d+)\/(\d+)\s+already completed/i);
+    if (resumeMatch) {
+        poolScannerState.fabriqSkipped = parseInt(resumeMatch[1], 10);
+        poolScannerState.fabriqCompleted =
+            poolScannerState.fabriqSkipped +
+            poolScannerState.fabriqSuccess +
+            poolScannerState.fabriqFailed;
+        return;
+    }
+
+    const skipMatch = line.match(/\[W\d+\]\s+\[\d+\/\d+\]\s+SKIP/i);
+    if (skipMatch) {
+        poolScannerState.fabriqSkipped++;
+        poolScannerState.fabriqCompleted =
+            poolScannerState.fabriqSkipped +
+            poolScannerState.fabriqSuccess +
+            poolScannerState.fabriqFailed;
+        return;
+    }
+
+    const okMatch = line.match(/\[W\d+\]\s+\[OK\]/i);
+    if (okMatch) {
+        poolScannerState.fabriqSuccess++;
+        poolScannerState.fabriqCompleted =
+            poolScannerState.fabriqSkipped +
+            poolScannerState.fabriqSuccess +
+            poolScannerState.fabriqFailed;
+        return;
+    }
+
+    const failMatch = line.match(/\[W\d+\]\s+\[FAIL\]/i);
+    if (failMatch) {
+        poolScannerState.fabriqFailed++;
+        poolScannerState.fabriqCompleted =
+            poolScannerState.fabriqSkipped +
+            poolScannerState.fabriqSuccess +
+            poolScannerState.fabriqFailed;
+        return;
+    }
+
+    if (line.includes("[ENRICH_SELECTED] COMPLETE")) {
+        poolScannerState.status = "completed";
+        poolScannerState.stage = "fabriq_completed";
+        return;
+    }
 }
 
 let poolScannerUserStopped = false;
@@ -2059,6 +2117,163 @@ function startSelectedPoolScanner(tokenCa, selectedPoolAddresses) {
             poolScannerState.error =
                 poolScannerState.error ??
                 `Selected Pool Scanner failed with exit code ${code}${signal ? ` (signal ${signal})` : ""}`;
+            addPoolScannerLog(
+                `[CONTROL] ${poolScannerState.error}`
+            );
+        }
+    });
+}
+
+function startSelectedWalletsEnrichment(tokenCa, fabriqWorkers = 2, limit = null) {
+    assertDataPipelineAvailable();
+
+    poolScannerUserStopped = false;
+    poolScannerState = {
+        ...poolScannerState,
+        status: "running",
+        stage: "fabriq",
+        tokenCa,
+        fabriqWorkers,
+        fabriqLimit: limit || null,
+        startedAt: new Date().toISOString(),
+        finishedAt: null,
+        exitCode: null,
+        error: null,
+        fabriqTotal: poolScannerState.uniqueWallets || 0,
+        fabriqCompleted: 0,
+        fabriqSuccess: 0,
+        fabriqFailed: 0,
+        fabriqSkipped: 0,
+    };
+
+    addPoolScannerLog(
+        `[CONTROL] Starting Selected Wallets Fabriq Enrichment for token: ${tokenCa} [workers: ${fabriqWorkers}${
+            limit ? `, limit: ${limit}` : ""
+        }]`
+    );
+
+    const args = [
+        "scripts/pool/enrich-selected-wallets.mjs",
+        "--token",
+        tokenCa,
+        "--workers",
+        String(fabriqWorkers),
+    ];
+
+    if (limit && Number.isInteger(limit) && limit >= 1) {
+        args.push("--limit", String(limit));
+    }
+
+    poolScannerChild = spawn(
+        process.execPath,
+        args,
+        {
+            cwd: ROOT,
+            env: {
+                ...process.env,
+            },
+            detached: process.platform !== "win32",
+            stdio: ["ignore", "pipe", "pipe"],
+        }
+    );
+
+    let stdoutBuffer = "";
+    let stderrBuffer = "";
+
+    function consumeBuffer(buffer, chunk, onLine) {
+        buffer += String(chunk);
+        const lines = buffer.split("\n");
+        const remainder = lines.pop() ?? "";
+        for (const line of lines) {
+            const trimmed = line.trimEnd();
+            if (trimmed) {
+                onLine(trimmed);
+            }
+        }
+        return remainder;
+    }
+
+    poolScannerChild.stdout.on("data", (chunk) => {
+        stdoutBuffer = consumeBuffer(stdoutBuffer, chunk, (line) => {
+            addPoolScannerLog(line);
+            parsePoolScannerLine(line);
+        });
+    });
+
+    poolScannerChild.stderr.on("data", (chunk) => {
+        stderrBuffer = consumeBuffer(stderrBuffer, chunk, (line) => {
+            addPoolScannerLog(line);
+            parsePoolScannerLine(line);
+        });
+    });
+
+    poolScannerChild.on("error", (error) => {
+        const wasUserStopped =
+            poolScannerUserStopped || poolScannerState.status === "stopped";
+        poolScannerChild = null;
+
+        if (wasUserStopped) {
+            poolScannerState.status = "stopped";
+            poolScannerState.stage = "stopped";
+            poolScannerState.error = null;
+            return;
+        }
+
+        poolScannerState.status = "error";
+        poolScannerState.stage = "error";
+        poolScannerState.error =
+            error instanceof Error ? error.message : String(error);
+        poolScannerState.finishedAt = new Date().toISOString();
+        addPoolScannerLog(
+            `[CONTROL] Selected Wallets Enrichment process error: ${poolScannerState.error}`
+        );
+    });
+
+    poolScannerChild.on("exit", (code, signal) => {
+        if (stdoutBuffer.trim()) {
+            const trimmed = stdoutBuffer.trimEnd();
+            addPoolScannerLog(trimmed);
+            parsePoolScannerLine(trimmed);
+            stdoutBuffer = "";
+        }
+        if (stderrBuffer.trim()) {
+            const trimmed = stderrBuffer.trimEnd();
+            addPoolScannerLog(trimmed);
+            parsePoolScannerLine(trimmed);
+            stderrBuffer = "";
+        }
+
+        const wasUserStopped =
+            poolScannerUserStopped || poolScannerState.status === "stopped";
+        poolScannerChild = null;
+
+        if (wasUserStopped) {
+            poolScannerState.status = "stopped";
+            poolScannerState.stage = "stopped";
+            poolScannerState.error = null;
+            if (!poolScannerState.finishedAt) {
+                poolScannerState.finishedAt = new Date().toISOString();
+            }
+            addPoolScannerLog("[CONTROL] Selected Wallets Enrichment stopped.");
+            return;
+        }
+
+        poolScannerState.finishedAt = new Date().toISOString();
+        poolScannerState.exitCode = code;
+
+        if (code === 0) {
+            poolScannerState.status = "completed";
+            poolScannerState.stage = "fabriq_completed";
+            poolScannerState.error = null;
+            addPoolScannerLog(
+                "[CONTROL] Selected Wallets Fabriq Enrichment finished successfully."
+            );
+        } else {
+            poolScannerState.status = "error";
+            poolScannerState.stage = "error";
+            poolScannerState.error =
+                poolScannerState.error ??
+                `Selected Wallets Enrichment failed with exit code ${code}${signal ? ` (signal ${signal})` : ""}`;
             addPoolScannerLog(
                 `[CONTROL] ${poolScannerState.error}`
             );
@@ -3395,6 +3610,211 @@ const server = http.createServer(async (request, response) => {
 
         try {
             startSelectedPoolScanner(tokenCa, selectedAddresses);
+            json(
+                request,
+                response,
+                202,
+                poolScannerPublicState(),
+            );
+        } catch (error) {
+            json(
+                request,
+                response,
+                500,
+                {
+                    error:
+                        error instanceof Error
+                            ? error.message
+                            : String(error),
+                },
+            );
+        }
+
+        return;
+    }
+
+    // ------------------------------------------------------
+    // POST /api/pool-scanner/enrich-selected
+    // ------------------------------------------------------
+
+    if (
+        request.method === "POST" &&
+        url.pathname === "/api/pool-scanner/enrich-selected"
+    ) {
+        if (dataPipelineBusy()) {
+            json(
+                request,
+                response,
+                409,
+                {
+                    error:
+                        "Another update process is already running",
+
+                    poolScanner:
+                        poolScannerPublicState(),
+
+                    fabriq:
+                        publicState(),
+
+                    lpagent:
+                        lpAgentPublicState(),
+                },
+            );
+
+            return;
+        }
+
+        let body = {};
+
+        try {
+            body = await readJson(request);
+        } catch {
+            json(
+                request,
+                response,
+                400,
+                {
+                    error: "Invalid JSON body",
+                },
+            );
+
+            return;
+        }
+
+        const rawToken = body?.tokenCa;
+
+        if (
+            typeof rawToken !== "string" ||
+            !rawToken.trim()
+        ) {
+            json(
+                request,
+                response,
+                400,
+                {
+                    error: "tokenCa must be a non-empty string",
+                },
+            );
+
+            return;
+        }
+
+        const tokenCa = rawToken.trim();
+
+        if (tokenCa.length < 32 || tokenCa.length > 50) {
+            json(
+                request,
+                response,
+                400,
+                {
+                    error: "tokenCa must be a valid Solana address (32-50 characters)",
+                },
+            );
+
+            return;
+        }
+
+        let fabriqWorkers = 2;
+        if (body?.fabriqWorkers !== undefined && body?.fabriqWorkers !== null) {
+            const rawVal = body.fabriqWorkers;
+            const strVal = String(rawVal).trim();
+            const isValid =
+                (typeof rawVal === "number" && Number.isInteger(rawVal) && rawVal >= 1) ||
+                (typeof rawVal === "string" && /^[1-9]\d*$/.test(strVal));
+
+            if (!isValid) {
+                json(
+                    request,
+                    response,
+                    400,
+                    {
+                        error: "fabriqWorkers must be an integer >= 1",
+                    },
+                );
+
+                return;
+            }
+            fabriqWorkers = Math.min(50, Number(strVal));
+        }
+
+        let limit = null;
+        if (body?.limit !== undefined && body?.limit !== null) {
+            const rawLimit = body.limit;
+            const strLimit = String(rawLimit).trim();
+            const isValid =
+                (typeof rawLimit === "number" && Number.isInteger(rawLimit) && rawLimit >= 1) ||
+                (typeof rawLimit === "string" && /^[1-9]\d*$/.test(strLimit));
+
+            if (!isValid) {
+                json(
+                    request,
+                    response,
+                    400,
+                    {
+                        error: "limit must be an integer >= 1",
+                    },
+                );
+
+                return;
+            }
+            limit = Number(strLimit);
+        }
+
+        if (rejectBusyDataPipeline(request, response)) return;
+
+        const selectedScanDir = path.join(
+            ROOT,
+            "data",
+            "discovery",
+            "pool-scanner",
+            tokenCa,
+            "selected-scan"
+        );
+        const statePath = path.join(selectedScanDir, "scan-state.json");
+        const walletsPath = path.join(selectedScanDir, "wallets.json");
+
+        if (!fs.existsSync(statePath) || !fs.existsSync(walletsPath)) {
+            json(
+                request,
+                response,
+                400,
+                {
+                    error: "Selected pool scan must be completed before Fabriq enrichment. Please run Step 3B first.",
+                },
+            );
+
+            return;
+        }
+
+        try {
+            const scanState = JSON.parse(fs.readFileSync(statePath, "utf8"));
+            if (scanState.status !== "completed") {
+                json(
+                    request,
+                    response,
+                    400,
+                    {
+                        error: `Selected pool scan is not completed (current status: ${scanState.status}).`,
+                    },
+                );
+
+                return;
+            }
+        } catch (err) {
+            json(
+                request,
+                response,
+                400,
+                {
+                    error: `Invalid scan-state.json in selected-scan: ${err instanceof Error ? err.message : String(err)}`,
+                },
+            );
+
+            return;
+        }
+
+        try {
+            startSelectedWalletsEnrichment(tokenCa, fabriqWorkers, limit);
             json(
                 request,
                 response,
