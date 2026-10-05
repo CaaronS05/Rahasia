@@ -21,6 +21,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   discoverTokenPools,
   getPoolScannerStatus,
+  scanSelectedPools,
   startPoolScanner,
   stopPoolScanner,
   type PoolDiscoveryItem,
@@ -51,6 +52,8 @@ interface StageItem {
 const STAGE_LABELS: Record<string, string> = {
   idle: "Idle",
   discovery: "01 — Discover Pools",
+  extract: "Extract Selected Pools",
+  extract_completed: "Extract Completed",
   fabriq: "02 — Enrich Wallets",
   master_upsert: "03 — Master Upsert",
   publish: "04 — Publish Dataset",
@@ -113,7 +116,7 @@ function computePipelineProgress(
   }
 
   let activeStep = 1;
-  if (stage === "discovery") activeStep = 1;
+  if (stage === "discovery" || stage === "extract" || stage === "extract_completed") activeStep = 1;
   else if (stage === "fabriq") activeStep = 2;
   else if (stage === "master_upsert") activeStep = 3;
   else if (stage === "publish") activeStep = 4;
@@ -429,6 +432,29 @@ export function PoolScannerPage({ onDatasetRefreshed, embedded = false, startDis
     );
   }
 
+  async function handleScanSelectedPools() {
+    if (
+      selectedPoolAddresses.length === 0 ||
+      discoveryLoading ||
+      isRunning ||
+      startDisabled
+    ) {
+      return;
+    }
+
+    setSubmitting(true);
+    setApiError(null);
+
+    try {
+      const s = await scanSelectedPools(cleanedToken, selectedPoolAddresses);
+      setState(s);
+    } catch (err) {
+      setApiError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
     if (!tokenLooksValid || !workersValid || isRunning || submitting || startDisabled) {
@@ -611,7 +637,7 @@ export function PoolScannerPage({ onDatasetRefreshed, embedded = false, startDis
               <label htmlFor="pool-scanner-workers">
                 FABRIQ WORKERS
                 <span style={{ fontSize: "10px", color: "var(--muted)", textTransform: "none", fontWeight: 400, marginLeft: "6px" }}>
-                  (Step 3B · does not affect pool discovery)
+                  (Step 3C · does not affect pool extraction)
                 </span>
               </label>
               <div
@@ -756,12 +782,33 @@ export function PoolScannerPage({ onDatasetRefreshed, embedded = false, startDis
                   <div className="pool-discovery-actions">
                     <button
                       type="button"
-                      className="pool-scanner-start pool-discovery-scan-btn disabled"
-                      disabled={true}
-                      title="Step 3B — Scan Selected Pools will be enabled in next step"
+                      className={`pool-scanner-start pool-discovery-scan-btn ${
+                        selectedPoolAddresses.length === 0 ||
+                        discoveryLoading ||
+                        isRunning ||
+                        startDisabled
+                          ? "disabled"
+                          : ""
+                      }`}
+                      disabled={
+                        selectedPoolAddresses.length === 0 ||
+                        discoveryLoading ||
+                        isRunning ||
+                        startDisabled
+                      }
+                      onClick={handleScanSelectedPools}
                     >
-                      <Radar size={16} />
-                      Scan Selected Pools
+                      {submitting && state?.stage === "extract" ? (
+                        <>
+                          <Loader2 size={16} className="spin" />
+                          Starting Selected Scan...
+                        </>
+                      ) : (
+                        <>
+                          <Radar size={16} />
+                          Scan Selected Pools ({selectedPoolAddresses.length})
+                        </>
+                      )}
                     </button>
                   </div>
                 </>
@@ -904,6 +951,70 @@ export function PoolScannerPage({ onDatasetRefreshed, embedded = false, startDis
           </div>
         </div>
 
+        {/* Selected Pools Extraction Card (Step 3B) */}
+        {(state?.stage === "extract" ||
+          state?.stage === "extract_completed" ||
+          ((state?.selectedPoolCount || 0) > 0 && isRunning)) && (
+          <div className="pool-scanner-extract-card">
+            <div className="extract-card-header">
+              <div className="extract-card-title">
+                {state?.stage === "extract" || isRunning ? (
+                  <>
+                    <Loader2 size={16} className="spin text-green" />
+                    <span>Scanning selected pools</span>
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle2 size={16} className="text-green" />
+                    <span>Selected pools scan completed</span>
+                  </>
+                )}
+              </div>
+              <div className="extract-card-stats">
+                <span className="extract-stat-item">
+                  <strong>
+                    {state?.completedPoolCount ?? 0} /{" "}
+                    {state?.selectedPoolCount ?? selectedPoolAddresses.length}
+                  </strong>{" "}
+                  pools completed
+                </span>
+                <span className="extract-stat-dot">·</span>
+                <span className="extract-stat-item">
+                  <strong>{state?.uniqueWallets ?? 0}</strong> unique wallets
+                </span>
+              </div>
+            </div>
+
+            {state?.currentPool && (state?.stage === "extract" || isRunning) ? (
+              <div className="extract-current-pool">
+                <span className="extract-current-label">Current pool:</span>
+                <div className="extract-current-details">
+                  <span className="extract-current-pair">
+                    {state.currentPool.pair}
+                  </span>
+                  <span className="extract-current-meta">
+                    Bin Step {state.currentPool.binStep ?? "—"}
+                  </span>
+                  <span className="extract-current-meta">
+                    Base Fee{" "}
+                    {state.currentPool.baseFeePct !== null &&
+                    state.currentPool.baseFeePct !== undefined
+                      ? `${state.currentPool.baseFeePct.toFixed(2)}%`
+                      : "—"}
+                  </span>
+                  <span
+                    className="extract-current-addr mono"
+                    title={state.currentPool.poolAddress}
+                  >
+                    {state.currentPool.poolAddress.slice(0, 4)}...
+                    {state.currentPool.poolAddress.slice(-4)}
+                  </span>
+                </div>
+              </div>
+            ) : null}
+          </div>
+        )}
+
         {/* Primary Stage Progress Display */}
         <div className="pool-scanner-progress-card">
           <div className="pool-scanner-progress-header">
@@ -921,7 +1032,7 @@ export function PoolScannerPage({ onDatasetRefreshed, embedded = false, startDis
                   : isError
                   ? "Error"
                   : isRunning
-                  ? state?.stage || "Running"
+                  ? STAGE_LABELS[state?.stage || ""] || state?.stage || "Running"
                   : "Ready"}
               </strong>
             </div>

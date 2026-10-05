@@ -149,6 +149,11 @@ let poolScannerState = {
     exitCode: null,
     error: null,
     logs: [],
+    selectedPools: [],
+    selectedPoolCount: 0,
+    completedPoolCount: 0,
+    uniqueWallets: 0,
+    currentPool: null,
 };
 
 function readPoolScannerPipelineState(tokenCa) {
@@ -1671,6 +1676,42 @@ function parsePoolScannerLine(line) {
         poolScannerState.stage = "completed";
         return;
     }
+
+    const currentPoolMatch = line.match(
+        /\[SELECTED_SCAN\]\s+CURRENT_POOL\s+pair="([^"]+)"\s+bin=([^\s]+)\s+fee=([^\s]+)\s+addr="?([^\s"]+)"?/i
+    );
+    if (currentPoolMatch) {
+        poolScannerState.currentPool = {
+            pair: currentPoolMatch[1],
+            binStep:
+                currentPoolMatch[2] === "—" || currentPoolMatch[2] === "null"
+                    ? null
+                    : Number(currentPoolMatch[2]),
+            baseFeePct:
+                currentPoolMatch[3] === "—" || currentPoolMatch[3] === "null"
+                    ? null
+                    : Number(currentPoolMatch[3]),
+            poolAddress: currentPoolMatch[4],
+        };
+        return;
+    }
+
+    const progressMatch = line.match(
+        /\[SELECTED_SCAN\]\s+POOL_PROGRESS\s+completed=(\d+)\s+total=(\d+)\s+wallets=(\d+)/i
+    );
+    if (progressMatch) {
+        poolScannerState.stage = "extract";
+        poolScannerState.completedPoolCount = Number(progressMatch[1]);
+        poolScannerState.selectedPoolCount = Number(progressMatch[2]);
+        poolScannerState.uniqueWallets = Number(progressMatch[3]);
+        return;
+    }
+
+    if (line.includes("[SELECTED_SCAN] COMPLETE")) {
+        poolScannerState.status = "completed";
+        poolScannerState.stage = "extract_completed";
+        return;
+    }
 }
 
 let poolScannerUserStopped = false;
@@ -1851,10 +1892,15 @@ function startPoolScanner(tokenCa, fabriqWorkers = 2) {
 
         if (code === 0) {
             poolScannerState.status = "completed";
-            poolScannerState.stage = "completed";
+            poolScannerState.stage =
+                poolScannerState.stage === "extract"
+                    ? "extract_completed"
+                    : "completed";
             poolScannerState.error = null;
             addPoolScannerLog(
-                "[CONTROL] Pool Scanner pipeline finished successfully."
+                poolScannerState.stage === "extract_completed"
+                    ? "[CONTROL] Selected Pool Scanner finished successfully."
+                    : "[CONTROL] Pool Scanner pipeline finished successfully."
             );
         } else {
             poolScannerState.status = "error";
@@ -1862,6 +1908,157 @@ function startPoolScanner(tokenCa, fabriqWorkers = 2) {
             poolScannerState.error =
                 poolScannerState.error ??
                 `Pool Scanner pipeline failed with exit code ${code}${signal ? ` (signal ${signal})` : ""}`;
+            addPoolScannerLog(
+                `[CONTROL] ${poolScannerState.error}`
+            );
+        }
+    });
+}
+
+function startSelectedPoolScanner(tokenCa, selectedPoolAddresses) {
+    assertDataPipelineAvailable();
+
+    poolScannerUserStopped = false;
+    poolScannerState = {
+        status: "running",
+        stage: "extract",
+        tokenCa,
+        fabriqWorkers: 2,
+        startedAt: new Date().toISOString(),
+        finishedAt: null,
+        exitCode: null,
+        error: null,
+        logs: [],
+        selectedPools: selectedPoolAddresses,
+        selectedPoolCount: selectedPoolAddresses.length,
+        completedPoolCount: 0,
+        uniqueWallets: 0,
+        currentPool: null,
+    };
+
+    addPoolScannerLog(
+        `[CONTROL] Starting Selected Pool Scanner for token: ${tokenCa} (${selectedPoolAddresses.length} pools)`
+    );
+
+    const args = [
+        "scripts/pool/scan-selected-pools.mjs",
+        "--token",
+        tokenCa,
+    ];
+    for (const poolAddr of selectedPoolAddresses) {
+        args.push("--pool", poolAddr);
+    }
+
+    poolScannerChild = spawn(
+        process.execPath,
+        args,
+        {
+            cwd: ROOT,
+            env: {
+                ...process.env,
+            },
+            detached: process.platform !== "win32",
+            stdio: ["ignore", "pipe", "pipe"],
+        }
+    );
+
+    let stdoutBuffer = "";
+    let stderrBuffer = "";
+
+    function consumeBuffer(buffer, chunk, onLine) {
+        buffer += String(chunk);
+        const lines = buffer.split("\n");
+        const remainder = lines.pop() ?? "";
+        for (const line of lines) {
+            const trimmed = line.trimEnd();
+            if (trimmed) {
+                onLine(trimmed);
+            }
+        }
+        return remainder;
+    }
+
+    poolScannerChild.stdout.on("data", (chunk) => {
+        stdoutBuffer = consumeBuffer(stdoutBuffer, chunk, (line) => {
+            addPoolScannerLog(line);
+            parsePoolScannerLine(line);
+        });
+    });
+
+    poolScannerChild.stderr.on("data", (chunk) => {
+        stderrBuffer = consumeBuffer(stderrBuffer, chunk, (line) => {
+            addPoolScannerLog(line);
+            parsePoolScannerLine(line);
+        });
+    });
+
+    poolScannerChild.on("error", (error) => {
+        const wasUserStopped =
+            poolScannerUserStopped || poolScannerState.status === "stopped";
+        poolScannerChild = null;
+
+        if (wasUserStopped) {
+            poolScannerState.status = "stopped";
+            poolScannerState.stage = "stopped";
+            poolScannerState.error = null;
+            return;
+        }
+
+        poolScannerState.status = "error";
+        poolScannerState.stage = "error";
+        poolScannerState.error =
+            error instanceof Error ? error.message : String(error);
+        poolScannerState.finishedAt = new Date().toISOString();
+        addPoolScannerLog(
+            `[CONTROL] Selected Pool Scanner process error: ${poolScannerState.error}`
+        );
+    });
+
+    poolScannerChild.on("exit", (code, signal) => {
+        if (stdoutBuffer.trim()) {
+            const trimmed = stdoutBuffer.trimEnd();
+            addPoolScannerLog(trimmed);
+            parsePoolScannerLine(trimmed);
+            stdoutBuffer = "";
+        }
+        if (stderrBuffer.trim()) {
+            const trimmed = stderrBuffer.trimEnd();
+            addPoolScannerLog(trimmed);
+            parsePoolScannerLine(trimmed);
+            stderrBuffer = "";
+        }
+
+        const wasUserStopped =
+            poolScannerUserStopped || poolScannerState.status === "stopped";
+        poolScannerChild = null;
+
+        if (wasUserStopped) {
+            poolScannerState.status = "stopped";
+            poolScannerState.stage = "stopped";
+            poolScannerState.error = null;
+            if (!poolScannerState.finishedAt) {
+                poolScannerState.finishedAt = new Date().toISOString();
+            }
+            addPoolScannerLog("[CONTROL] Selected Pool Scanner stopped.");
+            return;
+        }
+
+        poolScannerState.finishedAt = new Date().toISOString();
+        poolScannerState.exitCode = code;
+
+        if (code === 0) {
+            poolScannerState.status = "completed";
+            poolScannerState.stage = "extract_completed";
+            poolScannerState.error = null;
+            addPoolScannerLog(
+                "[CONTROL] Selected Pool Scanner finished successfully."
+            );
+        } else {
+            poolScannerState.status = "error";
+            poolScannerState.stage = "error";
+            poolScannerState.error =
+                poolScannerState.error ??
+                `Selected Pool Scanner failed with exit code ${code}${signal ? ` (signal ${signal})` : ""}`;
             addPoolScannerLog(
                 `[CONTROL] ${poolScannerState.error}`
             );
@@ -3025,6 +3222,190 @@ const server = http.createServer(async (request, response) => {
                 request,
                 response,
                 502,
+                {
+                    error:
+                        error instanceof Error
+                            ? error.message
+                            : String(error),
+                },
+            );
+        }
+
+        return;
+    }
+
+    // ------------------------------------------------------
+    // POST /api/pool-scanner/scan-selected
+    // ------------------------------------------------------
+
+    if (
+        request.method === "POST" &&
+        url.pathname === "/api/pool-scanner/scan-selected"
+    ) {
+        if (dataPipelineBusy()) {
+            json(
+                request,
+                response,
+                409,
+                {
+                    error:
+                        "Another update process is already running",
+
+                    poolScanner:
+                        poolScannerPublicState(),
+
+                    fabriq:
+                        publicState(),
+
+                    lpagent:
+                        lpAgentPublicState(),
+                },
+            );
+
+            return;
+        }
+
+        let body = {};
+
+        try {
+            body = await readJson(request);
+        } catch {
+            json(
+                request,
+                response,
+                400,
+                {
+                    error: "Invalid JSON body",
+                },
+            );
+
+            return;
+        }
+
+        const rawToken = body?.tokenCa;
+
+        if (
+            typeof rawToken !== "string" ||
+            !rawToken.trim()
+        ) {
+            json(
+                request,
+                response,
+                400,
+                {
+                    error: "tokenCa must be a non-empty string",
+                },
+            );
+
+            return;
+        }
+
+        const tokenCa = rawToken.trim();
+
+        if (tokenCa.length < 32 || tokenCa.length > 50) {
+            json(
+                request,
+                response,
+                400,
+                {
+                    error: "tokenCa must be a valid Solana address (32-50 characters)",
+                },
+            );
+
+            return;
+        }
+
+        const rawPoolAddresses = body?.poolAddresses;
+        if (!Array.isArray(rawPoolAddresses) || rawPoolAddresses.length === 0) {
+            json(
+                request,
+                response,
+                400,
+                {
+                    error: "poolAddresses must be a non-empty array of pool address strings",
+                },
+            );
+
+            return;
+        }
+
+        for (const p of rawPoolAddresses) {
+            if (typeof p !== "string" || !p.trim()) {
+                json(
+                    request,
+                    response,
+                    400,
+                    {
+                        error: "All pool addresses must be non-empty strings",
+                    },
+                );
+
+                return;
+            }
+        }
+
+        const selectedAddresses = [...new Set(rawPoolAddresses.map((p) => p.trim()))];
+        if (selectedAddresses.length === 0) {
+            json(
+                request,
+                response,
+                400,
+                {
+                    error: "At least one pool address is required",
+                },
+            );
+
+            return;
+        }
+
+        if (rejectBusyDataPipeline(request, response)) return;
+
+        let discoveryResult;
+        try {
+            discoveryResult = await discoverTokenPools(tokenCa);
+        } catch (err) {
+            json(
+                request,
+                response,
+                502,
+                {
+                    error: `Pool discovery failed: ${err instanceof Error ? err.message : String(err)}`,
+                },
+            );
+
+            return;
+        }
+
+        const discoveredMap = new Map((discoveryResult?.pools ?? []).map((p) => [p.poolAddress, p]));
+
+        for (const addr of selectedAddresses) {
+            if (!discoveredMap.has(addr)) {
+                json(
+                    request,
+                    response,
+                    400,
+                    {
+                        error: `Invalid pool address: ${addr} does not belong to discovered TOKEN/SOL pools for token ${tokenCa}`,
+                    },
+                );
+
+                return;
+            }
+        }
+
+        try {
+            startSelectedPoolScanner(tokenCa, selectedAddresses);
+            json(
+                request,
+                response,
+                202,
+                poolScannerPublicState(),
+            );
+        } catch (error) {
+            json(
+                request,
+                response,
+                500,
                 {
                     error:
                         error instanceof Error

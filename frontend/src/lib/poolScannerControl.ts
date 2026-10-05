@@ -10,12 +10,21 @@ export type PoolScannerStatus =
 export type PoolScannerStage =
   | "idle"
   | "discovery"
+  | "extract"
+  | "extract_completed"
   | "fabriq"
   | "master_upsert"
   | "publish"
   | "completed"
   | "error"
   | "stopped";
+
+export interface CurrentPoolInfo {
+  pair: string;
+  binStep: number | null;
+  baseFeePct: number | null;
+  poolAddress: string;
+}
 
 export interface PoolScannerState {
   status: PoolScannerStatus;
@@ -33,6 +42,11 @@ export interface PoolScannerState {
   stage1Complete?: boolean;
   stage2Complete?: boolean;
   pipelineComplete?: boolean;
+  selectedPools?: string[];
+  selectedPoolCount?: number;
+  completedPoolCount?: number;
+  uniqueWallets?: number;
+  currentPool?: CurrentPoolInfo | null;
 }
 
 export interface PoolDiscoveryItem {
@@ -135,3 +149,28 @@ export async function stopPoolScanner(): Promise<PoolScannerState> {
   }
   return payload;
 }
+
+export async function scanSelectedPools(
+  tokenCa: string,
+  poolAddresses: string[]
+): Promise<PoolScannerState> {
+  const response = await fetch(`${POOL_SCANNER_API_BASE}/api/pool-scanner/scan-selected`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      tokenCa: tokenCa.trim(),
+      poolAddresses,
+    }),
+  });
+
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(
+      payload?.error || `Scan Selected Pools failed with status ${response.status}`
+    );
+  }
+  return payload;
+}
+

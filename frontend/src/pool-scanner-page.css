@@ -1465,4 +1465,99 @@
   color: var(--muted);
 }
 
+/* Step 3B Selected Pool Extraction Card */
+.pool-scanner-extract-card {
+  margin-bottom: 16px;
+  padding: 16px 20px;
+  border-radius: 9px;
+  border: 1px solid rgba(85, 214, 157, 0.28);
+  background: linear-gradient(180deg, rgba(23, 33, 27, 0.95), rgba(19, 25, 22, 0.95));
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+}
+
+.extract-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.extract-card-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.text-green {
+  color: var(--green);
+}
+
+.extract-card-stats {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #c7d8cf;
+}
+
+.extract-stat-item strong {
+  color: #a7f3d0;
+  font-weight: 700;
+}
+
+.extract-stat-dot {
+  color: var(--muted);
+}
+
+.extract-current-pool {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(85, 214, 157, 0.15);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.extract-current-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--muted-2);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.extract-current-details {
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.extract-current-pair {
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--text);
+}
+
+.extract-current-meta {
+  font-size: 12px;
+  color: #e2e8f0;
+  background: rgba(255, 255, 255, 0.05);
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.extract-current-addr {
+  font-size: 11px;
+  color: #6ee7b7;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+
 
