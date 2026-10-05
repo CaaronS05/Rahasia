@@ -1244,3 +1244,225 @@
   }
 }
 
+/* ============================================================
+   DISCOVERED POOLS SELECTION (STEP 3A)
+   ============================================================ */
+
+.pool-discovery-section {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 18px;
+  padding: 18px 20px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.pool-discovery-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.pool-discovery-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.pool-discovery-icon {
+  color: var(--green);
+}
+
+.pool-discovery-count-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 9px;
+  border-radius: 5px;
+  background: rgba(85, 214, 157, 0.1);
+  border: 1px solid rgba(85, 214, 157, 0.22);
+  color: var(--green);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.pool-discovery-empty {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 14px 16px;
+  border-radius: 7px;
+  border: 1px dashed var(--border);
+  background: rgba(255, 255, 255, 0.01);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.pool-discovery-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.pool-discovery-btn-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pool-discovery-ctrl-btn {
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 140ms ease;
+}
+
+.pool-discovery-ctrl-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.pool-discovery-ctrl-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.pool-discovery-selected-count {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.pool-discovery-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pool-discovery-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: rgba(23, 23, 21, 0.6);
+  cursor: pointer;
+  transition: all 140ms ease;
+}
+
+.pool-discovery-item:hover {
+  background: rgba(255, 255, 255, 0.03);
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+.pool-discovery-item.selected {
+  border-color: rgba(85, 214, 157, 0.35);
+  background: rgba(85, 214, 157, 0.03);
+}
+
+.pool-discovery-checkbox-wrap {
+  display: flex;
+  align-items: center;
+  margin-top: 2px;
+}
+
+.pool-discovery-checkbox-wrap input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--green);
+  cursor: pointer;
+}
+
+.pool-discovery-item-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+}
+
+.pool-discovery-item-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.pool-discovery-pair {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.pool-discovery-address {
+  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  color: #a7f3d0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pool-discovery-item-meta {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+.pool-discovery-meta-col {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pool-discovery-field-label {
+  font-size: 10px;
+  color: var(--muted-2);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.pool-discovery-field-val {
+  font-size: 12px;
+  color: var(--text);
+  font-weight: 700;
+}
+
+.pool-discovery-actions {
+  margin-top: 4px;
+}
+
+.pool-discovery-scan-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.pool-discovery-scan-btn.disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+

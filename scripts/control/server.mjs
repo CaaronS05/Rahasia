@@ -3,6 +3,7 @@ import http from "node:http";
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { discoverTokenPools } from "../pool/discover-token-pools.mjs";
 
 const HOST = "127.0.0.1";
 const PORT = 8787;
@@ -2949,6 +2950,89 @@ const server = http.createServer(async (request, response) => {
             200,
             poolScannerPublicState(queryToken),
         );
+
+        return;
+    }
+
+    // ------------------------------------------------------
+    // POST /api/pool-scanner/discover
+    // ------------------------------------------------------
+
+    if (
+        request.method === "POST" &&
+        url.pathname === "/api/pool-scanner/discover"
+    ) {
+        let body = {};
+
+        try {
+            body = await readJson(request);
+        } catch {
+            json(
+                request,
+                response,
+                400,
+                {
+                    error: "Invalid JSON body",
+                },
+            );
+
+            return;
+        }
+
+        const rawToken = body?.tokenCa;
+
+        if (
+            typeof rawToken !== "string" ||
+            !rawToken.trim()
+        ) {
+            json(
+                request,
+                response,
+                400,
+                {
+                    error: "tokenCa must be a non-empty string",
+                },
+            );
+
+            return;
+        }
+
+        const tokenCa = rawToken.trim();
+
+        if (tokenCa.length < 32 || tokenCa.length > 50) {
+            json(
+                request,
+                response,
+                400,
+                {
+                    error: "tokenCa must be a valid Solana address (32-50 characters)",
+                },
+            );
+
+            return;
+        }
+
+        try {
+            const discoveryResult = await discoverTokenPools(tokenCa);
+            json(
+                request,
+                response,
+                200,
+                discoveryResult,
+            );
+        } catch (error) {
+            json(
+                request,
+                response,
+                502,
+                {
+                    error:
+                        error instanceof Error
+                            ? error.message
+                            : String(error),
+                },
+            );
+        }
 
         return;
     }

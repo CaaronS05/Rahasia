@@ -19,9 +19,12 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  discoverTokenPools,
   getPoolScannerStatus,
   startPoolScanner,
   stopPoolScanner,
+  type PoolDiscoveryItem,
+  type PoolDiscoveryResponse,
   type PoolScannerStage,
   type PoolScannerState,
   type PoolScannerStatus,
@@ -218,6 +221,10 @@ export function PoolScannerPage({ onDatasetRefreshed, embedded = false, startDis
   const [showStopModal, setShowStopModal] = useState(false);
   const [stopModalError, setStopModalError] = useState<string | null>(null);
   const [apiError, setApiError] = useState<string | null>(null);
+  const [discoveryResult, setDiscoveryResult] = useState<PoolDiscoveryResponse | null>(null);
+  const [selectedPoolAddresses, setSelectedPoolAddresses] = useState<string[]>([]);
+  const [discoveryLoading, setDiscoveryLoading] = useState(false);
+  const [discoveryError, setDiscoveryError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [logsExpanded, setLogsExpanded] = useState(false);
 
@@ -361,6 +368,67 @@ export function PoolScannerPage({ onDatasetRefreshed, embedded = false, startDis
     };
   }, [showStopModal, stopping]);
 
+  function handleTokenChange(val: string) {
+    setTokenCa(val);
+    setDiscoveryResult(null);
+    setSelectedPoolAddresses([]);
+    setDiscoveryError(null);
+  }
+
+  function handleClearToken() {
+    setTokenCa("");
+    setDiscoveryResult(null);
+    setSelectedPoolAddresses([]);
+    setDiscoveryError(null);
+  }
+
+  async function handleDiscoverPools(event: React.FormEvent) {
+    event.preventDefault();
+    if (!tokenLooksValid || discoveryLoading || isRunning) {
+      return;
+    }
+
+    setDiscoveryLoading(true);
+    setDiscoveryError(null);
+    setDiscoveryResult(null);
+    setSelectedPoolAddresses([]);
+
+    try {
+      const res = await discoverTokenPools(cleanedToken);
+      setDiscoveryResult(res);
+      setSelectedPoolAddresses(res.pools.map((p) => p.poolAddress));
+    } catch (err) {
+      setDiscoveryError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDiscoveryLoading(false);
+    }
+  }
+
+  const allPoolAddresses = useMemo(
+    () => discoveryResult?.pools.map((p) => p.poolAddress) || [],
+    [discoveryResult]
+  );
+
+  const isAllSelected =
+    allPoolAddresses.length > 0 &&
+    selectedPoolAddresses.length === allPoolAddresses.length;
+
+  function handleSelectAll() {
+    setSelectedPoolAddresses([...allPoolAddresses]);
+  }
+
+  function handleClearSelection() {
+    setSelectedPoolAddresses([]);
+  }
+
+  function handleTogglePool(poolAddress: string) {
+    setSelectedPoolAddresses((prev) =>
+      prev.includes(poolAddress)
+        ? prev.filter((addr) => addr !== poolAddress)
+        : [...prev, poolAddress]
+    );
+  }
+
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
     if (!tokenLooksValid || !workersValid || isRunning || submitting || startDisabled) {
@@ -503,27 +571,27 @@ export function PoolScannerPage({ onDatasetRefreshed, embedded = false, startDis
             </div>
           </div>
 
-          <form className="pool-scanner-form" onSubmit={handleSubmit}>
+          <form className="pool-scanner-form" onSubmit={handleDiscoverPools}>
             <label htmlFor="pool-scanner-token">TOKEN CONTRACT ADDRESS</label>
             <div
               className={`pool-scanner-input-wrap ${tokenLooksValid ? "valid" : ""} ${
-                isRunning ? "disabled" : ""
+                isRunning || discoveryLoading ? "disabled" : ""
               }`}
             >
               <input
                 id="pool-scanner-token"
                 value={tokenCa}
-                onChange={(event) => setTokenCa(event.target.value)}
+                onChange={(event) => handleTokenChange(event.target.value)}
                 placeholder="Enter token CA..."
                 spellCheck={false}
                 autoComplete="off"
-                disabled={isRunning}
+                disabled={isRunning || discoveryLoading}
               />
-              {cleanedToken && !isRunning ? (
+              {cleanedToken && !isRunning && !discoveryLoading ? (
                 <button
                   type="button"
                   className="pool-scanner-clear"
-                  onClick={() => setTokenCa("")}
+                  onClick={handleClearToken}
                 >
                   Clear
                 </button>
@@ -540,7 +608,12 @@ export function PoolScannerPage({ onDatasetRefreshed, embedded = false, startDis
             </div>
 
             <div className="pool-scanner-field-group">
-              <label htmlFor="pool-scanner-workers">FABRIQ WORKERS</label>
+              <label htmlFor="pool-scanner-workers">
+                FABRIQ WORKERS
+                <span style={{ fontSize: "10px", color: "var(--muted)", textTransform: "none", fontWeight: 400, marginLeft: "6px" }}>
+                  (Step 3B · does not affect pool discovery)
+                </span>
+              </label>
               <div
                 className={`pool-scanner-input-wrap compact ${
                   isRunning ? "disabled" : ""
@@ -568,28 +641,133 @@ export function PoolScannerPage({ onDatasetRefreshed, embedded = false, startDis
             <button
               type="submit"
               className="pool-scanner-start"
-              disabled={!tokenLooksValid || !workersValid || isRunning || startDisabled}
+              disabled={!tokenLooksValid || discoveryLoading || isRunning || startDisabled}
             >
-              {isRunning ? (
+              {discoveryLoading ? (
                 <>
                   <Loader2 size={17} className="spin" />
-                  Scanning...
-                </>
-              ) : isResumableSession ? (
-                <>
-                  <Sparkles size={17} />
-                  Resume Pool Scan
-                  <ArrowRight size={16} />
+                  Discovering Pools...
                 </>
               ) : (
                 <>
                   <ScanSearch size={17} />
-                  Start Pool Scan
+                  Discover Pools
                   <ArrowRight size={16} />
                 </>
               )}
             </button>
           </form>
+
+          {discoveryError ? (
+            <div className="pool-scanner-error-banner">
+              <AlertCircle size={16} />
+              <div>
+                <strong>Discovery Error</strong>
+                <span>{discoveryError}</span>
+              </div>
+            </div>
+          ) : null}
+
+          {discoveryResult ? (
+            <div className="pool-discovery-section">
+              <div className="pool-discovery-header">
+                <div className="pool-discovery-title-wrap">
+                  <Layers3 size={15} className="pool-discovery-icon" />
+                  <span className="pool-discovery-title">Discovered Pools</span>
+                </div>
+                <span className="pool-discovery-count-badge">
+                  {discoveryResult.poolCount} pool{discoveryResult.poolCount === 1 ? "" : "s"}
+                </span>
+              </div>
+
+              {discoveryResult.pools.length === 0 ? (
+                <div className="pool-discovery-empty">
+                  <AlertCircle size={15} />
+                  <span>No TOKEN/SOL DLMM pools found for this token.</span>
+                </div>
+              ) : (
+                <>
+                  <div className="pool-discovery-controls">
+                    <div className="pool-discovery-btn-group">
+                      <button
+                        type="button"
+                        className="pool-discovery-ctrl-btn"
+                        onClick={handleSelectAll}
+                        disabled={isAllSelected}
+                      >
+                        Select All
+                      </button>
+                      <button
+                        type="button"
+                        className="pool-discovery-ctrl-btn"
+                        onClick={handleClearSelection}
+                        disabled={selectedPoolAddresses.length === 0}
+                      >
+                        Clear
+                      </button>
+                    </div>
+                    <span className="pool-discovery-selected-count">
+                      {selectedPoolAddresses.length} of {discoveryResult.poolCount} selected
+                    </span>
+                  </div>
+
+                  <div className="pool-discovery-list">
+                    {discoveryResult.pools.map((p) => {
+                      const isSelected = selectedPoolAddresses.includes(p.poolAddress);
+                      const shortPool = `${p.poolAddress.slice(0, 4)}...${p.poolAddress.slice(-4)}`;
+                      const feeDisplay = p.baseFeePct !== null ? `${p.baseFeePct.toFixed(2)}%` : "—";
+                      const binDisplay = p.binStep !== null ? String(p.binStep) : "—";
+
+                      return (
+                        <label
+                          key={p.poolAddress}
+                          className={`pool-discovery-item ${isSelected ? "selected" : ""}`}
+                        >
+                          <div className="pool-discovery-checkbox-wrap">
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={() => handleTogglePool(p.poolAddress)}
+                            />
+                          </div>
+                          <div className="pool-discovery-item-body">
+                            <div className="pool-discovery-item-top">
+                              <span className="pool-discovery-pair">{p.pair}</span>
+                              <span className="pool-discovery-address" title={p.poolAddress}>
+                                <span className="pool-discovery-field-label">Pool</span> {shortPool}
+                              </span>
+                            </div>
+                            <div className="pool-discovery-item-meta">
+                              <div className="pool-discovery-meta-col">
+                                <span className="pool-discovery-field-label">Bin Step</span>
+                                <strong className="pool-discovery-field-val">{binDisplay}</strong>
+                              </div>
+                              <div className="pool-discovery-meta-col">
+                                <span className="pool-discovery-field-label">Base Fee</span>
+                                <strong className="pool-discovery-field-val">{feeDisplay}</strong>
+                              </div>
+                            </div>
+                          </div>
+                        </label>
+                      );
+                    })}
+                  </div>
+
+                  <div className="pool-discovery-actions">
+                    <button
+                      type="button"
+                      className="pool-scanner-start pool-discovery-scan-btn disabled"
+                      disabled={true}
+                      title="Step 3B — Scan Selected Pools will be enabled in next step"
+                    >
+                      <Radar size={16} />
+                      Scan Selected Pools
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          ) : null}
 
           {apiError || (state?.status === "error" && state.error) ? (
             <div className="pool-scanner-error-banner">

@@ -125,6 +125,23 @@ export interface V1ScreeningCheckpoint {
     positions: V1PositionRecord[];
 }
 
+export interface V1ScreeningProgressIndex {
+    generatedAt: string;
+    sessionId: string;
+    config: {
+        version: "v1";
+        historyDays: number;
+        poolEligibilityRule: "FABRIQ_DLMM";
+        maxClosedPositions: number;
+    };
+    totalCandidates: number;
+    completedCount: number;
+    validCount: number;
+    invalidCount: number;
+    pendingCount: number;
+    fetchFailedCount: number;
+}
+
 export interface V1ScreeningDatasetOutput {
     generatedAt: string;
     source: V1ScreeningSourceMetadata;
@@ -512,6 +529,41 @@ function loadWalletCheckpoint(
                 ? sanitizeDailyRecords(rawDaily, cutoffDateStr, referenceEndDateStr)
                 : rawDaily;
 
+            const isWorkloadGuard = Boolean(
+                data.reason &&
+                typeof data.reason === "string" &&
+                data.reason.startsWith("WORKLOAD_GUARD")
+            );
+
+            if (isWorkloadGuard) {
+                // Compact existing workload guard checkpoint if it still has stored positions
+                if (Array.isArray(data.positions) && data.positions.length > 0) {
+                    try {
+                        const compactedCheckpoint: V1ScreeningCheckpoint = {
+                            sessionId: data.sessionId,
+                            wallet: data.wallet,
+                            updatedAt: data.updatedAt,
+                            config: data.config,
+                            valid: data.valid,
+                            reason: data.reason,
+                            metrics: null,
+                            daily: Array.isArray(data.daily) ? data.daily : [],
+                            positions: [],
+                        };
+                        atomicWriteJson(cpFile, compactedCheckpoint);
+                    } catch {}
+                }
+
+                return {
+                    wallet: data.wallet,
+                    valid: data.valid,
+                    reason: data.reason ?? null,
+                    metrics: null,
+                    daily: sanitizedDaily,
+                    positions: [],
+                };
+            }
+
             return {
                 wallet: data.wallet,
                 valid: data.valid,
@@ -541,6 +593,13 @@ function saveWalletCheckpoint(
         fs.mkdirSync(cpDir, { recursive: true });
     }
     const cpFile = path.join(cpDir, `${record.wallet}.json`);
+
+    const isWorkloadGuard = Boolean(
+        record.reason &&
+        typeof record.reason === "string" &&
+        record.reason.startsWith("WORKLOAD_GUARD")
+    );
+
     const cpData: V1ScreeningCheckpoint = {
         sessionId,
         wallet: record.wallet,
@@ -553,9 +612,9 @@ function saveWalletCheckpoint(
         },
         valid: record.valid,
         reason: record.reason ?? null,
-        metrics: record.metrics,
+        metrics: isWorkloadGuard ? null : record.metrics,
         daily: record.daily,
-        positions: record.positions,
+        positions: isWorkloadGuard ? [] : record.positions,
     };
     atomicWriteJson(cpFile, cpData);
 }
@@ -898,6 +957,18 @@ async function processWallet(
                                     pnlPct,
                                     winLoss,
                                 });
+
+                                // FIX 1: Early Workload Guard
+                                if (closedPositions.length > maxClosedPositions) {
+                                    return {
+                                        wallet,
+                                        valid: false,
+                                        reason: `WORKLOAD_GUARD (> ${maxClosedPositions})`,
+                                        metrics: null,
+                                        daily: [],
+                                        positions: [],
+                                    };
+                                }
                             }
                         }
                     }
@@ -920,10 +991,10 @@ async function processWallet(
             return {
                 wallet,
                 valid: false,
-                reason: `WORKLOAD_GUARD (${closedPositions.length} > ${maxClosedPositions})`,
+                reason: `WORKLOAD_GUARD (> ${maxClosedPositions})`,
                 metrics: null,
                 daily: [],
-                positions: closedPositions,
+                positions: [],
             };
         }
 
@@ -1088,7 +1159,10 @@ export async function runHistoricalCohortScreening(): Promise<V1ScreeningDataset
     const cutoffDateStr = new Date(cutoffMs).toISOString().slice(0, 10);
     const referenceEndDateStr = referenceEndTime.toISOString().slice(0, 10);
 
-    const processedMap = new Map<string, V1WalletRecord>();
+    const completedWallets = new Set<string>();
+    const validWalletsSet = new Set<string>();
+    const invalidWalletsSet = new Set<string>();
+    const fetchFailedSet = new Set<string>();
     const pendingWallets: string[] = [];
 
     // Check for existing valid checkpoints belonging to this active session
@@ -1103,7 +1177,12 @@ export async function runHistoricalCohortScreening(): Promise<V1ScreeningDataset
                 referenceEndDateStr
             );
             if (cp) {
-                processedMap.set(w, cp);
+                completedWallets.add(w);
+                if (cp.valid) {
+                    validWalletsSet.add(w);
+                } else {
+                    invalidWalletsSet.add(w);
+                }
                 continue;
             }
         }
@@ -1121,7 +1200,7 @@ export async function runHistoricalCohortScreening(): Promise<V1ScreeningDataset
     console.log(`Alchemy                 : NOT USED`);
     console.log(`Reference Window        : [${cutoffDateStr} to ${referenceEndDateStr}]`);
     console.log(`Total Candidates        : ${candidateWallets.length}`);
-    console.log(`Checkpointed Previously : ${processedMap.size}`);
+    console.log(`Checkpointed Previously : ${completedWallets.size}`);
     console.log(`Pending Fetch           : ${pendingWallets.length}`);
     console.log(`Workers                 : ${cli.workers}\n`);
 
@@ -1130,45 +1209,8 @@ export async function runHistoricalCohortScreening(): Promise<V1ScreeningDataset
 
     let writeChain: Promise<void> = Promise.resolve();
 
-    function persistDatasetAndIndex(): void {
-        const records = Array.from(processedMap.values());
-        const validRecords = records.filter((r) => r.valid);
-        const invalidRecords = records.filter((r) => !r.valid);
-
-        const totalClosedPositions = validRecords.reduce(
-            (sum, r) => sum + (r.metrics?.closedPositionCount ?? r.positions.length),
-            0
-        );
-
-        const allUniquePools = new Set<string>();
-        for (const r of validRecords) {
-            for (const p of r.positions) {
-                if (p.pool) allUniquePools.add(p.pool);
-            }
-        }
-
-        const outputData: V1ScreeningDatasetOutput = {
-            generatedAt: referenceEndTime.toISOString(),
-            source: sourceMetadata,
-            contract: {
-                version: "v1",
-                historyDays: cli.historyDays,
-                poolEligibilityRule: POOL_ELIGIBILITY_RULE,
-                maxClosedPositions: cli.maxClosedPositions,
-                alchemyRequired: false,
-            },
-            population: {
-                candidateWallets: records.length,
-                validWallets: validRecords.length,
-                invalidWallets: invalidRecords.length,
-                closedPositions: totalClosedPositions,
-                uniquePools: allUniquePools.size,
-            },
-            wallets: records,
-        };
-
-        atomicWriteJson(datasetPath, outputData);
-        atomicWriteJson(checkpointIndexPath, {
+    function persistProgressIndex(): void {
+        const progressData: V1ScreeningProgressIndex = {
             generatedAt: referenceEndTime.toISOString(),
             sessionId: activeSession.sessionId,
             config: {
@@ -1177,16 +1219,35 @@ export async function runHistoricalCohortScreening(): Promise<V1ScreeningDataset
                 poolEligibilityRule: POOL_ELIGIBILITY_RULE,
                 maxClosedPositions: cli.maxClosedPositions,
             },
-            population: outputData.population,
-            completedCount: records.length,
-        });
+            totalCandidates: candidateWallets.length,
+            completedCount: completedWallets.size,
+            validCount: validWalletsSet.size,
+            invalidCount: invalidWalletsSet.size,
+            pendingCount: Math.max(0, candidateWallets.length - completedWallets.size),
+            fetchFailedCount: fetchFailedSet.size,
+        };
+        atomicWriteJson(checkpointIndexPath, progressData);
     }
 
+    // Flush initial lightweight index state
+    persistProgressIndex();
+
     function recordProcessed(record: V1WalletRecord): Promise<void> {
-        processedMap.set(record.wallet, record);
-        saveWalletCheckpoint(activeSession.sessionId, record, cli.historyDays, cli.maxClosedPositions);
+        if (record.reason && record.reason.startsWith("FETCH_FAILED")) {
+            fetchFailedSet.add(record.wallet);
+        } else {
+            fetchFailedSet.delete(record.wallet);
+            saveWalletCheckpoint(activeSession.sessionId, record, cli.historyDays, cli.maxClosedPositions);
+            completedWallets.add(record.wallet);
+            if (record.valid) {
+                validWalletsSet.add(record.wallet);
+            } else {
+                invalidWalletsSet.add(record.wallet);
+            }
+        }
+
         writeChain = writeChain.then(async () => {
-            persistDatasetAndIndex();
+            persistProgressIndex();
         }).catch(() => {});
         return writeChain;
     }
@@ -1195,10 +1256,10 @@ export async function runHistoricalCohortScreening(): Promise<V1ScreeningDataset
     const onExitSignal = async () => {
         if (isTerminating) return;
         isTerminating = true;
-        console.log("\n[INTERRUPT] Exit signal caught. Flushing dataset state...");
+        console.log("\n[INTERRUPT] Exit signal caught. Flushing progress state...");
         try {
             await writeChain;
-            persistDatasetAndIndex();
+            persistProgressIndex();
             // Preserve session manifest in in_progress state
             atomicWriteJson(sessionPath, activeSession);
         } catch {}
@@ -1259,16 +1320,69 @@ export async function runHistoricalCohortScreening(): Promise<V1ScreeningDataset
     }
 
     await writeChain;
-    persistDatasetAndIndex();
+    persistProgressIndex();
     await closeFabriqConnection().catch(() => {});
 
-    // Final Assembly & Terminal Report
-    const allRecords = Array.from(processedMap.values());
-    const validRecords = allRecords.filter((r) => r.valid);
-    const invalidRecords = allRecords.filter((r) => !r.valid);
-    const fetchFailedRecords = allRecords.filter(
-        (r) => r.reason && r.reason.startsWith("FETCH_FAILED")
-    );
+    // Operational fetch failures must not allow Stage 1 to claim successful completion
+    if (fetchFailedSet.size > 0) {
+        atomicWriteJson(sessionPath, activeSession);
+        throw new Error(
+            `Screening incomplete: ${fetchFailedSet.size} wallet(s) failed with FETCH_FAILED. Session ${activeSession.sessionId} remains in_progress for resumption.`
+        );
+    }
+
+    // Ensure all candidate wallets have a completed checkpoint
+    if (completedWallets.size < candidateWallets.length) {
+        atomicWriteJson(sessionPath, activeSession);
+        throw new Error(
+            `Screening incomplete: ${candidateWallets.length - completedWallets.size} candidate(s) missing completed checkpoints. Session ${activeSession.sessionId} remains in_progress for resumption.`
+        );
+    }
+
+    // Final Assembly (performed ONCE only after all candidates have terminal checkpoints)
+    console.log("\nAssembling final screening dataset from session checkpoints...");
+    const assembledWallets: V1WalletRecord[] = [];
+    const assembledWalletSet = new Set<string>();
+
+    for (const wallet of candidateWallets) {
+        if (assembledWalletSet.has(wallet)) {
+            throw new Error(`Duplicate candidate wallet detected during assembly: ${wallet}`);
+        }
+        assembledWalletSet.add(wallet);
+
+        const record = loadWalletCheckpoint(
+            activeSession.sessionId,
+            wallet,
+            cli.historyDays,
+            cli.maxClosedPositions,
+            cutoffDateStr,
+            referenceEndDateStr
+        );
+
+        if (!record) {
+            atomicWriteJson(sessionPath, activeSession);
+            throw new Error(
+                `Missing valid terminal checkpoint for candidate wallet: ${wallet}. Session ${activeSession.sessionId} remains in_progress.`
+            );
+        }
+
+        if (record.reason && record.reason.startsWith("FETCH_FAILED")) {
+            atomicWriteJson(sessionPath, activeSession);
+            throw new Error(
+                `FETCH_FAILED checkpoint encountered during assembly for wallet: ${wallet}. Session ${activeSession.sessionId} remains in_progress.`
+            );
+        }
+
+        if (record.reason && record.reason.startsWith("WORKLOAD_GUARD")) {
+            record.positions = [];
+            record.metrics = null;
+        }
+
+        assembledWallets.push(record);
+    }
+
+    const validRecords = assembledWallets.filter((r) => r.valid);
+    const invalidRecords = assembledWallets.filter((r) => !r.valid);
 
     const totalClosedPositions = validRecords.reduce(
         (sum, r) => sum + (r.metrics?.closedPositionCount ?? r.positions.length),
@@ -1282,15 +1396,30 @@ export async function runHistoricalCohortScreening(): Promise<V1ScreeningDataset
         }
     }
 
-    // Operational fetch failures must not allow Stage 1 to claim successful completion
-    if (fetchFailedRecords.length > 0) {
-        atomicWriteJson(sessionPath, activeSession);
-        throw new Error(
-            `Screening incomplete: ${fetchFailedRecords.length} wallet(s) failed with FETCH_FAILED. Session ${activeSession.sessionId} remains in_progress for resumption.`
-        );
-    }
+    const outputData: V1ScreeningDatasetOutput = {
+        generatedAt: referenceEndTime.toISOString(),
+        source: sourceMetadata,
+        contract: {
+            version: "v1",
+            historyDays: cli.historyDays,
+            poolEligibilityRule: POOL_ELIGIBILITY_RULE,
+            maxClosedPositions: cli.maxClosedPositions,
+            alchemyRequired: false,
+        },
+        population: {
+            candidateWallets: assembledWallets.length,
+            validWallets: validRecords.length,
+            invalidWallets: invalidRecords.length,
+            closedPositions: totalClosedPositions,
+            uniquePools: allUniquePools.size,
+        },
+        wallets: assembledWallets,
+    };
 
-    // Mark session as completed
+    // Write final dataset once
+    atomicWriteJson(datasetPath, outputData);
+
+    // Mark session as completed ONLY after dataset is successfully written
     activeSession.status = "completed";
     activeSession.completedAt = new Date().toISOString();
     atomicWriteJson(sessionPath, activeSession);
@@ -1307,7 +1436,7 @@ export async function runHistoricalCohortScreening(): Promise<V1ScreeningDataset
     console.log(`Pool Rule               : ${POOL_ELIGIBILITY_RULE}`);
     console.log(`Max Closed Positions    : ${cli.maxClosedPositions}`);
     console.log(`Alchemy                 : NOT USED\n`);
-    console.log(`Candidate Wallets       : ${allRecords.length}`);
+    console.log(`Candidate Wallets       : ${assembledWallets.length}`);
     console.log(`Valid Wallets           : ${validRecords.length}`);
     console.log(`Invalid Wallets         : ${invalidRecords.length}`);
     console.log(`Closed Positions        : ${totalClosedPositions}`);
@@ -1319,25 +1448,7 @@ export async function runHistoricalCohortScreening(): Promise<V1ScreeningDataset
     console.log("==================================================");
     console.log(`Dataset Path            : ${datasetPath}\n`);
 
-    return {
-        generatedAt: referenceEndTime.toISOString(),
-        source: sourceMetadata,
-        contract: {
-            version: "v1",
-            historyDays: cli.historyDays,
-            poolEligibilityRule: POOL_ELIGIBILITY_RULE,
-            maxClosedPositions: cli.maxClosedPositions,
-            alchemyRequired: false,
-        },
-        population: {
-            candidateWallets: allRecords.length,
-            validWallets: validRecords.length,
-            invalidWallets: invalidRecords.length,
-            closedPositions: totalClosedPositions,
-            uniquePools: allUniquePools.size,
-        },
-        wallets: allRecords,
-    };
+    return outputData;
 }
 
 const isMain =

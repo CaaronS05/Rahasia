@@ -35,6 +35,48 @@ export interface PoolScannerState {
   pipelineComplete?: boolean;
 }
 
+export interface PoolDiscoveryItem {
+  poolAddress: string;
+  pair: string;
+  tokenMint: string;
+  solMint: string;
+  tokenX: string;
+  tokenY: string;
+  binStep: number | null;
+  baseFeePct: number | null;
+}
+
+export interface PoolDiscoveryResponse {
+  tokenMint: string;
+  solMint: string;
+  pairRule: string;
+  discoveredAt: string;
+  poolCount: number;
+  pools: PoolDiscoveryItem[];
+}
+
+export async function discoverTokenPools(
+  tokenCa: string
+): Promise<PoolDiscoveryResponse> {
+  const response = await fetch(`${POOL_SCANNER_API_BASE}/api/pool-scanner/discover`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      tokenCa: tokenCa.trim(),
+    }),
+  });
+
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(
+      payload?.error || `Pool discovery failed with status ${response.status}`
+    );
+  }
+  return payload;
+}
+
 export async function getPoolScannerStatus(tokenCa?: string): Promise<PoolScannerState> {
   const url = tokenCa
     ? `${POOL_SCANNER_API_BASE}/api/pool-scanner/status?token=${encodeURIComponent(tokenCa)}`
