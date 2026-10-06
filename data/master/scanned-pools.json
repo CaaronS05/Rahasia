@@ -1,0 +1,18 @@
+{
+  "version": "v1",
+  "updatedAt": "2026-10-06T07:46:14.374Z",
+  "pools": [
+    {
+      "poolAddress": "9aCKXUkgwgawaQ3wQRXzg3wE4Krhuwf8iWLBU2FKfChE",
+      "tokenMint": "GgsSaetRZNCuP9HEWjbojtVWByRWFxpr93S1wtGFpump",
+      "pair": "BLUEPRINT/SOL",
+      "binStep": 100,
+      "baseFeePct": 3,
+      "selectionFingerprint": "d1d1045581332a15c97ffa89b6b3c6ec889576ac9697e3761a47dc3e91d81492",
+      "walletCount": 559,
+      "tradeCount": 2228,
+      "firstScannedAt": "2026-10-05T12:41:53.804Z",
+      "lastScannedAt": "2026-10-05T12:41:53.804Z"
+    }
+  ]
+}
