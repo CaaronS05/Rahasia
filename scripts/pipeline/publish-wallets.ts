@@ -11,6 +11,10 @@ const MASTER_PATH = path.resolve(
     "data/master/wallets-master.json",
 );
 
+const FABRIQ_PATH = path.resolve(
+    "data/master/wallets-fabriq.json",
+);
+
 const FRONTEND_PATH = path.resolve(
     "frontend/public/data/wallets-14d.json",
 );
@@ -87,14 +91,13 @@ function dateToDay(
 }
 
 function deriveFabriq(
-    wallet: Record<string, any>,
+    canonicalFabriq: Record<string, any> | undefined | null,
     asOfDate: string,
 ) {
     const fabriq =
-        isObject(wallet.fabriq)
-            ? wallet.fabriq
+        isObject(canonicalFabriq)
+            ? canonicalFabriq
             : {};
-
     const calendars =
         isObject(fabriq.calendars)
             ? fabriq.calendars
@@ -329,15 +332,27 @@ async function main() {
     console.log("\nPUBLISH WALLET DATA");
     console.log("===================");
 
-    const raw = await readFile(
-        MASTER_PATH,
-        "utf8",
-    );
+    const [rawMaster, rawFabriq] = await Promise.all([
+        readFile(MASTER_PATH, "utf8"),
+        readFile(FABRIQ_PATH, "utf8"),
+    ]);
 
-    const payload = JSON.parse(raw);
+    const payload = JSON.parse(rawMaster);
+    const fabriqPayload = JSON.parse(rawFabriq);
 
     const walletCount =
         validateDataset(payload);
+
+    const fabriqByOwner = new Map<string, Record<string, any>>();
+    if (isObject(fabriqPayload) && Array.isArray(fabriqPayload.wallets)) {
+        for (const row of fabriqPayload.wallets) {
+            if (isObject(row) && typeof row.owner === "string" && row.owner.trim()) {
+                if (isObject(row.fabriq)) {
+                    fabriqByOwner.set(row.owner.trim(), row.fabriq);
+                }
+            }
+        }
+    }
 
     const publishedAt =
         new Date().toISOString();
@@ -347,20 +362,33 @@ async function main() {
             TIMEZONE,
         );
 
+    let missingFabriqCount = 0;
+
     const wallets =
         payload.wallets.map(
             (
                 wallet:
                     Record<string, any>,
-            ) => ({
-                ...wallet,
+            ) => {
+                const owner = typeof wallet.owner === "string" ? wallet.owner.trim() : "";
+                const canonicalFabriq = fabriqByOwner.get(owner);
 
-                fabriqDerived:
-                    deriveFabriq(
-                        wallet,
+                if (!canonicalFabriq) {
+                    missingFabriqCount++;
+                }
+
+                const cleanWallet = { ...wallet };
+                delete cleanWallet.fabriq;
+
+                return {
+                    ...cleanWallet,
+                    fabriq: canonicalFabriq ?? undefined,
+                    fabriqDerived: deriveFabriq(
+                        canonicalFabriq,
                         derivedAsOfDate,
                     ),
-            }),
+                };
+            },
         );
 
     const publishedPayload = {
@@ -403,8 +431,10 @@ async function main() {
     );
 
     console.log(`Source  : ${MASTER_PATH}`);
+    console.log(`Fabriq  : ${FABRIQ_PATH}`);
     console.log(`Target  : ${FRONTEND_PATH}`);
     console.log(`Wallets : ${walletCount}`);
+    console.log(`Missing Fabriq : ${missingFabriqCount}`);
     console.log("Status  : published successfully");
 }
 

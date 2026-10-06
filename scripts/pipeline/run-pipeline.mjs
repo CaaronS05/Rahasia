@@ -4,6 +4,8 @@ import { readFile } from "node:fs/promises";
 const MASTER =
     "data/master/wallets-master.json";
 
+const FABRIQ =
+    "data/master/wallets-fabriq.json";
 const LPAGENT_RAW =
     "data/raw/lpagent/smart-lp-latest.json";
 
@@ -50,15 +52,37 @@ async function loadMaster() {
     );
 }
 
-function countFabriqStatus(wallets) {
+async function loadFabriq() {
+    try {
+        return JSON.parse(
+            await readFile(
+                FABRIQ,
+                "utf8"
+            )
+        );
+    } catch {
+        return { wallets: [] };
+    }
+}
+function countFabriqStatus(masterWallets, canonicalWallets) {
     const now = Date.now();
+
+    const fabriqByOwner = new Map();
+    if (Array.isArray(canonicalWallets)) {
+        for (const w of canonicalWallets) {
+            if (typeof w?.owner === "string") {
+                fabriqByOwner.set(w.owner.trim(), w.fabriq);
+            }
+        }
+    }
 
     let fresh = 0;
     let staleOrMissing = 0;
 
-    for (const wallet of wallets) {
-        const fetchedAt =
-            wallet?.fabriq?.fetchedAt;
+    for (const wallet of masterWallets) {
+        const owner = typeof wallet?.owner === "string" ? wallet.owner.trim() : "";
+        const fabriq = fabriqByOwner.get(owner);
+        const fetchedAt = fabriq?.fetchedAt;
 
         const timestamp =
             Date.parse(fetchedAt ?? "");
@@ -85,19 +109,26 @@ function countFabriqStatus(wallets) {
 }
 
 async function showMasterStatus(label) {
-    const master =
-        await loadMaster();
+    const [master, canonical] =
+        await Promise.all([
+            loadMaster(),
+            loadFabriq(),
+        ]);
 
-    const wallets =
+    const masterWallets =
         Array.isArray(master.wallets)
             ? master.wallets
+            : [];
+
+    const canonicalWallets =
+        Array.isArray(canonical.wallets)
+            ? canonical.wallets
             : [];
 
     const {
         fresh,
         staleOrMissing,
-    } = countFabriqStatus(wallets);
-
+    } = countFabriqStatus(masterWallets, canonicalWallets);
     console.log(
         `\n${label}`
     );
@@ -198,9 +229,8 @@ async function main() {
         // -----------------------------------
 
         console.log(
-            "\n[4/5] Merge Fabriq → master"
+            "\n[4/5] Merge Fabriq → canonical"
         );
-
         await run(
             process.execPath,
             [
