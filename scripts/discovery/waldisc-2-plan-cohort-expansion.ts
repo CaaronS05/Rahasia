@@ -146,6 +146,11 @@ function loadCandidateWallets(): { totalSourceWallets: number; candidateWallets:
         throw new Error(`Master wallets database not found: ${masterPath}`);
     }
 
+    const fabriqPath = path.resolve("data/master/wallets-fabriq.json");
+    if (!fs.existsSync(fabriqPath)) {
+        throw new Error(`Canonical Fabriq database not found: ${fabriqPath}`);
+    }
+
     let masterData: any;
     try {
         masterData = JSON.parse(fs.readFileSync(masterPath, "utf8"));
@@ -153,8 +158,24 @@ function loadCandidateWallets(): { totalSourceWallets: number; candidateWallets:
         throw new Error(`Failed to parse master wallets file: ${err?.message || err}`);
     }
 
+    let fabriqData: any;
+    try {
+        fabriqData = JSON.parse(fs.readFileSync(fabriqPath, "utf8"));
+    } catch (err: any) {
+        throw new Error(`Failed to parse canonical Fabriq file: ${err?.message || err}`);
+    }
+
     const masterWallets = Array.isArray(masterData?.wallets) ? masterData.wallets : [];
     const totalSourceWallets = masterWallets.length;
+
+    const canonicalWallets = Array.isArray(fabriqData?.wallets) ? fabriqData.wallets : [];
+    const canonicalFabriqByOwner = new Map<string, any>();
+    for (const fw of canonicalWallets) {
+        const fOwner = String(fw?.owner || "").trim();
+        if (fOwner && fw?.fabriq) {
+            canonicalFabriqByOwner.set(fOwner, fw.fabriq);
+        }
+    }
 
     interface EligibleCandidate {
         owner: string;
@@ -172,7 +193,8 @@ function loadCandidateWallets(): { totalSourceWallets: number; candidateWallets:
         if (seenOwners.has(owner)) continue;
         seenOwners.add(owner);
 
-        const fabriqStats = w?.fabriq?.stats;
+        const fabriqRecord = canonicalFabriqByOwner.get(owner);
+        const fabriqStats = fabriqRecord?.stats;
         if (!fabriqStats || typeof fabriqStats !== "object") continue;
 
         const totalPositions = Number(fabriqStats.totalPositions);
@@ -188,8 +210,8 @@ function loadCandidateWallets(): { totalSourceWallets: number; candidateWallets:
         if (!firstActivity || !lastActivity) continue;
 
         let activeDaysCount = 0;
-        if (w?.fabriq?.calendar && typeof w.fabriq.calendar === "object") {
-            activeDaysCount = Object.keys(w.fabriq.calendar).length;
+        if (fabriqRecord?.calendar && typeof fabriqRecord.calendar === "object") {
+            activeDaysCount = Object.keys(fabriqRecord.calendar).length;
         }
         if (Array.isArray(w?.pnl_chart)) {
             activeDaysCount = Math.max(activeDaysCount, w.pnl_chart.length);

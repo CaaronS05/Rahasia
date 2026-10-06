@@ -11,7 +11,7 @@ const LPAGENT_RAW =
 
 const STALE_AFTER_HOURS = 24;
 
-function run(command, args = []) {
+function run(command, args = [], options = {}) {
     return new Promise((resolve, reject) => {
         console.log(
             `\n▶ ${command} ${args.join(" ")}\n`
@@ -23,9 +23,9 @@ function run(command, args = []) {
             {
                 stdio: "inherit",
                 shell: false,
+                ...options,
             }
         );
-
         child.on("error", reject);
 
         child.on("exit", (code) => {
@@ -221,9 +221,15 @@ async function main() {
             process.execPath,
             [
                 "scripts/fabriq/enrich-wallets.mjs",
-            ]
+            ],
+            {
+                env: {
+                    ...process.env,
+                    FABRIQ_DATASET: MASTER,
+                    FABRIQ_STATE_DATASET: FABRIQ,
+                },
+            }
         );
-
         // -----------------------------------
         // 4. MERGE FABRIQ
         // -----------------------------------

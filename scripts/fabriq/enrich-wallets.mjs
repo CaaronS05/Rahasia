@@ -13,6 +13,10 @@ const DATASET =
             "data/master/wallets-master.json"
         );
 
+const STATE_DATASET =
+    process.env.FABRIQ_STATE_DATASET
+        ? path.resolve(process.env.FABRIQ_STATE_DATASET)
+        : DATASET;
 const OUTPUT =
     process.env.FABRIQ_OUTPUT
         ? path.resolve(process.env.FABRIQ_OUTPUT)
@@ -782,21 +786,42 @@ if (!allWallets.length) {
         "No wallets found in dataset"
     );
 }
+let stateByOwner = null;
+if (STATE_DATASET !== DATASET) {
+    const stateRaw = JSON.parse(
+        await fs.readFile(
+            STATE_DATASET,
+            "utf8"
+        )
+    );
+    const stateRows = extractWalletRows(stateRaw);
+    stateByOwner = new Map();
+    for (const r of stateRows) {
+        const owner = getWalletOwner(r);
+        if (owner && r?.fabriq) {
+            stateByOwner.set(owner, r.fabriq);
+        }
+    }
+} else {
+    stateByOwner = new Map();
+    for (const r of rows) {
+        const owner = getWalletOwner(r);
+        if (owner && r?.fabriq && !stateByOwner.has(owner)) {
+            stateByOwner.set(owner, r.fabriq);
+        }
+    }
+}
 
 const walletsNeedingRefresh =
-    rows
-        .filter((row) => {
-            const owner =
-                getWalletOwner(row);
-
+    allWallets
+        .filter((owner) => {
             if (!owner) {
                 return false;
             }
 
-            return !isFabriqFresh(row);
-        })
-        .map(getWalletOwner)
-        .filter(Boolean);
+            const fabriq = stateByOwner.get(owner);
+            return !isFabriqFresh({ fabriq });
+        });
 
 const refreshCandidates = [
     ...new Set(

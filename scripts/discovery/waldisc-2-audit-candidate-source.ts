@@ -126,9 +126,24 @@ export function runCandidateSourceAudit(): CandidateSourceAuditOutput {
         throw new Error(`wallets-master.json not found: ${masterPath}`);
     }
 
+    const fabriqPath = path.resolve("data/master/wallets-fabriq.json");
+    if (!fs.existsSync(fabriqPath)) {
+        throw new Error(`wallets-fabriq.json not found: ${fabriqPath}`);
+    }
+
     const masterData = JSON.parse(fs.readFileSync(masterPath, "utf8"));
     const masterWallets: any[] = Array.isArray(masterData?.wallets) ? masterData.wallets : [];
     const totalWalletsInMaster = masterWallets.length;
+
+    const fabriqData = JSON.parse(fs.readFileSync(fabriqPath, "utf8"));
+    const canonicalWallets: any[] = Array.isArray(fabriqData?.wallets) ? fabriqData.wallets : [];
+    const canonicalFabriqByOwner = new Map<string, any>();
+    for (const fw of canonicalWallets) {
+        const fOwner = String(fw?.owner || "").trim();
+        if (fOwner && fw?.fabriq) {
+            canonicalFabriqByOwner.set(fOwner, fw.fabriq);
+        }
+    }
 
     // Build filter funnel
     const filterFunnel: FilterStageRecord[] = [];
@@ -167,20 +182,32 @@ export function runCandidateSourceAudit(): CandidateSourceAuditOutput {
     const notAlreadyValidated = currentPool.filter((w) => !validatedSet.has(String(w.owner).trim()));
     recordStage("validated_cohort_exclusion", "Exclude 10 already-validated WALDISC-2 cohort wallets", notAlreadyValidated);
 
-    const hasFabriqStats = currentPool.filter((w) => w?.fabriq?.stats && typeof w.fabriq.stats === "object");
+    const hasFabriqStats = currentPool.filter((w) => {
+        const owner = String(w.owner).trim();
+        const fabriqRecord = canonicalFabriqByOwner.get(owner);
+        return fabriqRecord?.stats && typeof fabriqRecord.stats === "object";
+    });
     recordStage("fabriq_stats_present", "Wallet has non-null fabriq.stats object", hasFabriqStats);
 
     const minPositions = currentPool.filter((w) => {
-        const tp = Number(w.fabriq.stats.totalPositions);
+        const owner = String(w.owner).trim();
+        const fabriqRecord = canonicalFabriqByOwner.get(owner);
+        const tp = Number(fabriqRecord?.stats?.totalPositions);
         return Number.isFinite(tp) && tp >= 10;
     });
     recordStage("sample_size_filter", "Minimum 10 total Fabriq positions (fabriq.stats.totalPositions >= 10)", minPositions);
 
-    const finitePnl = currentPool.filter((w) => Number.isFinite(Number(w.fabriq.stats.netPnlUsd)));
+    const finitePnl = currentPool.filter((w) => {
+        const owner = String(w.owner).trim();
+        const fabriqRecord = canonicalFabriqByOwner.get(owner);
+        return Number.isFinite(Number(fabriqRecord?.stats?.netPnlUsd));
+    });
     recordStage("net_pnl_validity", "Finite net PnL in USD (Number.isFinite(fabriq.stats.netPnlUsd))", finitePnl);
 
     const positiveDeposits = currentPool.filter((w) => {
-        const dep = Number(w.fabriq.stats.totalDepositsUsd);
+        const owner = String(w.owner).trim();
+        const fabriqRecord = canonicalFabriqByOwner.get(owner);
+        const dep = Number(fabriqRecord?.stats?.totalDepositsUsd);
         return Number.isFinite(dep) && dep > 0;
     });
     recordStage("capital_filter", "Positive total deposits (fabriq.stats.totalDepositsUsd > 0)", positiveDeposits);
