@@ -44,6 +44,25 @@ export interface PoolWalletsResponse {
   wallets: PoolWalletItem[];
 }
 
+export interface PoolWalletTradeItem {
+  poolAddress: string;
+  wallet: string;
+  positionId: string;
+  openedAt: string;
+  closedAt: string;
+  durationSeconds: number;
+  pnlUsd: number;
+  pnlPct: number;
+  selectionFingerprint: string;
+}
+
+export interface PoolWalletTradesResponse {
+  poolAddress: string;
+  wallet: string;
+  total: number;
+  trades: PoolWalletTradeItem[];
+}
+
 export async function fetchScannedPools(): Promise<ScannedPoolsResponse> {
   const response = await fetch(`${POOL_INSIGHT_API_BASE}/api/pool-insight/pools`, {
     cache: "no-store",
@@ -87,6 +106,25 @@ export async function fetchPoolWallets(
   );
   if (!response.ok) {
     let message = `Failed to fetch pool wallets (${response.status})`;
+    try {
+      const payload = await response.json();
+      if (payload?.error) message = payload.error;
+    } catch {}
+    throw new Error(message);
+  }
+  return response.json();
+}
+
+export async function fetchPoolWalletTrades(
+  poolAddress: string,
+  wallet: string
+): Promise<PoolWalletTradesResponse> {
+  const response = await fetch(
+    `${POOL_INSIGHT_API_BASE}/api/pool-insight/pools/${encodeURIComponent(poolAddress)}/wallets/${encodeURIComponent(wallet)}/trades`,
+    { cache: "no-store" }
+  );
+  if (!response.ok) {
+    let message = `Failed to fetch wallet trades (${response.status})`;
     try {
       const payload = await response.json();
       if (payload?.error) message = payload.error;

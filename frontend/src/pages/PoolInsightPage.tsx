@@ -8,15 +8,18 @@ import {
   Loader2,
   RefreshCw,
   Sparkles,
+  X,
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import {
   fetchPoolDetail,
   fetchPoolWallets,
+  fetchPoolWalletTrades,
   fetchScannedPools,
   type PoolDetailResponse,
   type PoolWalletItem,
   type PoolWalletSortKey,
+  type PoolWalletTradeItem,
   type ScannedPoolItem,
   type SortOrder,
 } from "../lib/poolInsight";
@@ -46,6 +49,32 @@ function formatUsd(val: number): string {
     maximumFractionDigits: 2,
   }).format(abs);
   return `${sign}$${formatted}`;
+}
+
+function formatPct(val: number): string {
+  if (!Number.isFinite(val)) return "0.00%";
+  const sign = val > 0 ? "+" : val < 0 ? "-" : "";
+  const abs = Math.abs(val);
+  return `${sign}${abs.toFixed(2)}%`;
+}
+
+function formatDuration(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return "—";
+  const sec = Math.floor(seconds);
+  if (sec < 60) return `${sec}s`;
+  const mins = Math.floor(sec / 60);
+  const remSec = sec % 60;
+  if (mins < 60) {
+    return remSec > 0 ? `${mins}m ${remSec}s` : `${mins}m`;
+  }
+  const hours = Math.floor(mins / 60);
+  const remMin = mins % 60;
+  if (hours < 24) {
+    return remMin > 0 ? `${hours}h ${remMin}m` : `${hours}h`;
+  }
+  const days = Math.floor(hours / 24);
+  const remHours = hours % 24;
+  return remHours > 0 ? `${days}d ${remHours}h` : `${days}d`;
 }
 
 function CopyButton({ text, label = "Copy address" }: { text: string; label?: string }) {
@@ -95,6 +124,79 @@ export function PoolInsightPage() {
 
   const [sortKey, setSortKey] = useState<PoolWalletSortKey>("pnlUsd");
   const [sortDir, setSortDir] = useState<SortOrder>("desc");
+
+  // Drilldown View: Selected Wallet Trade History state
+  const [selectedWalletForTrades, setSelectedWalletForTrades] = useState<string | null>(null);
+  const [walletTrades, setWalletTrades] = useState<PoolWalletTradeItem[]>([]);
+  const [loadingTrades, setLoadingTrades] = useState(false);
+  const [tradesError, setTradesError] = useState<string | null>(null);
+
+  // Reset drilldown whenever selected pool changes or is deselected
+  useEffect(() => {
+    setSelectedWalletForTrades(null);
+    setWalletTrades([]);
+    setTradesError(null);
+    setLoadingTrades(false);
+  }, [selectedPoolAddress]);
+
+  // Load trades for selected pool + wallet with stale-response protection
+  useEffect(() => {
+    if (!selectedPoolAddress || !selectedWalletForTrades) {
+      setWalletTrades([]);
+      setTradesError(null);
+      setLoadingTrades(false);
+      return;
+    }
+
+    let active = true;
+    setLoadingTrades(true);
+    setTradesError(null);
+    setWalletTrades([]); // Invariant: no flash of old data
+
+    fetchPoolWalletTrades(selectedPoolAddress, selectedWalletForTrades)
+      .then((res) => {
+        if (!active) return;
+        if (res.poolAddress === selectedPoolAddress && res.wallet === selectedWalletForTrades) {
+          setWalletTrades(res.trades || []);
+        }
+      })
+      .catch((err) => {
+        if (!active) return;
+        setTradesError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        if (active) {
+          setLoadingTrades(false);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [selectedPoolAddress, selectedWalletForTrades]);
+
+  const handleOpenTrades = (wallet: string) => {
+    setSelectedWalletForTrades(wallet);
+  };
+
+  const handleCloseTrades = () => {
+    setSelectedWalletForTrades(null);
+    setWalletTrades([]);
+    setTradesError(null);
+    setLoadingTrades(false);
+  };
+
+  // Close drilldown on Escape key
+  useEffect(() => {
+    if (!selectedWalletForTrades) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        handleCloseTrades();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [selectedWalletForTrades]);
 
   // Load scanned pools for View 1
   const loadPools = useCallback(async () => {
@@ -360,7 +462,21 @@ export function PoolInsightPage() {
                   </thead>
                   <tbody>
                     {wallets.map((w) => (
-                      <tr key={w.wallet}>
+                      <tr
+                        key={w.wallet}
+                        className="clickable-row"
+                        onClick={() => handleOpenTrades(w.wallet)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            handleOpenTrades(w.wallet);
+                          }
+                        }}
+                        tabIndex={0}
+                        role="button"
+                        title={`View trade history for ${w.wallet}`}
+                        aria-label={`View trade history for wallet ${shortWallet(w.wallet, 6, 4)}`}
+                      >
                         <td>
                           <div className="cell-address">
                             <span>{shortWallet(w.wallet, 6, 4)}</span>
@@ -380,7 +496,12 @@ export function PoolInsightPage() {
                             : "—"}
                         </td>
                         <td className="cell-number">{w.positions.toLocaleString()}</td>
-                        <td className="cell-number">{w.tradeCount.toLocaleString()}</td>
+                        <td className="cell-number">
+                          <div className="cell-trades-cta">
+                            <span>{w.tradeCount.toLocaleString()}</span>
+                            <span className="view-trades-pill">View Trades →</span>
+                          </div>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -464,6 +585,117 @@ export function PoolInsightPage() {
             </div>
           )}
         </section>
+      )}
+
+      {/* WALLET TRADE HISTORY DRILLDOWN MODAL */}
+      {selectedWalletForTrades && (
+        <div
+          className="pool-insight-modal-overlay"
+          onClick={handleCloseTrades}
+          role="presentation"
+        >
+          <div
+            className="pool-insight-modal-card"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="trade-drilldown-title"
+          >
+            <div className="pool-insight-modal-header">
+              <div className="pool-insight-modal-header-main">
+                <div className="pool-insight-modal-title-row">
+                  <h3 id="trade-drilldown-title">Trade History</h3>
+                  {poolDetail?.pair && (
+                    <span className="pool-detail-badge">{poolDetail.pair}</span>
+                  )}
+                  <span className="pool-modal-count-badge">
+                    {loadingTrades
+                      ? "Loading…"
+                      : `${walletTrades.length} Trade${walletTrades.length === 1 ? "" : "s"}`}
+                  </span>
+                </div>
+                <div className="pool-insight-modal-wallet-row">
+                  <span className="pool-insight-modal-wallet-label">WALLET</span>
+                  <span className="pool-insight-modal-wallet-addr" title={selectedWalletForTrades}>
+                    {selectedWalletForTrades}
+                  </span>
+                  <CopyButton text={selectedWalletForTrades} label="Copy wallet address" />
+                </div>
+              </div>
+              <button
+                type="button"
+                className="pool-insight-modal-close-btn"
+                onClick={handleCloseTrades}
+                aria-label="Close trade history"
+                title="Close (Esc)"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="pool-insight-modal-body">
+              {loadingTrades ? (
+                <div className="state-card">
+                  <Loader2 className="spin" size={15} style={{ marginRight: 8, verticalAlign: "middle" }} />
+                  Loading trade history…
+                </div>
+              ) : tradesError ? (
+                <div className="state-card error" role="alert">
+                  <AlertCircle size={15} style={{ marginRight: 8, verticalAlign: "middle" }} />
+                  {tradesError}
+                </div>
+              ) : walletTrades.length === 0 ? (
+                <div className="state-card">
+                  No closed-position trades recorded for this wallet in {poolDetail?.pair || "this pool"}.
+                </div>
+              ) : (
+                <div className="pool-insight-modal-table-wrap">
+                  <table className="pool-insight-table">
+                    <thead>
+                      <tr>
+                        <th>POSITION</th>
+                        <th>OPENED</th>
+                        <th>CLOSED</th>
+                        <th>DURATION</th>
+                        <th>PNL</th>
+                        <th>PNL %</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {walletTrades.map((t) => (
+                        <tr key={t.positionId}>
+                          <td>
+                            <div className="cell-address">
+                              <span title={t.positionId}>{shortWallet(t.positionId, 6, 4)}</span>
+                              <CopyButton text={t.positionId} label="Copy position ID" />
+                            </div>
+                          </td>
+                          <td>{formatTimestamp(t.openedAt)}</td>
+                          <td>{formatTimestamp(t.closedAt)}</td>
+                          <td className="cell-number">{formatDuration(t.durationSeconds)}</td>
+                          <td
+                            className={`cell-number ${
+                              t.pnlUsd > 0 ? "positive" : t.pnlUsd < 0 ? "negative" : ""
+                            }`}
+                          >
+                            {formatUsd(t.pnlUsd)}
+                          </td>
+                          <td
+                            className={`cell-number ${
+                              t.pnlPct > 0 ? "positive" : t.pnlPct < 0 ? "negative" : ""
+                            }`}
+                          >
+                            {formatPct(t.pnlPct)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
