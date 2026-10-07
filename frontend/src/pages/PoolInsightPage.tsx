@@ -2,24 +2,29 @@ import {
   AlertCircle,
   ArrowLeft,
   Check,
+  ChevronDown,
+  ChevronRight,
   Copy,
   ExternalLink,
+  Filter,
   Layers3,
   Loader2,
   RefreshCw,
   Sparkles,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import React, { Fragment, useCallback, useEffect, useState } from "react";
 import {
   fetchPoolDetail,
   fetchPoolWallets,
   fetchPoolWalletTrades,
   fetchScannedPools,
-  startPoolRefresh,
+  filterPoolTrades,
   getPoolRefreshStatus,
+  startPoolRefresh,
   type PoolDetailResponse,
   type PoolRefreshStage,
+  type PoolTradeFilterResponse,
   type PoolWalletItem,
   type PoolWalletSortKey,
   type PoolWalletTradeItem,
@@ -153,6 +158,20 @@ export function PoolInsightPage() {
   const [refreshError, setRefreshError] = useState<string | null>(null);
   const [refreshSuccess, setRefreshSuccess] = useState(false);
 
+
+  // Trade Filter state
+  const [minDurationInput, setMinDurationInput] = useState<string>("");
+  const [maxDurationInput, setMaxDurationInput] = useState<string>("");
+  const [minPnlUsdInput, setMinPnlUsdInput] = useState<string>("");
+  const [maxPnlUsdInput, setMaxPnlUsdInput] = useState<string>("");
+  const [minPnlPctInput, setMinPnlPctInput] = useState<string>("");
+  const [maxPnlPctInput, setMaxPnlPctInput] = useState<string>("");
+
+  const [isFiltering, setIsFiltering] = useState(false);
+  const [filterError, setFilterError] = useState<string | null>(null);
+  const [filterValidationMsg, setFilterValidationMsg] = useState<string | null>(null);
+  const [filterResponse, setFilterResponse] = useState<PoolTradeFilterResponse | null>(null);
+  const [expandedWallets, setExpandedWallets] = useState<Set<string>>(new Set());
   // Reset drilldown and refresh state whenever selected pool changes or is deselected
   useEffect(() => {
     setSelectedWalletForTrades(null);
@@ -163,6 +182,17 @@ export function PoolInsightPage() {
     setRefreshStage(null);
     setRefreshError(null);
     setRefreshSuccess(false);
+    setMinDurationInput("");
+    setMaxDurationInput("");
+    setMinPnlUsdInput("");
+    setMaxPnlUsdInput("");
+    setMinPnlPctInput("");
+    setMaxPnlPctInput("");
+    setFilterError(null);
+    setFilterValidationMsg(null);
+    setFilterResponse(null);
+    setIsFiltering(false);
+    setExpandedWallets(new Set());
   }, [selectedPoolAddress]);
 
   // Load trades for selected pool + wallet with stale-response protection
@@ -319,6 +349,11 @@ export function PoolInsightPage() {
           // Reset open trade drilldown so stale detail is not shown
           setSelectedWalletForTrades(null);
           setWalletTrades([]);
+          // Reset trade filter results on pool refresh completion
+          setFilterResponse(null);
+          setFilterError(null);
+          setFilterValidationMsg(null);
+          setExpandedWallets(new Set());
         } else if (status.status === "failed") {
           setIsRefreshing(false);
           setRefreshError(status.error || "Pool refresh failed");
@@ -348,6 +383,106 @@ export function PoolInsightPage() {
       setIsRefreshing(false);
       setRefreshStage(null);
       setRefreshError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const handleApplyFilter = async () => {
+    setFilterValidationMsg(null);
+    setFilterError(null);
+
+    const minDurStr = minDurationInput.trim();
+    const maxDurStr = maxDurationInput.trim();
+    const minUsdStr = minPnlUsdInput.trim();
+    const maxUsdStr = maxPnlUsdInput.trim();
+    const minPctStr = minPnlPctInput.trim();
+    const maxPctStr = maxPnlPctInput.trim();
+
+    // Empty filter validation: require at least one filter
+    if (!minDurStr && !maxDurStr && !minUsdStr && !maxUsdStr && !minPctStr && !maxPctStr) {
+      setFilterValidationMsg("Set at least one filter.");
+      return;
+    }
+
+    const parseNum = (str: string, fieldName: string): number | null => {
+      if (!str) return null;
+      const val = Number(str);
+      if (!Number.isFinite(val)) {
+        throw new Error(`${fieldName} must be a valid number`);
+      }
+      return val;
+    };
+
+    let minDur: number | null = null;
+    let maxDur: number | null = null;
+    let minUsd: number | null = null;
+    let maxUsd: number | null = null;
+    let minPct: number | null = null;
+    let maxPct: number | null = null;
+
+    try {
+      minDur = parseNum(minDurStr, "Min duration");
+      maxDur = parseNum(maxDurStr, "Max duration");
+      minUsd = parseNum(minUsdStr, "Min PnL USD");
+      maxUsd = parseNum(maxUsdStr, "Max PnL USD");
+      minPct = parseNum(minPctStr, "Min PnL %");
+      maxPct = parseNum(maxPctStr, "Max PnL %");
+    } catch (err) {
+      setFilterError(err instanceof Error ? err.message : String(err));
+      return;
+    }
+
+    if (!selectedPoolAddress) return;
+
+    setIsFiltering(true);
+    try {
+      const response = await filterPoolTrades(selectedPoolAddress, {
+        minDurationMinutes: minDur,
+        maxDurationMinutes: maxDur,
+        minPnlUsd: minUsd,
+        maxPnlUsd: maxUsd,
+        minPnlPct: minPct,
+        maxPnlPct: maxPct,
+      });
+      setFilterResponse(response);
+      setExpandedWallets(new Set());
+    } catch (err) {
+      setFilterError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsFiltering(false);
+    }
+  };
+
+  const handleClearFilter = () => {
+    setMinDurationInput("");
+    setMaxDurationInput("");
+    setMinPnlUsdInput("");
+    setMaxPnlUsdInput("");
+    setMinPnlPctInput("");
+    setMaxPnlPctInput("");
+    setFilterValidationMsg(null);
+    setFilterError(null);
+    setFilterResponse(null);
+    setExpandedWallets(new Set());
+  };
+
+  const toggleWalletExpanded = (wallet: string) => {
+    setExpandedWallets((prev) => {
+      const next = new Set(prev);
+      if (next.has(wallet)) {
+        next.delete(wallet);
+      } else {
+        next.add(wallet);
+      }
+      return next;
+    });
+  };
+
+  const handleToggleAllExpanded = () => {
+    if (!filterResponse) return;
+    if (expandedWallets.size === filterResponse.wallets.length) {
+      setExpandedWallets(new Set());
+    } else {
+      setExpandedWallets(new Set(filterResponse.wallets.map((w) => w.wallet)));
     }
   };
 
@@ -506,6 +641,311 @@ export function PoolInsightPage() {
                 </div>
               </dl>
             </section>
+          ) : null}
+
+          {/* TRADE FILTER SECTION */}
+          <section className="pool-trade-filter-card" aria-label="Trade Filter">
+            <div className="pool-trade-filter-header">
+              <div className="pool-trade-filter-title">
+                <Filter size={14} />
+                <h4>Trade Filter</h4>
+              </div>
+              <span className="pool-trade-filter-subtitle">
+                Find wallets based on individual trade characteristics. All active conditions must be satisfied by the same trade.
+              </span>
+            </div>
+
+            <div className="pool-trade-filter-grid">
+              <div className="pool-trade-filter-group">
+                <label className="pool-trade-filter-label">Trade Duration (minutes)</label>
+                <div className="pool-range-inputs">
+                  <input
+                    type="number"
+                    min="0"
+                    step="any"
+                    placeholder="Min"
+                    value={minDurationInput}
+                    onChange={(e) => setMinDurationInput(e.target.value)}
+                    className="pool-filter-input"
+                    aria-label="Minimum duration in minutes"
+                  />
+                  <span className="pool-range-sep">–</span>
+                  <input
+                    type="number"
+                    min="0"
+                    step="any"
+                    placeholder="Max"
+                    value={maxDurationInput}
+                    onChange={(e) => setMaxDurationInput(e.target.value)}
+                    className="pool-filter-input"
+                    aria-label="Maximum duration in minutes"
+                  />
+                </div>
+              </div>
+
+              <div className="pool-trade-filter-group">
+                <label className="pool-trade-filter-label">Trade PnL (USD)</label>
+                <div className="pool-range-inputs">
+                  <input
+                    type="number"
+                    step="any"
+                    placeholder="Min $"
+                    value={minPnlUsdInput}
+                    onChange={(e) => setMinPnlUsdInput(e.target.value)}
+                    className="pool-filter-input"
+                    aria-label="Minimum PnL in USD"
+                  />
+                  <span className="pool-range-sep">–</span>
+                  <input
+                    type="number"
+                    step="any"
+                    placeholder="Max $"
+                    value={maxPnlUsdInput}
+                    onChange={(e) => setMaxPnlUsdInput(e.target.value)}
+                    className="pool-filter-input"
+                    aria-label="Maximum PnL in USD"
+                  />
+                </div>
+              </div>
+
+              <div className="pool-trade-filter-group">
+                <label className="pool-trade-filter-label">Trade PnL %</label>
+                <div className="pool-range-inputs">
+                  <input
+                    type="number"
+                    step="any"
+                    placeholder="Min %"
+                    value={minPnlPctInput}
+                    onChange={(e) => setMinPnlPctInput(e.target.value)}
+                    className="pool-filter-input"
+                    aria-label="Minimum PnL percentage"
+                  />
+                  <span className="pool-range-sep">–</span>
+                  <input
+                    type="number"
+                    step="any"
+                    placeholder="Max %"
+                    value={maxPnlPctInput}
+                    onChange={(e) => setMaxPnlPctInput(e.target.value)}
+                    className="pool-filter-input"
+                    aria-label="Maximum PnL percentage"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="pool-trade-filter-actions">
+              <button
+                type="button"
+                className="primary-button"
+                onClick={handleApplyFilter}
+                disabled={isFiltering}
+              >
+                {isFiltering ? (
+                  <>
+                    <Loader2 size={12} className="spin" style={{ marginRight: 6 }} />
+                    <span>Filtering…</span>
+                  </>
+                ) : (
+                  "Apply Filter"
+                )}
+              </button>
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={handleClearFilter}
+                disabled={isFiltering}
+              >
+                Clear
+              </button>
+
+              {filterValidationMsg && (
+                <span className="pool-filter-validation-msg" role="status">
+                  {filterValidationMsg}
+                </span>
+              )}
+            </div>
+
+            {filterError && (
+              <div className="state-card error" style={{ marginTop: 14 }} role="alert">
+                <AlertCircle size={15} style={{ marginRight: 8, verticalAlign: "middle" }} />
+                <span>{filterError}</span>
+                <button
+                  type="button"
+                  onClick={() => setFilterError(null)}
+                  style={{
+                    marginLeft: "auto",
+                    background: "transparent",
+                    border: 0,
+                    color: "inherit",
+                    cursor: "pointer",
+                  }}
+                  title="Dismiss"
+                >
+                  <X size={13} />
+                </button>
+              </div>
+            )}
+          </section>
+
+          {/* TRADE FILTER RESULTS SECTION */}
+          {isFiltering ? (
+            <div className="state-card" style={{ marginTop: 16 }}>
+              <Loader2 className="spin" size={15} style={{ marginRight: 8, verticalAlign: "middle" }} />
+              Filtering trades...
+            </div>
+          ) : filterResponse ? (
+            filterResponse.matchedWalletCount === 0 ? (
+              <div className="state-card" style={{ marginTop: 16 }}>
+                No trades match these filters.
+              </div>
+            ) : (
+              <section
+                className="pool-insight-table-card"
+                style={{ marginTop: 16 }}
+                aria-label="Trade Filter Results"
+              >
+                <div className="pool-insight-table-toolbar">
+                  <div className="pool-insight-table-toolbar-left">
+                    <strong>
+                      {filterResponse.matchedWalletCount.toLocaleString()}{" "}
+                      {filterResponse.matchedWalletCount === 1 ? "wallet" : "wallets"} found
+                    </strong>
+                    <span>
+                      {filterResponse.matchedTradeCount.toLocaleString()} matching{" "}
+                      {filterResponse.matchedTradeCount === 1 ? "trade" : "trades"}
+                    </span>
+                  </div>
+                  <div className="pool-insight-table-toolbar-right">
+                    <button
+                      type="button"
+                      className="secondary-button filter-toggle-all-btn"
+                      onClick={handleToggleAllExpanded}
+                    >
+                      {expandedWallets.size === filterResponse.wallets.length
+                        ? "Collapse All"
+                        : "Expand All"}
+                    </button>
+                  </div>
+                </div>
+
+                <div style={{ overflowX: "auto" }}>
+                  <table className="pool-insight-table filter-results-table">
+                    <thead>
+                      <tr>
+                        <th style={{ width: 40 }}></th>
+                        <th>WALLET</th>
+                        <th className="cell-number">MATCHED TRADES</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filterResponse.wallets.map((item) => {
+                        const isExpanded = expandedWallets.has(item.wallet);
+                        return (
+                          <Fragment key={item.wallet}>
+                            <tr
+                              className={`filter-wallet-row ${isExpanded ? "expanded" : ""}`}
+                              onClick={() => toggleWalletExpanded(item.wallet)}
+                              style={{ cursor: "pointer" }}
+                            >
+                              <td style={{ width: 40, textAlign: "center" }}>
+                                <button
+                                  type="button"
+                                  className="filter-expand-btn"
+                                  aria-label={isExpanded ? "Collapse trades" : "Expand trades"}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    toggleWalletExpanded(item.wallet);
+                                  }}
+                                >
+                                  {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                                </button>
+                              </td>
+                              <td>
+                                <div className="cell-address">
+                                  <span>{shortWallet(item.wallet, 6, 4)}</span>
+                                  <CopyButton text={item.wallet} label="Copy wallet address" />
+                                </div>
+                              </td>
+                              <td className="cell-number">
+                                <span className="matched-trades-badge">
+                                  {item.matchedTradeCount}{" "}
+                                  {item.matchedTradeCount === 1 ? "trade" : "trades"}
+                                </span>
+                              </td>
+                            </tr>
+                            {isExpanded && (
+                              <tr className="filter-wallet-details-row">
+                                <td colSpan={3} style={{ padding: 0 }}>
+                                  <div className="filter-wallet-trades-wrapper">
+                                    <table className="filter-nested-trades-table">
+                                      <thead>
+                                        <tr>
+                                          <th>POSITION</th>
+                                          <th>OPENED</th>
+                                          <th>CLOSED</th>
+                                          <th className="cell-number">DURATION</th>
+                                          <th className="cell-number">PNL</th>
+                                          <th className="cell-number">PNL %</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        {item.trades.map((t) => (
+                                          <tr key={t.positionId}>
+                                            <td>
+                                              <div className="cell-address">
+                                                <span title={t.positionId}>
+                                                  {shortWallet(t.positionId, 6, 4)}
+                                                </span>
+                                                <CopyButton
+                                                  text={t.positionId}
+                                                  label="Copy position ID"
+                                                />
+                                              </div>
+                                            </td>
+                                            <td>{formatTimestamp(t.openedAt)}</td>
+                                            <td>{formatTimestamp(t.closedAt)}</td>
+                                            <td className="cell-number">
+                                              {formatDuration(t.durationSeconds)}
+                                            </td>
+                                            <td
+                                              className={`cell-number ${
+                                                t.pnlUsd > 0
+                                                  ? "positive"
+                                                  : t.pnlUsd < 0
+                                                  ? "negative"
+                                                  : ""
+                                              }`}
+                                            >
+                                              {formatUsd(t.pnlUsd)}
+                                            </td>
+                                            <td
+                                              className={`cell-number ${
+                                                t.pnlPct > 0
+                                                  ? "positive"
+                                                  : t.pnlPct < 0
+                                                  ? "negative"
+                                                  : ""
+                                              }`}
+                                            >
+                                              {formatPct(t.pnlPct)}
+                                            </td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                </td>
+                              </tr>
+                            )}
+                          </Fragment>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+            )
           ) : null}
 
           {/* POOL WALLET TABLE */}

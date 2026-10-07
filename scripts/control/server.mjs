@@ -3758,6 +3758,231 @@ const server = http.createServer(async (request, response) => {
     }
 
     // ------------------------------------------------------
+    // GET /api/pool-insight/pools/:poolAddress/trade-filter
+    // ------------------------------------------------------
+
+    if (request.method === "GET") {
+        const matchTradeFilter = url.pathname.match(
+            /^\/api\/pool-insight\/pools\/([^/]+)\/trade-filter\/?$/
+        );
+
+        if (matchTradeFilter) {
+            const poolAddress = safeDecodeURIComponent(matchTradeFilter[1]);
+
+            if (poolAddress === null) {
+                json(request, response, 400, { error: "Malformed URL path encoding" });
+                return;
+            }
+
+            if (!poolAddress.trim()) {
+                json(request, response, 400, { error: "Invalid pool address" });
+                return;
+            }
+
+            // Parse and validate query parameters
+            function parseQueryNumber(paramName) {
+                const raw = url.searchParams.get(paramName);
+                if (raw === null || raw === undefined || raw.trim() === "") {
+                    return undefined;
+                }
+                const trimmed = raw.trim();
+                const num = Number(trimmed);
+                if (!Number.isFinite(num)) {
+                    return { error: `Query parameter '${paramName}' must be a finite number` };
+                }
+                return num;
+            }
+
+            const minDurationRes = parseQueryNumber("minDurationSeconds");
+            if (typeof minDurationRes === "object" && minDurationRes.error) {
+                json(request, response, 400, { error: minDurationRes.error });
+                return;
+            }
+            const minDurationSeconds = minDurationRes;
+
+            const maxDurationRes = parseQueryNumber("maxDurationSeconds");
+            if (typeof maxDurationRes === "object" && maxDurationRes.error) {
+                json(request, response, 400, { error: maxDurationRes.error });
+                return;
+            }
+            const maxDurationSeconds = maxDurationRes;
+
+            const minPnlUsdRes = parseQueryNumber("minPnlUsd");
+            if (typeof minPnlUsdRes === "object" && minPnlUsdRes.error) {
+                json(request, response, 400, { error: minPnlUsdRes.error });
+                return;
+            }
+            const minPnlUsd = minPnlUsdRes;
+
+            const maxPnlUsdRes = parseQueryNumber("maxPnlUsd");
+            if (typeof maxPnlUsdRes === "object" && maxPnlUsdRes.error) {
+                json(request, response, 400, { error: maxPnlUsdRes.error });
+                return;
+            }
+            const maxPnlUsd = maxPnlUsdRes;
+
+            const minPnlPctRes = parseQueryNumber("minPnlPct");
+            if (typeof minPnlPctRes === "object" && minPnlPctRes.error) {
+                json(request, response, 400, { error: minPnlPctRes.error });
+                return;
+            }
+            const minPnlPct = minPnlPctRes;
+
+            const maxPnlPctRes = parseQueryNumber("maxPnlPct");
+            if (typeof maxPnlPctRes === "object" && maxPnlPctRes.error) {
+                json(request, response, 400, { error: maxPnlPctRes.error });
+                return;
+            }
+            const maxPnlPct = maxPnlPctRes;
+
+            // Validate duration bounds
+            if (minDurationSeconds !== undefined && minDurationSeconds < 0) {
+                json(request, response, 400, { error: "minDurationSeconds must not be negative" });
+                return;
+            }
+            if (maxDurationSeconds !== undefined && maxDurationSeconds < 0) {
+                json(request, response, 400, { error: "maxDurationSeconds must not be negative" });
+                return;
+            }
+            if (minDurationSeconds !== undefined && maxDurationSeconds !== undefined && minDurationSeconds > maxDurationSeconds) {
+                json(request, response, 400, { error: "minDurationSeconds cannot be greater than maxDurationSeconds" });
+                return;
+            }
+
+            // Validate PnL USD bounds
+            if (minPnlUsd !== undefined && maxPnlUsd !== undefined && minPnlUsd > maxPnlUsd) {
+                json(request, response, 400, { error: "minPnlUsd cannot be greater than maxPnlUsd" });
+                return;
+            }
+
+            // Validate PnL % bounds
+            if (minPnlPct !== undefined && maxPnlPct !== undefined && minPnlPct > maxPnlPct) {
+                json(request, response, 400, { error: "minPnlPct cannot be greater than maxPnlPct" });
+                return;
+            }
+
+            try {
+                // 1. Verify pool exists in scanned-pools.json
+                const scannedData = loadScannedPools();
+                const pools = Array.isArray(scannedData?.pools) ? scannedData.pools : [];
+                const poolExists = pools.some((p) => p?.poolAddress === poolAddress);
+                if (!poolExists) {
+                    json(request, response, 404, { error: "Pool not found" });
+                    return;
+                }
+
+                // 2. Load trade history
+                const tradesData = loadPoolTradeHistory();
+                const rawTrades = Array.isArray(tradesData?.trades) ? tradesData.trades : [];
+                const poolTrades = rawTrades.filter((t) => t?.poolAddress === poolAddress);
+                const totalPoolTrades = poolTrades.length;
+
+                // 3. Filter trades
+                const hasDurationFilter = minDurationSeconds !== undefined || maxDurationSeconds !== undefined;
+                const hasPnlUsdFilter = minPnlUsd !== undefined || maxPnlUsd !== undefined;
+                const hasPnlPctFilter = minPnlPct !== undefined || maxPnlPct !== undefined;
+
+                const matchedTrades = poolTrades.filter((trade) => {
+                    if (hasDurationFilter) {
+                        const d = trade?.durationSeconds;
+                        if (typeof d !== "number" || !Number.isFinite(d)) {
+                            return false;
+                        }
+                        if (minDurationSeconds !== undefined && d < minDurationSeconds) {
+                            return false;
+                        }
+                        if (maxDurationSeconds !== undefined && d > maxDurationSeconds) {
+                            return false;
+                        }
+                    }
+
+                    if (hasPnlUsdFilter) {
+                        const pnl = trade?.pnlUsd;
+                        if (typeof pnl !== "number" || !Number.isFinite(pnl)) {
+                            return false;
+                        }
+                        if (minPnlUsd !== undefined && pnl < minPnlUsd) {
+                            return false;
+                        }
+                        if (maxPnlUsd !== undefined && pnl > maxPnlUsd) {
+                            return false;
+                        }
+                    }
+
+                    if (hasPnlPctFilter) {
+                        const pct = trade?.pnlPct;
+                        if (typeof pct !== "number" || !Number.isFinite(pct)) {
+                            return false;
+                        }
+                        if (minPnlPct !== undefined && pct < minPnlPct) {
+                            return false;
+                        }
+                        if (maxPnlPct !== undefined && pct > maxPnlPct) {
+                            return false;
+                        }
+                    }
+
+                    return true;
+                });
+
+                // 4. Group by wallet preserving canonical trade order within each wallet
+                const walletMap = new Map();
+                for (const trade of matchedTrades) {
+                    const w = trade?.wallet;
+                    if (!w) continue;
+                    let entry = walletMap.get(w);
+                    if (!entry) {
+                        entry = {
+                            wallet: w,
+                            matchedTradeCount: 0,
+                            trades: [],
+                        };
+                        walletMap.set(w, entry);
+                    }
+                    entry.matchedTradeCount += 1;
+                    entry.trades.push({
+                        positionId: trade.positionId,
+                        openedAt: trade.openedAt,
+                        closedAt: trade.closedAt,
+                        durationSeconds: trade.durationSeconds,
+                        pnlUsd: trade.pnlUsd,
+                        pnlPct: trade.pnlPct,
+                    });
+                }
+
+                // 5. Sort wallets by matchedTradeCount descending, tie-break deterministically by wallet address
+                const wallets = Array.from(walletMap.values()).sort((a, b) => {
+                    if (b.matchedTradeCount !== a.matchedTradeCount) {
+                        return b.matchedTradeCount - a.matchedTradeCount;
+                    }
+                    return a.wallet.localeCompare(b.wallet);
+                });
+
+                json(request, response, 200, {
+                    poolAddress,
+                    filters: {
+                        minDurationSeconds: minDurationSeconds ?? null,
+                        maxDurationSeconds: maxDurationSeconds ?? null,
+                        minPnlUsd: minPnlUsd ?? null,
+                        maxPnlUsd: maxPnlUsd ?? null,
+                        minPnlPct: minPnlPct ?? null,
+                        maxPnlPct: maxPnlPct ?? null,
+                    },
+                    totalPoolTrades,
+                    matchedTradeCount: matchedTrades.length,
+                    matchedWalletCount: wallets.length,
+                    wallets,
+                });
+            } catch (error) {
+                console.error("[POOL INSIGHT] Error filtering trades:", error.message);
+                json(request, response, 500, { error: "Failed to read pool trade history data" });
+            }
+
+            return;
+        }
+    }
+
+    // ------------------------------------------------------
     // GET /api/pool-insight/pools/:poolAddress
     // ------------------------------------------------------
     // ------------------------------------------------------

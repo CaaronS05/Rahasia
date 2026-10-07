@@ -613,3 +613,208 @@
   background: #141412;
   z-index: 1;
 }
+
+/* ====================================================== */
+/* Pool Intelligence: Trade Filter Styles                 */
+/* ====================================================== */
+
+.pool-trade-filter-card {
+  margin-top: 16px;
+  padding: 18px 22px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.pool-trade-filter-header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 16px;
+}
+
+.pool-trade-filter-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+}
+
+.pool-trade-filter-title h4 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+
+.pool-trade-filter-subtitle {
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.pool-trade-filter-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+@media (max-width: 860px) {
+  .pool-trade-filter-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.pool-trade-filter-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pool-trade-filter-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.pool-range-inputs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pool-filter-input {
+  flex: 1;
+  min-width: 0;
+  height: 34px;
+  background: rgba(0, 0, 0, 0.28);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0 10px;
+  font-size: 12px;
+  color: var(--text);
+  font-family: inherit;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+
+.pool-filter-input:focus {
+  outline: none;
+  border-color: rgba(255, 255, 255, 0.25);
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.pool-filter-input::placeholder {
+  color: rgba(255, 255, 255, 0.25);
+  font-size: 11px;
+}
+
+/* Hide number spin buttons */
+.pool-filter-input::-webkit-inner-spin-button,
+.pool-filter-input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.pool-filter-input {
+  -moz-appearance: textfield;
+}
+
+.pool-range-sep {
+  font-size: 12px;
+  color: var(--muted);
+  user-select: none;
+}
+
+.pool-trade-filter-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.pool-filter-validation-msg {
+  font-size: 12px;
+  color: #fbbf24;
+  font-weight: 500;
+  margin-left: 4px;
+}
+
+/* Filter Results Table */
+.matched-trades-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(85, 214, 157, 0.08);
+  border: 1px solid rgba(85, 214, 157, 0.25);
+  color: var(--green);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.filter-expand-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  cursor: pointer;
+  border-radius: 4px;
+  transition: all 120ms ease;
+}
+
+.filter-expand-btn:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.filter-wallet-row:hover {
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.filter-wallet-row.expanded {
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.filter-wallet-details-row {
+  background: rgba(0, 0, 0, 0.22);
+}
+
+.filter-wallet-trades-wrapper {
+  padding: 10px 16px 14px 44px;
+  border-top: 1px solid rgba(255, 255, 255, 0.04);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.filter-nested-trades-table {
+  font-size: 11px;
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.filter-nested-trades-table th {
+  background: transparent !important;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 6px 10px;
+  color: var(--muted);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.filter-nested-trades-table td {
+  padding: 7px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+}
+
+.filter-toggle-all-btn {
+  height: 28px !important;
+  padding: 0 10px !important;
+  font-size: 11px !important;
+}

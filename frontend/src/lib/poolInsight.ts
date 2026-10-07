@@ -62,6 +62,48 @@ export interface PoolWalletTradesResponse {
   total: number;
   trades: PoolWalletTradeItem[];
 }
+
+export interface PoolTradeFilterParams {
+  minDurationMinutes?: number | null;
+  maxDurationMinutes?: number | null;
+  minPnlUsd?: number | null;
+  maxPnlUsd?: number | null;
+  minPnlPct?: number | null;
+  maxPnlPct?: number | null;
+}
+
+export interface PoolTradeFilterAppliedFilters {
+  minDurationSeconds: number | null;
+  maxDurationSeconds: number | null;
+  minPnlUsd: number | null;
+  maxPnlUsd: number | null;
+  minPnlPct: number | null;
+  maxPnlPct: number | null;
+}
+
+export interface MatchedPoolTradeItem {
+  positionId: string;
+  openedAt: string;
+  closedAt: string;
+  durationSeconds: number;
+  pnlUsd: number;
+  pnlPct: number;
+}
+
+export interface MatchedPoolTradeWalletItem {
+  wallet: string;
+  matchedTradeCount: number;
+  trades: MatchedPoolTradeItem[];
+}
+
+export interface PoolTradeFilterResponse {
+  poolAddress: string;
+  filters: PoolTradeFilterAppliedFilters;
+  totalPoolTrades: number;
+  matchedTradeCount: number;
+  matchedWalletCount: number;
+  wallets: MatchedPoolTradeWalletItem[];
+}
 export type PoolRefreshStatus = "idle" | "running" | "completed" | "failed";
 export type PoolRefreshStage =
   | "idle"
@@ -179,6 +221,46 @@ export async function getPoolRefreshStatus(poolAddress: string): Promise<PoolRef
   );
   if (!response.ok) {
     let message = `Failed to fetch pool refresh status (${response.status})`;
+    try {
+      const payload = await response.json();
+      if (payload?.error) message = payload.error;
+    } catch {}
+    throw new Error(message);
+  }
+  return response.json();
+}
+
+export async function filterPoolTrades(
+  poolAddress: string,
+  filters: PoolTradeFilterParams
+): Promise<PoolTradeFilterResponse> {
+  const params = new URLSearchParams();
+
+  if (filters.minDurationMinutes !== undefined && filters.minDurationMinutes !== null && Number.isFinite(filters.minDurationMinutes)) {
+    params.set("minDurationSeconds", String(filters.minDurationMinutes * 60));
+  }
+  if (filters.maxDurationMinutes !== undefined && filters.maxDurationMinutes !== null && Number.isFinite(filters.maxDurationMinutes)) {
+    params.set("maxDurationSeconds", String(filters.maxDurationMinutes * 60));
+  }
+  if (filters.minPnlUsd !== undefined && filters.minPnlUsd !== null && Number.isFinite(filters.minPnlUsd)) {
+    params.set("minPnlUsd", String(filters.minPnlUsd));
+  }
+  if (filters.maxPnlUsd !== undefined && filters.maxPnlUsd !== null && Number.isFinite(filters.maxPnlUsd)) {
+    params.set("maxPnlUsd", String(filters.maxPnlUsd));
+  }
+  if (filters.minPnlPct !== undefined && filters.minPnlPct !== null && Number.isFinite(filters.minPnlPct)) {
+    params.set("minPnlPct", String(filters.minPnlPct));
+  }
+  if (filters.maxPnlPct !== undefined && filters.maxPnlPct !== null && Number.isFinite(filters.maxPnlPct)) {
+    params.set("maxPnlPct", String(filters.maxPnlPct));
+  }
+
+  const queryString = params.toString();
+  const url = `${POOL_INSIGHT_API_BASE}/api/pool-insight/pools/${encodeURIComponent(poolAddress)}/trade-filter${queryString ? `?${queryString}` : ""}`;
+
+  const response = await fetch(url, { cache: "no-store" });
+  if (!response.ok) {
+    let message = `Failed to filter pool trades (${response.status})`;
     try {
       const payload = await response.json();
       if (payload?.error) message = payload.error;
