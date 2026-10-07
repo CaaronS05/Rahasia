@@ -1,0 +1,367 @@
+/* Pool Insight Stylesheet */
+
+.pool-insight-page {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.pool-insight-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.pool-insight-header h2 {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin: 0 0 6px;
+  color: var(--text);
+}
+
+.pool-insight-header p {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 0;
+  line-height: 1.5;
+}
+
+.pool-insight-subnav {
+  display: flex;
+  gap: 6px;
+  background: rgba(255, 255, 255, 0.03);
+  padding: 4px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+
+.pool-insight-subnav button {
+  background: transparent;
+  border: 0;
+  padding: 8px 14px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 500;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  transition: all 120ms ease;
+}
+
+.pool-insight-subnav button:hover:not(:disabled) {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.pool-insight-subnav button.active {
+  color: var(--text);
+  background: var(--panel);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  font-weight: 600;
+}
+
+.subnav-badge {
+  font-size: 9px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--muted);
+  letter-spacing: 0.02em;
+  font-weight: normal;
+}
+
+/* Pool Detail Header & Card */
+.pool-detail-nav {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+
+.pool-detail-card {
+  padding: 20px 24px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.pool-detail-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.pool-detail-card-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.pool-detail-card-title h3 {
+  font-size: 16px;
+  font-weight: 700;
+  margin: 0;
+  color: var(--text);
+}
+
+.pool-detail-badge {
+  padding: 3px 8px;
+  border-radius: 5px;
+  background: rgba(85, 214, 157, 0.08);
+  border: 1px solid rgba(85, 214, 157, 0.2);
+  color: var(--green);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.pool-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 18px 24px;
+}
+
+.pool-detail-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.pool-detail-item dt {
+  font-size: 10px;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin: 0;
+}
+
+.pool-detail-item dd {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pool-detail-address {
+  font-family: monospace;
+  font-size: 12px;
+}
+
+/* Tables */
+.pool-insight-table-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  overflow: hidden;
+}
+
+.pool-insight-table-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border);
+  min-height: 50px;
+}
+
+.pool-insight-table-toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.pool-insight-table-toolbar-left strong {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.pool-insight-table-toolbar-left span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.pool-insight-table-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.pool-insight-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.pool-insight-table th {
+  padding: 10px 16px;
+  text-align: left;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: #77736d;
+  background: #121310;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.pool-insight-table td {
+  padding: 13px 16px;
+  font-size: 11px;
+  color: var(--text);
+  border-bottom: 1px solid var(--border-soft);
+  white-space: nowrap;
+}
+
+.pool-insight-table tbody tr.clickable-row {
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.pool-insight-table tbody tr.clickable-row:hover {
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.pool-insight-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.cell-address {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: monospace;
+  font-size: 11px;
+}
+
+.cell-pair {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.cell-number {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Placeholder */
+.pool-insight-placeholder {
+  padding: 48px 32px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  max-width: 640px;
+  margin: 20px auto;
+}
+
+.pool-insight-placeholder-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border);
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+.pool-insight-placeholder h3 {
+  font-size: 16px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.pool-insight-placeholder p {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+  margin: 0;
+  max-width: 440px;
+}
+
+.placeholder-badge {
+  padding: 3px 10px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+/* Sort button in table header */
+.table-sort-btn {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  color: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.table-sort-btn:hover {
+  color: var(--text);
+}
+
+.table-sort-btn .sort-indicator {
+  font-size: 10px;
+  color: #55524d;
+}
+
+.table-sort-btn .sort-indicator.active {
+  color: var(--green);
+}
+
+/* Copy button */
+.copy-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0;
+  transition: all 120ms ease;
+}
+
+.copy-btn:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.06);
+  border-color: var(--border);
+}
+
+.copy-btn.copied {
+  color: var(--green);
+  background: rgba(85, 214, 157, 0.1);
+  border-color: rgba(85, 214, 157, 0.25);
+}
