@@ -3143,6 +3143,67 @@ function queryPoolExplorer(
     };
 }
 
+// ============================================================
+// POOL INSIGHT CACHED LOADERS & HELPERS
+// ============================================================
+
+const SCANNED_POOLS_PATH = path.join(ROOT, "data/master/scanned-pools.json");
+const POOL_MEMBERSHIP_PATH = path.join(ROOT, "data/master/pool-wallet-membership.json");
+const POOL_TRADES_PATH = path.join(ROOT, "data/master/pool-trade-history.json");
+
+let scannedPoolsCache = null;
+let scannedPoolsMtimeMs = null;
+
+let poolMembershipCache = null;
+let poolMembershipMtimeMs = null;
+
+let poolTradesCache = null;
+let poolTradesMtimeMs = null;
+
+function loadScannedPools() {
+    const stats = fs.statSync(SCANNED_POOLS_PATH);
+    if (scannedPoolsCache && scannedPoolsMtimeMs === stats.mtimeMs) {
+        return scannedPoolsCache;
+    }
+    const raw = fs.readFileSync(SCANNED_POOLS_PATH, "utf8");
+    const parsed = JSON.parse(raw);
+    scannedPoolsCache = parsed;
+    scannedPoolsMtimeMs = stats.mtimeMs;
+    return parsed;
+}
+
+function loadPoolWalletMembership() {
+    const stats = fs.statSync(POOL_MEMBERSHIP_PATH);
+    if (poolMembershipCache && poolMembershipMtimeMs === stats.mtimeMs) {
+        return poolMembershipCache;
+    }
+    const raw = fs.readFileSync(POOL_MEMBERSHIP_PATH, "utf8");
+    const parsed = JSON.parse(raw);
+    poolMembershipCache = parsed;
+    poolMembershipMtimeMs = stats.mtimeMs;
+    return parsed;
+}
+
+function loadPoolTradeHistory() {
+    const stats = fs.statSync(POOL_TRADES_PATH);
+    if (poolTradesCache && poolTradesMtimeMs === stats.mtimeMs) {
+        return poolTradesCache;
+    }
+    const raw = fs.readFileSync(POOL_TRADES_PATH, "utf8");
+    const parsed = JSON.parse(raw);
+    poolTradesCache = parsed;
+    poolTradesMtimeMs = stats.mtimeMs;
+    return parsed;
+}
+
+function safeDecodeURIComponent(value) {
+    try {
+        return decodeURIComponent(value);
+    } catch {
+        return null;
+    }
+}
+
 // One shared lock covers process lifetime, stage gaps, and stopping process trees.
 function dataPipelineBusy() {
     return Boolean(currentChild || lpAgentChild || poolScannerChild || walletIntelligenceChild) ||
@@ -3353,6 +3414,250 @@ const server = http.createServer(async (request, response) => {
         }
 
         return;
+    }
+
+    // ------------------------------------------------------
+    // GET /api/pool-insight/pools
+    // ------------------------------------------------------
+
+    if (
+        request.method === "GET" &&
+        (url.pathname === "/api/pool-insight/pools" || url.pathname === "/api/pool-insight/pools/")
+    ) {
+        try {
+            const scannedData = loadScannedPools();
+            const rawPools = Array.isArray(scannedData?.pools) ? scannedData.pools : [];
+            const search = (url.searchParams.get("search") ?? "").trim().toLowerCase();
+
+            let pools = rawPools;
+            if (search) {
+                pools = rawPools.filter((p) => {
+                    const pair = (p?.pair ?? "").toLowerCase();
+                    const poolAddress = (p?.poolAddress ?? "").toLowerCase();
+                    const tokenMint = (p?.tokenMint ?? "").toLowerCase();
+                    return pair.includes(search) || poolAddress.includes(search) || tokenMint.includes(search);
+                });
+            }
+
+            json(request, response, 200, {
+                updatedAt: scannedData?.updatedAt ?? null,
+                total: pools.length,
+                pools,
+            });
+        } catch (error) {
+            console.error("[POOL INSIGHT] Error loading pools:", error.message);
+            json(request, response, 500, { error: "Failed to read scanned pools data" });
+        }
+
+        return;
+    }
+
+    // ------------------------------------------------------
+    // GET /api/pool-insight/pools/:poolAddress/wallets/:wallet/trades
+    // ------------------------------------------------------
+
+    if (request.method === "GET") {
+        const matchWalletTrades = url.pathname.match(
+            /^\/api\/pool-insight\/pools\/([^/]+)\/wallets\/([^/]+)\/trades\/?$/
+        );
+
+        if (matchWalletTrades) {
+            const poolAddress = safeDecodeURIComponent(matchWalletTrades[1]);
+            const wallet = safeDecodeURIComponent(matchWalletTrades[2]);
+
+            if (poolAddress === null || wallet === null) {
+                json(request, response, 400, { error: "Malformed URL path encoding" });
+                return;
+            }
+
+            if (!poolAddress.trim() || !wallet.trim()) {
+                json(request, response, 400, { error: "Invalid pool address or wallet" });
+                return;
+            }
+
+            try {
+                // 1. Verify pool exists in scanned-pools.json
+                const scannedData = loadScannedPools();
+                const pools = Array.isArray(scannedData?.pools) ? scannedData.pools : [];
+                const poolExists = pools.some((p) => p?.poolAddress === poolAddress);
+                if (!poolExists) {
+                    json(request, response, 404, { error: "Pool not found" });
+                    return;
+                }
+
+                // 2. Verify wallet exists in pool-wallet-membership for this pool
+                const membershipData = loadPoolWalletMembership();
+                const memberships = Array.isArray(membershipData?.memberships) ? membershipData.memberships : [];
+                const walletExistsInPool = memberships.some(
+                    (m) => m?.poolAddress === poolAddress && m?.wallet === wallet
+                );
+                if (!walletExistsInPool) {
+                    json(request, response, 404, { error: "Wallet not found in pool" });
+                    return;
+                }
+
+                // 3. Load trade history
+                const tradesData = loadPoolTradeHistory();
+                const rawTrades = Array.isArray(tradesData?.trades) ? tradesData.trades : [];
+                const poolWalletTrades = rawTrades.filter(
+                    (t) => t?.poolAddress === poolAddress && t?.wallet === wallet
+                );
+
+                // 4. Default ordering: closedAt descending, then positionId ascending
+                const trades = [...poolWalletTrades].sort((a, b) => {
+                    const aClosed = a?.closedAt ? Date.parse(a.closedAt) : 0;
+                    const bClosed = b?.closedAt ? Date.parse(b.closedAt) : 0;
+                    const aTime = Number.isFinite(aClosed) ? aClosed : 0;
+                    const bTime = Number.isFinite(bClosed) ? bClosed : 0;
+
+                    if (aTime !== bTime) {
+                        return bTime - aTime;
+                    }
+
+                    return (a?.positionId ?? "").localeCompare(b?.positionId ?? "");
+                });
+
+                json(request, response, 200, {
+                    poolAddress,
+                    wallet,
+                    total: trades.length,
+                    trades,
+                });
+            } catch (error) {
+                console.error("[POOL INSIGHT] Error loading wallet trades:", error.message);
+                json(request, response, 500, { error: "Failed to read pool trade history data" });
+            }
+
+            return;
+        }
+    }
+
+    // ------------------------------------------------------
+    // GET /api/pool-insight/pools/:poolAddress/wallets
+    // ------------------------------------------------------
+
+    if (request.method === "GET") {
+        const matchPoolWallets = url.pathname.match(
+            /^\/api\/pool-insight\/pools\/([^/]+)\/wallets\/?$/
+        );
+
+        if (matchPoolWallets) {
+            const poolAddress = safeDecodeURIComponent(matchPoolWallets[1]);
+
+            if (poolAddress === null) {
+                json(request, response, 400, { error: "Malformed URL path encoding" });
+                return;
+            }
+
+            if (!poolAddress.trim()) {
+                json(request, response, 400, { error: "Invalid pool address" });
+                return;
+            }
+
+            try {
+                // 1. Verify pool exists in scanned-pools.json
+                const scannedData = loadScannedPools();
+                const pools = Array.isArray(scannedData?.pools) ? scannedData.pools : [];
+                const poolExists = pools.some((p) => p?.poolAddress === poolAddress);
+                if (!poolExists) {
+                    json(request, response, 404, { error: "Pool not found" });
+                    return;
+                }
+
+                // 2. Load pool wallet membership
+                const membershipData = loadPoolWalletMembership();
+                const rawMemberships = Array.isArray(membershipData?.memberships) ? membershipData.memberships : [];
+                const poolMemberships = rawMemberships.filter((m) => m?.poolAddress === poolAddress);
+
+                // 3. Sorting
+                const ALLOWED_WALLET_SORT_KEYS = new Set(["pnlUsd", "winRate", "positions", "tradeCount"]);
+                const rawSortBy = url.searchParams.get("sortBy");
+                const sortBy = (rawSortBy && ALLOWED_WALLET_SORT_KEYS.has(rawSortBy.trim()))
+                    ? rawSortBy.trim()
+                    : "pnlUsd";
+
+                const rawSortOrder = (url.searchParams.get("sortOrder") ?? "desc").toLowerCase();
+                const sortOrder = rawSortOrder === "asc" ? "asc" : "desc";
+
+                const wallets = [...poolMemberships].sort((a, b) => {
+                    const aVal = a?.[sortBy];
+                    const bVal = b?.[sortBy];
+
+                    // Nulls handled deterministically: placed at end
+                    if (aVal === null || aVal === undefined) {
+                        if (bVal === null || bVal === undefined) {
+                            return (a?.wallet ?? "").localeCompare(b?.wallet ?? "");
+                        }
+                        return 1;
+                    }
+                    if (bVal === null || bVal === undefined) {
+                        return -1;
+                    }
+
+                    const diff = Number(aVal) - Number(bVal);
+                    if (diff !== 0) {
+                        return sortOrder === "asc" ? diff : -diff;
+                    }
+
+                    // Deterministic owner/wallet tie-break
+                    return (a?.wallet ?? "").localeCompare(b?.wallet ?? "");
+                });
+
+                json(request, response, 200, {
+                    poolAddress,
+                    updatedAt: membershipData?.updatedAt ?? null,
+                    total: wallets.length,
+                    wallets,
+                });
+            } catch (error) {
+                console.error("[POOL INSIGHT] Error loading pool wallets:", error.message);
+                json(request, response, 500, { error: "Failed to read pool membership data" });
+            }
+
+            return;
+        }
+    }
+
+    // ------------------------------------------------------
+    // GET /api/pool-insight/pools/:poolAddress
+    // ------------------------------------------------------
+
+    if (request.method === "GET") {
+        const matchPoolDetail = url.pathname.match(
+            /^\/api\/pool-insight\/pools\/([^/]+)\/?$/
+        );
+
+        if (matchPoolDetail) {
+            const poolAddress = safeDecodeURIComponent(matchPoolDetail[1]);
+
+            if (poolAddress === null) {
+                json(request, response, 400, { error: "Malformed URL path encoding" });
+                return;
+            }
+
+            if (!poolAddress.trim()) {
+                json(request, response, 400, { error: "Invalid pool address" });
+                return;
+            }
+
+            try {
+                const scannedData = loadScannedPools();
+                const pools = Array.isArray(scannedData?.pools) ? scannedData.pools : [];
+                const pool = pools.find((p) => p?.poolAddress === poolAddress);
+
+                if (!pool) {
+                    json(request, response, 404, { error: "Pool not found" });
+                    return;
+                }
+
+                json(request, response, 200, { pool });
+            } catch (error) {
+                console.error("[POOL INSIGHT] Error loading pool detail:", error.message);
+                json(request, response, 500, { error: "Failed to read scanned pools data" });
+            }
+
+            return;
+        }
     }
 
     // ------------------------------------------------------
