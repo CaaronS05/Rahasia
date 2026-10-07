@@ -27,6 +27,7 @@ function randomDelay(min, max) {
 function parseCliArgs() {
   const args = process.argv.slice(2);
   let tokenCA = null;
+  let refresh = false;
   const pools = [];
 
   for (let i = 0; i < args.length; i++) {
@@ -38,6 +39,8 @@ function parseCliArgs() {
       const p = args[i + 1]?.trim();
       if (p) pools.push(p);
       i++;
+    } else if (arg === "--refresh") {
+      refresh = true;
     }
   }
 
@@ -45,7 +48,7 @@ function parseCliArgs() {
     tokenCA = process.env.TOKEN_CA.trim();
   }
 
-  return { tokenCA, pools };
+  return { tokenCA, pools, refresh };
 }
 
 function computeSelectionFingerprint(tokenMint, poolAddresses) {
@@ -198,8 +201,7 @@ async function scanPoolDirect(page, poolAddress) {
 }
 
 async function main() {
-  const { tokenCA, pools: rawPools } = parseCliArgs();
-
+  const { tokenCA, pools: rawPools, refresh } = parseCliArgs();
   if (!tokenCA) {
     throw new Error("Token CA is required. Use --token <TOKEN_CA>");
   }
@@ -215,7 +217,9 @@ async function main() {
   console.log(`======================================`);
   console.log(`Token CA: ${tokenCA}`);
   console.log(`Selected Pools: ${uniqueSelectedAddresses.length}`);
-
+  if (refresh) {
+    console.log(`Refresh Mode:   ENABLED (forcing fresh LP Agent extraction)`);
+  }
   console.log("\n[Discovery] Validating selected pools with Meteora API...");
   const discoveryResult = await discoverTokenPools(tokenCA);
   const discoveredMap = new Map(discoveryResult.pools.map((p) => [p.poolAddress, p]));
@@ -275,9 +279,18 @@ async function main() {
           }
         }
       }
-      console.log(
-        `[Resume] Matching selection fingerprint found. Resuming with ${completedPoolsMap.size} completed pool(s).`
-      );
+      if (refresh) {
+        for (const addr of uniqueSelectedAddresses) {
+          completedPoolsMap.delete(addr);
+        }
+        console.log(
+          `[Refresh] Cleared cached completion for ${uniqueSelectedAddresses.length} target pool(s) to force fresh extraction.`
+        );
+      } else {
+        console.log(
+          `[Resume] Matching selection fingerprint found. Resuming with ${completedPoolsMap.size} completed pool(s).`
+        );
+      }
     } catch {
       completedPoolsMap.clear();
     }
@@ -287,7 +300,7 @@ async function main() {
 
   let createdAt = new Date().toISOString();
   try {
-    if (canResume) {
+    if (canResume && !refresh) {
       const selRaw = await fs.readFile(path.join(outputDir, "selection.json"), "utf8");
       const selData = JSON.parse(selRaw);
       if (selData?.createdAt) {
@@ -311,7 +324,7 @@ async function main() {
   };
   await atomicWriteJson(path.join(outputDir, "selection.json"), selectionData);
 
-  const startedAt = savedState?.startedAt ?? new Date().toISOString();
+  const startedAt = refresh ? new Date().toISOString() : (savedState?.startedAt ?? new Date().toISOString());
 
   const allAlreadyComplete = selectedPools.every((p) => completedPoolsMap.has(p.poolAddress));
   if (allAlreadyComplete) {

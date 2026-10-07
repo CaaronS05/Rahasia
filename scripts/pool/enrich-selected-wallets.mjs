@@ -12,6 +12,7 @@ function parseArgs() {
   let tokenCA = null;
   let workers = 2;
   let limit = null;
+  let refresh = false;
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -30,6 +31,8 @@ function parseArgs() {
         limit = parsed;
       }
       i++;
+    } else if (arg === "--refresh") {
+      refresh = true;
     }
   }
 
@@ -37,7 +40,7 @@ function parseArgs() {
     tokenCA = process.env.TOKEN_CA.trim();
   }
 
-  return { tokenCA, workers, limit };
+  return { tokenCA, workers, limit, refresh };
 }
 
 async function atomicWriteJson(filePath, data) {
@@ -47,7 +50,7 @@ async function atomicWriteJson(filePath, data) {
 }
 
 async function main() {
-  const { tokenCA, workers, limit } = parseArgs();
+  const { tokenCA, workers, limit, refresh } = parseArgs();
 
   if (!tokenCA) {
     throw new Error("Token CA is required. Use --token <TOKEN_CA>");
@@ -117,12 +120,14 @@ async function main() {
     FABRIQ_CHECKPOINT: checkpointPath,
     FABRIQ_CONCURRENCY: String(workers),
   };
-
   if (limit) {
     env.FABRIQ_LIMIT = String(limit);
   }
 
   const startedAt = new Date().toISOString();
+  if (refresh) {
+    env.FABRIQ_REFRESH_BEFORE = startedAt;
+  }
   const fabriqState = {
     version: "v1",
     tokenMint: tokenCA,
@@ -130,6 +135,7 @@ async function main() {
     totalWallets: wallets.length,
     workers,
     ...(limit ? { limit } : {}),
+    ...(refresh ? { refresh: true, refreshCutoff: startedAt } : {}),
     startedAt,
     updatedAt: startedAt,
   };
@@ -145,6 +151,9 @@ async function main() {
   console.log(`Workers:       ${workers}`);
   if (limit) {
     console.log(`Limit:         ${limit}`);
+  }
+  if (refresh) {
+    console.log(`Refresh Mode:  ENABLED (Cutoff: ${startedAt})`);
   }
   console.log(`Dataset:       ${datasetPath}`);
   console.log(`Output:        ${outputPath}`);

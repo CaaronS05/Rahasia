@@ -167,12 +167,14 @@ interface PoolTradeHistoryFile {
 
 interface ParsedCliArgs {
     token: string;
+    targetPool: string | null;
     dryRun: boolean;
 }
 
 function parseCliArgs(): ParsedCliArgs {
     const args = process.argv.slice(2);
     let token = "";
+    let targetPool: string | null = null;
     let dryRun = false;
 
     for (let i = 0; i < args.length; i++) {
@@ -182,6 +184,11 @@ function parseCliArgs(): ParsedCliArgs {
             i++;
         } else if (arg.startsWith("--token=")) {
             token = arg.slice("--token=".length);
+        } else if (arg === "--pool") {
+            targetPool = args[i + 1] ?? null;
+            i++;
+        } else if (arg.startsWith("--pool=")) {
+            targetPool = arg.slice("--pool=".length);
         } else if (arg === "--dry-run") {
             dryRun = true;
         }
@@ -189,11 +196,11 @@ function parseCliArgs(): ParsedCliArgs {
 
     if (!token) {
         throw new Error(
-            "Missing required argument: --token <TOKEN_CA>\nUsage: node --experimental-strip-types scripts/pipeline/persist-pool-scanner.ts --token <TOKEN_CA> [--dry-run]"
+            "Missing required argument: --token <TOKEN_CA>\nUsage: node --experimental-strip-types scripts/pipeline/persist-pool-scanner.ts --token <TOKEN_CA> [--pool <POOL_ADDRESS>] [--dry-run]"
         );
     }
 
-    return { token, dryRun };
+    return { token, targetPool: targetPool ? targetPool.trim() : null, dryRun };
 }
 function getErrorMessage(err: unknown): string {
     if (err instanceof Error) return err.message;
@@ -238,7 +245,7 @@ function deepEqual(a: unknown, b: unknown): boolean {
 }
 
 async function main() {
-    const { token, dryRun } = parseCliArgs();
+    const { token, targetPool, dryRun } = parseCliArgs();
 
     const selectedScanDir = path.resolve(
         `data/discovery/pool-scanner/${token}/selected-scan`
@@ -353,6 +360,12 @@ async function main() {
         throw new Error("Validation failed: selection.json has no pools defined");
     }
 
+    if (targetPool) {
+        const hasTarget = selectedPoolsFromSelection.some(p => p.poolAddress === targetPool);
+        if (!hasTarget) {
+            throw new Error(`Validation failed: Target pool ${targetPool} not found in selection.json`);
+        }
+    }
     const completedAddressesInScanState = new Set(scanState.completedPoolAddresses ?? []);
 
     // Also check scan-state overall status if present
@@ -594,6 +607,14 @@ async function main() {
         membershipMap.set(`${m.poolAddress}::${m.wallet}`, m);
     }
 
+    // When scoped to a target pool, remove previous membership records for that pool so disappearing wallets are purged
+    if (targetPool) {
+        for (const [key, m] of membershipMap.entries()) {
+            if (m.poolAddress === targetPool) {
+                membershipMap.delete(key);
+            }
+        }
+    }
     let membershipsToAdd = 0;
     let membershipsToUpdate = 0;
 
@@ -641,6 +662,14 @@ async function main() {
         tradesMap.set(`${t.poolAddress}::${t.wallet}::${t.positionId}`, t);
     }
 
+    // When scoped to a target pool, remove previous trade records for that pool to replace with latest snapshot
+    if (targetPool) {
+        for (const [key, t] of tradesMap.entries()) {
+            if (t.poolAddress === targetPool) {
+                tradesMap.delete(key);
+            }
+        }
+    }
     let tradesToAdd = 0;
     let tradesToUpdate = 0;
 

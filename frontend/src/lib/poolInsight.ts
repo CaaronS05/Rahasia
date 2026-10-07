@@ -62,6 +62,25 @@ export interface PoolWalletTradesResponse {
   total: number;
   trades: PoolWalletTradeItem[];
 }
+export type PoolRefreshStatus = "idle" | "running" | "completed" | "failed";
+export type PoolRefreshStage =
+  | "idle"
+  | "starting"
+  | "scanning"
+  | "enriching"
+  | "trade_history"
+  | "persisting"
+  | "completed"
+  | "failed";
+
+export interface PoolRefreshStatusResponse {
+  poolAddress: string | null;
+  status: PoolRefreshStatus;
+  stage: PoolRefreshStage;
+  startedAt: string | null;
+  completedAt: string | null;
+  error: string | null;
+}
 
 export async function fetchScannedPools(): Promise<ScannedPoolsResponse> {
   const response = await fetch(`${POOL_INSIGHT_API_BASE}/api/pool-insight/pools`, {
@@ -125,6 +144,41 @@ export async function fetchPoolWalletTrades(
   );
   if (!response.ok) {
     let message = `Failed to fetch wallet trades (${response.status})`;
+    try {
+      const payload = await response.json();
+      if (payload?.error) message = payload.error;
+    } catch {}
+    throw new Error(message);
+  }
+  return response.json();
+}
+
+export async function startPoolRefresh(poolAddress: string): Promise<PoolRefreshStatusResponse> {
+  const response = await fetch(
+    `${POOL_INSIGHT_API_BASE}/api/pool-insight/pools/${encodeURIComponent(poolAddress)}/refresh`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    }
+  );
+  if (!response.ok) {
+    let message = `Failed to start pool refresh (${response.status})`;
+    try {
+      const payload = await response.json();
+      if (payload?.error) message = payload.error;
+    } catch {}
+    throw new Error(message);
+  }
+  return response.json();
+}
+
+export async function getPoolRefreshStatus(poolAddress: string): Promise<PoolRefreshStatusResponse> {
+  const response = await fetch(
+    `${POOL_INSIGHT_API_BASE}/api/pool-insight/pools/${encodeURIComponent(poolAddress)}/refresh/status`,
+    { cache: "no-store" }
+  );
+  if (!response.ok) {
+    let message = `Failed to fetch pool refresh status (${response.status})`;
     try {
       const payload = await response.json();
       if (payload?.error) message = payload.error;

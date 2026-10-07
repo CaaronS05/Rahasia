@@ -21,6 +21,7 @@ let currentChild = null;
 let lpAgentChild = null;
 let poolScannerChild = null;
 let walletIntelligenceChild = null;
+let poolRefreshChild = null;
 let runtimeTicker = null;
 const sseClients = new Set();
 
@@ -3205,9 +3206,147 @@ function safeDecodeURIComponent(value) {
 }
 
 // One shared lock covers process lifetime, stage gaps, and stopping process trees.
+let poolRefreshState = {
+    poolAddress: null,
+    status: "idle",
+    stage: "idle",
+    startedAt: null,
+    completedAt: null,
+    error: null,
+    logs: [],
+};
+
+function poolRefreshPublicState(queryPoolAddress = null) {
+    if (queryPoolAddress && poolRefreshState.poolAddress && poolRefreshState.poolAddress !== queryPoolAddress) {
+        return {
+            poolAddress: queryPoolAddress,
+            status: "idle",
+            stage: "idle",
+            startedAt: null,
+            completedAt: null,
+            error: null,
+        };
+    }
+    return {
+        poolAddress: poolRefreshState.poolAddress,
+        status: poolRefreshState.status,
+        stage: poolRefreshState.stage,
+        startedAt: poolRefreshState.startedAt,
+        completedAt: poolRefreshState.completedAt,
+        error: poolRefreshState.error,
+    };
+}
+
+function startPoolRefresh(poolAddress) {
+    assertDataPipelineAvailable();
+
+    poolRefreshState = {
+        poolAddress,
+        status: "running",
+        stage: "starting",
+        startedAt: new Date().toISOString(),
+        completedAt: null,
+        error: null,
+        logs: [],
+    };
+
+    const args = [
+        "scripts/pool/refresh-pool.mjs",
+        "--pool",
+        poolAddress,
+    ];
+
+    poolRefreshChild = spawn(
+        process.execPath,
+        args,
+        {
+            cwd: ROOT,
+            env: process.env,
+            stdio: ["ignore", "pipe", "pipe"],
+        }
+    );
+
+    let stdoutBuffer = "";
+    let stderrBuffer = "";
+
+    function consumeLocalBuffer(buffer, chunk, onLine) {
+        buffer += String(chunk);
+        const lines = buffer.split("\n");
+        const remainder = lines.pop() ?? "";
+        for (const line of lines) {
+            onLine(line);
+        }
+        return remainder;
+    }
+
+    function parseRefreshLine(line) {
+        if (line.includes("[REFRESH_POOL] STAGE scanning")) {
+            poolRefreshState.stage = "scanning";
+        } else if (line.includes("[REFRESH_POOL] STAGE enriching")) {
+            poolRefreshState.stage = "enriching";
+        } else if (line.includes("[REFRESH_POOL] STAGE trade_history")) {
+            poolRefreshState.stage = "trade_history";
+        } else if (line.includes("[REFRESH_POOL] STAGE persisting")) {
+            poolRefreshState.stage = "persisting";
+        } else if (line.includes("[REFRESH_POOL] COMPLETE")) {
+            poolRefreshState.stage = "completed";
+            poolRefreshState.status = "completed";
+            poolRefreshState.completedAt = new Date().toISOString();
+        } else if (line.includes("[REFRESH_POOL] ERROR")) {
+            poolRefreshState.error = line;
+        }
+    }
+
+    poolRefreshChild.stdout.on("data", (chunk) => {
+        stdoutBuffer = consumeLocalBuffer(stdoutBuffer, chunk, (line) => {
+            poolRefreshState.logs.push(line);
+            if (poolRefreshState.logs.length > 200) poolRefreshState.logs = poolRefreshState.logs.slice(-200);
+            parseRefreshLine(line);
+        });
+    });
+
+    poolRefreshChild.stderr.on("data", (chunk) => {
+        stderrBuffer = consumeLocalBuffer(stderrBuffer, chunk, (line) => {
+            poolRefreshState.logs.push(line);
+            if (poolRefreshState.logs.length > 200) poolRefreshState.logs = poolRefreshState.logs.slice(-200);
+            parseRefreshLine(line);
+        });
+    });
+
+    poolRefreshChild.on("error", (error) => {
+        poolRefreshChild = null;
+        poolRefreshState.status = "failed";
+        poolRefreshState.stage = "failed";
+        poolRefreshState.error = error instanceof Error ? error.message : String(error);
+        poolRefreshState.completedAt = new Date().toISOString();
+    });
+
+    poolRefreshChild.on("exit", (code, signal) => {
+        poolRefreshChild = null;
+        poolRefreshState.completedAt = new Date().toISOString();
+        scannedPoolsCache = null;
+        poolMembershipCache = null;
+        poolTradesCache = null;
+        if (code === 0) {
+            poolRefreshState.status = "completed";
+            poolRefreshState.stage = "completed";
+            poolRefreshState.error = null;
+        } else {
+            poolRefreshState.status = "failed";
+            poolRefreshState.stage = "failed";
+            if (!poolRefreshState.error) {
+                poolRefreshState.error = `Pool refresh failed with exit code ${code}${signal ? ` (signal ${signal})` : ""}`;
+            }
+        }
+    });
+
+    return poolRefreshPublicState();
+}
+
+// One shared lock covers process lifetime, stage gaps, and stopping process trees.
 function dataPipelineBusy() {
-    return Boolean(currentChild || lpAgentChild || poolScannerChild || walletIntelligenceChild) ||
-        [state, lpAgentState, poolScannerState, walletIntelligenceState]
+    return Boolean(currentChild || lpAgentChild || poolScannerChild || walletIntelligenceChild || poolRefreshChild) ||
+        [state, lpAgentState, poolScannerState, walletIntelligenceState, poolRefreshState]
             .some((value) => value.status === "running" || value.status === "stopping");
 }
 
@@ -3621,7 +3760,80 @@ const server = http.createServer(async (request, response) => {
     // ------------------------------------------------------
     // GET /api/pool-insight/pools/:poolAddress
     // ------------------------------------------------------
+    // ------------------------------------------------------
+    // POST /api/pool-insight/pools/:poolAddress/refresh
+    // ------------------------------------------------------
 
+    if (request.method === "POST") {
+        const matchRefresh = url.pathname.match(
+            /^\/api\/pool-insight\/pools\/([^/]+)\/refresh\/?$/
+        );
+
+        if (matchRefresh) {
+            const poolAddress = safeDecodeURIComponent(matchRefresh[1]);
+
+            if (!poolAddress || !poolAddress.trim()) {
+                json(request, response, 400, { error: "Invalid pool address" });
+                return;
+            }
+
+            let scannedData;
+            try {
+                scannedData = loadScannedPools();
+            } catch (err) {
+                json(request, response, 500, { error: "Failed to read scanned pools data" });
+                return;
+            }
+
+            const pools = Array.isArray(scannedData?.pools) ? scannedData.pools : [];
+            const canonicalPool = pools.find((p) => p?.poolAddress === poolAddress);
+            if (!canonicalPool) {
+                json(request, response, 404, { error: `Pool ${poolAddress} not found in canonical registry` });
+                return;
+            }
+
+            if (rejectBusyDataPipeline(request, response)) {
+                return;
+            }
+
+            try {
+                const jobState = startPoolRefresh(poolAddress);
+                json(request, response, 202, jobState);
+            } catch (err) {
+                json(request, response, 500, {
+                    error: err instanceof Error ? err.message : String(err),
+                });
+            }
+
+            return;
+        }
+    }
+
+    // ------------------------------------------------------
+    // GET /api/pool-insight/pools/:poolAddress/refresh/status
+    // ------------------------------------------------------
+
+    if (request.method === "GET") {
+        const matchRefreshStatus = url.pathname.match(
+            /^\/api\/pool-insight\/pools\/([^/]+)\/refresh\/status\/?$/
+        );
+
+        if (matchRefreshStatus) {
+            const poolAddress = safeDecodeURIComponent(matchRefreshStatus[1]);
+
+            if (!poolAddress || !poolAddress.trim()) {
+                json(request, response, 400, { error: "Invalid pool address" });
+                return;
+            }
+
+            json(request, response, 200, poolRefreshPublicState(poolAddress));
+            return;
+        }
+    }
+
+    // ------------------------------------------------------
+    // GET /api/pool-insight/pools/:poolAddress
+    // ------------------------------------------------------
     if (request.method === "GET") {
         const matchPoolDetail = url.pathname.match(
             /^\/api\/pool-insight\/pools\/([^/]+)\/?$/

@@ -154,6 +154,7 @@ function parseCliArgs() {
   let targetWallet: string | null = null;
   let limit: number | null = null;
   let workers = 2;
+  let refresh = false;
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -175,6 +176,8 @@ function parseCliArgs() {
         workers = Math.min(20, Math.max(1, parsed));
       }
       i++;
+    } else if (arg === "--refresh") {
+      refresh = true;
     }
   }
 
@@ -182,11 +185,11 @@ function parseCliArgs() {
     tokenCA = process.env.TOKEN_CA.trim();
   }
 
-  return { tokenCA, targetWallet, limit, workers };
+  return { tokenCA, targetWallet, limit, workers, refresh };
 }
 
 async function main() {
-  const { tokenCA, targetWallet, limit, workers } = parseCliArgs();
+  const { tokenCA, targetWallet, limit, workers, refresh } = parseCliArgs();
 
   if (!tokenCA) {
     throw new Error("Token CA is required. Use --token <TOKEN_CA>");
@@ -312,6 +315,7 @@ async function main() {
   console.log(`Workers:               ${workers}`);
   if (requestedWallet) console.log(`Requested Wallet:      ${requestedWallet}`);
   if (limitValue !== null) console.log(`Limit:                 ${limitValue}`);
+  if (refresh) console.log(`Refresh Mode:          ENABLED (bypassing per-wallet checkpoints)`);
   console.log(`Checkpoints:           ${checkpointDir}`);
   console.log(`======================================\n`);
 
@@ -340,31 +344,33 @@ async function main() {
     const checkpointFile = path.join(checkpointDir, `${wallet}.json`);
     const poolAddresses = Array.from(walletToPoolsMap.get(wallet) || []).sort();
 
-    // 1. Try reading existing completed checkpoint
-    try {
-      const raw = await fs.readFile(checkpointFile, "utf8");
-      const cp: WalletCheckpoint = JSON.parse(raw);
-      if (
-        cp?.version === "v1" &&
-        cp?.selectionFingerprint === selectionFingerprint &&
-        cp?.wallet === wallet &&
-        cp?.status === "completed" &&
-        Array.isArray(cp?.pools)
-      ) {
-        walletResults.set(wallet, cp);
-        completedWallets++;
-        const tradesInCp = cp.pools.reduce((acc, p) => acc + (p.trades?.length || 0), 0);
-        totalTradesCount += tradesInCp;
-        console.log(
-          `[W${index}/${total}] [CHECKPOINT] ${wallet} (${tradesInCp} trades in ${cp.pools.length} pools)`
-        );
-        console.log(
-          `[TRADE_HISTORY] PROGRESS completed=${completedWallets} total=${total} failed=${failedWallets} trades=${totalTradesCount}`
-        );
-        return;
+    // 1. Try reading existing completed checkpoint (only if not refreshing)
+    if (!refresh) {
+      try {
+        const raw = await fs.readFile(checkpointFile, "utf8");
+        const cp: WalletCheckpoint = JSON.parse(raw);
+        if (
+          cp?.version === "v1" &&
+          cp?.selectionFingerprint === selectionFingerprint &&
+          cp?.wallet === wallet &&
+          cp?.status === "completed" &&
+          Array.isArray(cp?.pools)
+        ) {
+          walletResults.set(wallet, cp);
+          completedWallets++;
+          const tradesInCp = cp.pools.reduce((acc, p) => acc + (p.trades?.length || 0), 0);
+          totalTradesCount += tradesInCp;
+          console.log(
+            `[W${index}/${total}] [CHECKPOINT] ${wallet} (${tradesInCp} trades in ${cp.pools.length} pools)`
+          );
+          console.log(
+            `[TRADE_HISTORY] PROGRESS completed=${completedWallets} total=${total} failed=${failedWallets} trades=${totalTradesCount}`
+          );
+          return;
+        }
+      } catch {
+        // no valid checkpoint yet, proceed to fetch
       }
-    } catch {
-      // no valid checkpoint yet, proceed to fetch
     }
 
     // 2. Query Fabriq for this wallet scoped to associated pools

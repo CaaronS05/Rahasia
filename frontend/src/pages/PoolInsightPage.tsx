@@ -16,7 +16,10 @@ import {
   fetchPoolWallets,
   fetchPoolWalletTrades,
   fetchScannedPools,
+  startPoolRefresh,
+  getPoolRefreshStatus,
   type PoolDetailResponse,
+  type PoolRefreshStage,
   type PoolWalletItem,
   type PoolWalletSortKey,
   type PoolWalletTradeItem,
@@ -38,6 +41,19 @@ function formatTimestamp(iso: string | null | undefined): string {
     hour: "2-digit",
     minute: "2-digit",
   }).format(new Date(iso));
+}
+
+function getRefreshStageLabel(stage: PoolRefreshStage | null): string {
+  switch (stage) {
+    case "starting": return "Starting refresh…";
+    case "scanning": return "Scanning LP wallets…";
+    case "enriching": return "Refreshing Fabriq…";
+    case "trade_history": return "Building trade history…";
+    case "persisting": return "Persisting snapshot…";
+    case "completed": return "Updated";
+    case "failed": return "Refresh failed";
+    default: return "Refreshing Pool…";
+  }
 }
 
 function formatUsd(val: number): string {
@@ -131,12 +147,22 @@ export function PoolInsightPage() {
   const [loadingTrades, setLoadingTrades] = useState(false);
   const [tradesError, setTradesError] = useState<string | null>(null);
 
-  // Reset drilldown whenever selected pool changes or is deselected
+  // Refresh Pool state
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [refreshStage, setRefreshStage] = useState<PoolRefreshStage | null>(null);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
+  const [refreshSuccess, setRefreshSuccess] = useState(false);
+
+  // Reset drilldown and refresh state whenever selected pool changes or is deselected
   useEffect(() => {
     setSelectedWalletForTrades(null);
     setWalletTrades([]);
     setTradesError(null);
     setLoadingTrades(false);
+    setIsRefreshing(false);
+    setRefreshStage(null);
+    setRefreshError(null);
+    setRefreshSuccess(false);
   }, [selectedPoolAddress]);
 
   // Load trades for selected pool + wallet with stale-response protection
@@ -264,6 +290,67 @@ export function PoolInsightPage() {
     }
   };
 
+  // Status polling for active pool refresh with stale-response protection
+  useEffect(() => {
+    if (!isRefreshing || !selectedPoolAddress) return;
+
+    const currentTargetPool = selectedPoolAddress;
+    let active = true;
+
+    const interval = setInterval(async () => {
+      try {
+        const status = await getPoolRefreshStatus(currentTargetPool);
+        if (!active || selectedPoolAddress !== currentTargetPool) return;
+
+        setRefreshStage(status.stage);
+
+        if (status.status === "completed") {
+          setIsRefreshing(false);
+          setRefreshSuccess(true);
+          setTimeout(() => {
+            if (active) setRefreshSuccess(false);
+          }, 3000);
+
+          // Refetch fresh canonical pool data
+          loadDetail(currentTargetPool);
+          loadWallets(currentTargetPool, sortKey, sortDir);
+          loadPools();
+
+          // Reset open trade drilldown so stale detail is not shown
+          setSelectedWalletForTrades(null);
+          setWalletTrades([]);
+        } else if (status.status === "failed") {
+          setIsRefreshing(false);
+          setRefreshError(status.error || "Pool refresh failed");
+        }
+      } catch (err) {
+        if (!active) return;
+        console.warn("Refresh status poll error:", err);
+      }
+    }, 1500);
+
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
+  }, [isRefreshing, selectedPoolAddress, loadDetail, loadWallets, loadPools, sortKey, sortDir]);
+
+  const handleRefreshPool = async () => {
+    if (!selectedPoolAddress || isRefreshing) return;
+    setIsRefreshing(true);
+    setRefreshStage("starting");
+    setRefreshError(null);
+    setRefreshSuccess(false);
+
+    try {
+      await startPoolRefresh(selectedPoolAddress);
+    } catch (err) {
+      setIsRefreshing(false);
+      setRefreshStage(null);
+      setRefreshError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
   return (
     <div className="pool-insight-page">
       <header className="pool-insight-header">
@@ -284,36 +371,61 @@ export function PoolInsightPage() {
             onClick={() => setSubnav("intelligence")}
             type="button"
           >
-            Pool Intelligence <span className="subnav-badge">Coming Soon</span>
+            Pool Intelligence
           </button>
         </nav>
       </header>
 
       {subnav === "intelligence" ? (
-        <section className="pool-insight-placeholder" aria-label="Pool Intelligence placeholder">
-          <div className="pool-insight-placeholder-icon">
-            <Sparkles size={20} />
-          </div>
-          <span className="placeholder-badge">COMING SOON</span>
-          <h3>Pool Intelligence</h3>
-          <p>
-            In-depth pool-level intelligence, LP behavioral analytics, and cohort modeling
-            are currently under development. Detailed pool intelligence will be available in
-            an upcoming release.
-          </p>
-        </section>
-      ) : selectedPoolAddress ? (
-        /* VIEW 2: SELECTED POOL DETAIL & WALLETS */
-        <div className="pool-detail-view">
-          <div className="pool-detail-nav">
+        !selectedPoolAddress ? (
+          /* POOL INTELLIGENCE: EMPTY STATE WHEN NO POOL SELECTED */
+          <section className="pool-insight-empty-state" aria-label="No Pool Selected">
+            <div className="pool-insight-placeholder-icon">
+              <Layers3 size={20} />
+            </div>
+            <h3>No Pool Selected</h3>
+            <p>
+              Select a pool from the Pool Explorer to view detailed pool metadata, active wallets,
+              closed trade history, and real-time refresh options.
+            </p>
             <button
               className="secondary-button"
-              onClick={() => setSelectedPoolAddress(null)}
+              onClick={() => setSubnav("explorer")}
               type="button"
             >
-              <ArrowLeft size={13} /> Back to Pools
+              <ArrowLeft size={13} /> Go to Pool Explorer
             </button>
-          </div>
+          </section>
+        ) : (
+          /* POOL INTELLIGENCE: SELECTED POOL WORKSPACE */
+          <div className="pool-detail-view">
+            <div className="pool-detail-nav">
+              <button
+                className="secondary-button"
+                onClick={() => {
+                  setSubnav("explorer");
+                  setSelectedPoolAddress(null);
+                }}
+                type="button"
+              >
+                <ArrowLeft size={13} /> Back to Pool Explorer
+              </button>
+            </div>
+
+            {refreshError && (
+              <div className="state-card error" style={{ marginBottom: 16 }} role="alert">
+                <AlertCircle size={15} style={{ marginRight: 8, verticalAlign: "middle" }} />
+                <span>{refreshError}</span>
+                <button
+                  type="button"
+                  onClick={() => setRefreshError(null)}
+                  style={{ marginLeft: "auto", background: "transparent", border: 0, color: "inherit", cursor: "pointer" }}
+                  title="Dismiss"
+                >
+                  <X size={13} />
+                </button>
+              </div>
+            )}
 
           {loadingDetail ? (
             <div className="state-card">
@@ -332,6 +444,22 @@ export function PoolInsightPage() {
                   <h3>{poolDetail.pair}</h3>
                   <span className="pool-detail-badge">DLMM</span>
                 </div>
+                <button
+                  className={`refresh-pool-btn ${isRefreshing ? "refreshing" : ""} ${refreshSuccess ? "success" : ""}`}
+                  onClick={handleRefreshPool}
+                  disabled={isRefreshing}
+                  type="button"
+                  title={isRefreshing ? getRefreshStageLabel(refreshStage) : "Refresh pool data from source"}
+                >
+                  <RefreshCw size={12} className={isRefreshing ? "spin" : ""} />
+                  <span>
+                    {isRefreshing
+                      ? getRefreshStageLabel(refreshStage)
+                      : refreshSuccess
+                      ? "Updated"
+                      : "Refresh Pool Data"}
+                  </span>
+                </button>
               </div>
               <dl className="pool-detail-grid">
                 <div className="pool-detail-item">
@@ -510,8 +638,8 @@ export function PoolInsightPage() {
             )}
           </section>
         </div>
-      ) : (
-        /* VIEW 1: SCANNED POOLS */
+      )) : (
+        /* POOL EXPLORER: SCANNED POOLS LIST ONLY */
         <section className="pool-insight-table-card" aria-label="Scanned Pools">
           <div className="pool-insight-table-toolbar">
             <div className="pool-insight-table-toolbar-left">
@@ -561,8 +689,11 @@ export function PoolInsightPage() {
                     <tr
                       key={pool.poolAddress}
                       className="clickable-row"
-                      onClick={() => setSelectedPoolAddress(pool.poolAddress)}
-                      title={`Select ${pool.pair} pool`}
+                      onClick={() => {
+                        setSelectedPoolAddress(pool.poolAddress);
+                        setSubnav("intelligence");
+                      }}
+                      title={`Open ${pool.pair} intelligence`}
                     >
                       <td>
                         <span className="cell-pair">{pool.pair}</span>
