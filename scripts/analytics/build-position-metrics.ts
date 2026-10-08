@@ -128,13 +128,16 @@ function parseCliArgs(): {
     period: AnalyticsPeriod;
     force: boolean;
     dryRun: boolean;
+    positionsBaseDir?: string;
+    metricsBaseDir?: string;
 } {
     const args = process.argv.slice(2);
     let wallet: string | null = null;
     let period: AnalyticsPeriod = "30D";
     let force = false;
     let dryRun = false;
-
+    let positionsBaseDir: string | undefined = undefined;
+    let metricsBaseDir: string | undefined = undefined;
     for (let i = 0; i < args.length; i++) {
         const arg = args[i];
         if (arg === "--wallet" && args[i + 1]) {
@@ -151,19 +154,29 @@ function parseCliArgs(): {
             force = true;
         } else if (arg === "--dry-run") {
             dryRun = true;
+        } else if (arg === "--positions-base-dir" && args[i + 1]) {
+            positionsBaseDir = args[i + 1].trim();
+            i++;
+        } else if (arg.startsWith("--positions-base-dir=")) {
+            positionsBaseDir = arg.slice(21).trim();
+        } else if (arg === "--metrics-base-dir" && args[i + 1]) {
+            metricsBaseDir = args[i + 1].trim();
+            i++;
+        } else if (arg.startsWith("--metrics-base-dir=")) {
+            metricsBaseDir = arg.slice(19).trim();
         }
     }
 
-    return { wallet, period, force, dryRun };
+    return { wallet, period, force, dryRun, positionsBaseDir, metricsBaseDir };
 }
 
 // CLI Execution Entrypoint
 const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
 if (isMain) {
-    const { wallet, period, force, dryRun } = parseCliArgs();
+    const { wallet, period, force, dryRun, positionsBaseDir, metricsBaseDir } = parseCliArgs();
 
     if (!wallet) {
-        console.error("Usage: node --experimental-strip-types scripts/analytics/build-position-metrics.ts --wallet <ADDRESS> [--period <30D|90D|ALL_AVAILABLE>] [--force] [--dry-run]");
+        console.error("Usage: node --experimental-strip-types scripts/analytics/build-position-metrics.ts --wallet <ADDRESS> [--period <30D|90D|ALL_AVAILABLE>] [--force] [--dry-run] [--positions-base-dir <DIR>] [--metrics-base-dir <DIR>]");
         process.exit(1);
     }
 
@@ -172,6 +185,8 @@ if (isMain) {
         period,
         force,
         dryRun,
+        positionsBaseDir,
+        metricsBaseDir,
     })
         .then((res) => {
             if (!res.success) {

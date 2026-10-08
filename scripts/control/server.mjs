@@ -4671,6 +4671,25 @@ function isValidAnalyticsPeriod(period) {
     return period === "30D" || period === "90D" || period === "ALL_AVAILABLE";
 }
 
+const ANALYTICS_STAGING_ROOT = path.join(ROOT, "data/analytics/.staging");
+try {
+    if (fs.existsSync(ANALYTICS_STAGING_ROOT)) {
+        fs.rmSync(ANALYTICS_STAGING_ROOT, { recursive: true, force: true });
+    }
+} catch {
+    // Ignore startup cleanup error
+}
+
+function atomicWriteJsonFile(filePath, data) {
+    const dir = path.dirname(filePath);
+    if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+    }
+    const tempPath = `${filePath}.tmp.${Date.now()}.${Math.random().toString(36).slice(2, 8)}`;
+    fs.writeFileSync(tempPath, JSON.stringify(data, null, 2) + "\n", "utf8");
+    fs.renameSync(tempPath, filePath);
+}
+
 function getPositionDatasetPath(wallet, period) {
     return path.join(ROOT, "data/analytics/positions", wallet, `${period}.json`);
 }
@@ -4808,6 +4827,19 @@ function startPositionAnalytics(address, period = "30D", force = false) {
         wallet: norm,
         stage: initialStage,
     });
+    const stagingBaseDir = path.join(ROOT, "data/analytics/.staging", `${norm}-${period}-${runId}`);
+    const stagingPositionsDir = path.join(stagingBaseDir, "positions");
+    const stagingMetricsDir = path.join(stagingBaseDir, "metrics");
+
+    function cleanupStaging() {
+        try {
+            if (fs.existsSync(stagingBaseDir)) {
+                fs.rmSync(stagingBaseDir, { recursive: true, force: true });
+            }
+        } catch {
+            // Ignore staging cleanup error
+        }
+    }
 
     positionAnalyticsState = {
         status: "running",
@@ -4849,6 +4881,22 @@ function startPositionAnalytics(address, period = "30D", force = false) {
             ...(force ? ["--force"] : []),
         ];
 
+        if (stageType === "dataset") {
+            scriptArgs.push("--storage-base-dir", stagingPositionsDir);
+        } else {
+            if (skipDataset) {
+                scriptArgs.push(
+                    "--positions-base-dir", path.join(ROOT, "data/analytics/positions"),
+                    "--metrics-base-dir", stagingMetricsDir
+                );
+            } else {
+                scriptArgs.push(
+                    "--positions-base-dir", stagingPositionsDir,
+                    "--metrics-base-dir", stagingMetricsDir
+                );
+            }
+        }
+
         const child = spawn(
             process.execPath,
             scriptArgs,
@@ -4869,6 +4917,7 @@ function startPositionAnalytics(address, period = "30D", force = false) {
             stageType,
             isStopping: false,
             abortNextStage: false,
+            stagingBaseDir,
         };
 
         let stdoutBuffer = "";
@@ -4911,6 +4960,7 @@ function startPositionAnalytics(address, period = "30D", force = false) {
         });
 
         child.on("error", (err) => {
+            cleanupStaging();
             const finishedAt = new Date().toISOString();
             const cleanErr = stripAnsi(err.message);
             activityLogger.log({
@@ -4965,6 +5015,7 @@ function startPositionAnalytics(address, period = "30D", force = false) {
             );
 
             if (wasStopping) {
+                cleanupStaging();
                 const finishedAt = new Date().toISOString();
                 positionAnalyticsState.status = "stopped";
                 positionAnalyticsState.stage = "stopped";
@@ -4982,6 +5033,7 @@ function startPositionAnalytics(address, period = "30D", force = false) {
             }
 
             if (code !== 0) {
+                cleanupStaging();
                 const finishedAt = new Date().toISOString();
                 const cleanErr = extractCleanErrorMessage(stderrBuffer, stdoutBuffer) || `${stageType} stage failed (exit ${code})`;
                 positionAnalyticsState.status = "error";
@@ -5003,6 +5055,7 @@ function startPositionAnalytics(address, period = "30D", force = false) {
             // Successful exit of this stage!
             if (stageType === "dataset") {
                 if (activePositionAnalyticsChild?.abortNextStage) {
+                    cleanupStaging();
                     const finishedAt = new Date().toISOString();
                     positionAnalyticsState.status = "stopped";
                     positionAnalyticsState.stage = "stopped";
@@ -5013,6 +5066,28 @@ function startPositionAnalytics(address, period = "30D", force = false) {
                         status: "stopped",
                         stage: "stopped",
                         error: null,
+                    });
+                    activePositionAnalyticsChild = null;
+                    return;
+                }
+
+                // Verify staged dataset artifact exists before proceeding to stage 2
+                const stagedPosPath = path.join(stagingPositionsDir, norm, `${period}.json`);
+                if (!fs.existsSync(stagedPosPath)) {
+                    cleanupStaging();
+                    const finishedAt = new Date().toISOString();
+                    const cleanErr = "Step 1 completed but staged dataset artifact was not found.";
+                    positionAnalyticsState.status = "error";
+                    positionAnalyticsState.stage = "error";
+                    positionAnalyticsState.stageDetails = "dataset failed";
+                    positionAnalyticsState.error = cleanErr;
+                    positionAnalyticsState.finishedAt = finishedAt;
+                    positionAnalyticsStates.set(key, { ...positionAnalyticsState });
+                    activityLogger.finishRun(runId, {
+                        status: "error",
+                        stage: "error",
+                        error: cleanErr,
+                        exitCode: 1,
                     });
                     activePositionAnalyticsChild = null;
                     return;
@@ -5034,6 +5109,48 @@ function startPositionAnalytics(address, period = "30D", force = false) {
                 spawnStage("metrics");
                 return;
             }
+
+            // Metrics stage finished successfully. Atomically promote staged artifacts!
+            try {
+                if (skipDataset) {
+                    const stagedMetPath = path.join(stagingMetricsDir, norm, `${period}.json`);
+                    if (!fs.existsSync(stagedMetPath)) {
+                        throw new Error("Staged metrics artifact not found for promotion");
+                    }
+                    const metData = JSON.parse(fs.readFileSync(stagedMetPath, "utf8"));
+                    atomicWriteJsonFile(getPositionMetricsPath(norm, period), metData);
+                } else {
+                    const stagedPosPath = path.join(stagingPositionsDir, norm, `${period}.json`);
+                    const stagedMetPath = path.join(stagingMetricsDir, norm, `${period}.json`);
+                    if (!fs.existsSync(stagedPosPath) || !fs.existsSync(stagedMetPath)) {
+                        throw new Error("Missing staged dataset or metrics artifact for promotion");
+                    }
+                    const posData = JSON.parse(fs.readFileSync(stagedPosPath, "utf8"));
+                    const metData = JSON.parse(fs.readFileSync(stagedMetPath, "utf8"));
+                    atomicWriteJsonFile(getPositionDatasetPath(norm, period), posData);
+                    atomicWriteJsonFile(getPositionMetricsPath(norm, period), metData);
+                }
+            } catch (promoteErr) {
+                cleanupStaging();
+                const finishedAt = new Date().toISOString();
+                const cleanErr = `Promotion error: ${promoteErr.message}`;
+                positionAnalyticsState.status = "error";
+                positionAnalyticsState.stage = "error";
+                positionAnalyticsState.stageDetails = "promotion failed";
+                positionAnalyticsState.error = cleanErr;
+                positionAnalyticsState.finishedAt = finishedAt;
+                positionAnalyticsStates.set(key, { ...positionAnalyticsState });
+                activityLogger.finishRun(runId, {
+                    status: "error",
+                    stage: "error",
+                    error: cleanErr,
+                    exitCode: 1,
+                });
+                activePositionAnalyticsChild = null;
+                return;
+            }
+
+            cleanupStaging();
 
             // Metrics stage finished successfully
             const finishedAt = new Date().toISOString();
@@ -5290,6 +5407,7 @@ const server = http.createServer(async (request, response) => {
                 sampling: content.sampling,
                 dataQuality: content.dataQuality,
                 timeframe: content.timeframe,
+                fetchedAt: content.fetchedAt || null,
             });
         } catch {
             json(request, response, 404, { error: "Positions dataset not found for this wallet and period" });
@@ -5301,6 +5419,7 @@ const server = http.createServer(async (request, response) => {
         const wallet = url.searchParams.get("wallet");
         const period = url.searchParams.get("period") || "30D";
         const positionId = url.searchParams.get("positionId");
+        const poolAddress = url.searchParams.get("poolAddress");
         if (!isValidSolanaAddress(wallet)) {
             json(request, response, 400, { error: "Invalid Solana wallet address" });
             return;
@@ -5317,7 +5436,12 @@ const server = http.createServer(async (request, response) => {
         try {
             const content = JSON.parse(await fs.promises.readFile(datasetPath, "utf8"));
             const rawPositions = Array.isArray(content?.positions) ? content.positions : [];
-            const pos = rawPositions.find((p) => p.positionId === positionId);
+            const pos = rawPositions.find((p) => {
+                if (poolAddress) {
+                    return p.positionId === positionId && p.poolAddress === poolAddress;
+                }
+                return p.positionId === positionId;
+            });
             if (!pos) {
                 json(request, response, 404, { error: "Position not found in dataset" });
                 return;

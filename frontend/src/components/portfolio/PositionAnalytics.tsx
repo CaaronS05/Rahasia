@@ -120,15 +120,17 @@ export function PositionAnalytics({ walletAddress }: Props) {
   const [sortAsc, setSortAsc] = useState(false);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
-  const [expandedPositionId, setExpandedPositionId] = useState<string | null>(null);
+  const [expandedPositionKey, setExpandedPositionKey] = useState<string | null>(null);
   const [positionDetails, setPositionDetails] = useState<Record<string, FullPositionDetail>>({});
-  const [loadingDetailId, setLoadingDetailId] = useState<string | null>(null);
+  const [loadingDetailKey, setLoadingDetailKey] = useState<string | null>(null);
 
   const activeWalletRef = useRef(walletAddress);
   const activePeriodRef = useRef(period);
+  const currentDatasetVersionRef = useRef<string | null>(null);
   activeWalletRef.current = walletAddress;
   activePeriodRef.current = period;
 
+  const getPositionKey = (poolAddress: string, positionId: string) => `${poolAddress}:${positionId}`;
   const copyToClipboard = (key: string, text: string) => {
     navigator.clipboard.writeText(text);
     setCopiedKey(key);
@@ -148,6 +150,12 @@ export function PositionAnalytics({ walletAddress }: Props) {
       ]);
 
       if (activeWalletRef.current === wallet && activePeriodRef.current === p) {
+        const newVersion = pos?.fetchedAt || st?.lastAnalyzedAt || null;
+        if (currentDatasetVersionRef.current !== null && currentDatasetVersionRef.current !== newVersion) {
+          setPositionDetails({});
+          setExpandedPositionKey(null);
+        }
+        currentDatasetVersionRef.current = newVersion;
         setStatus(st);
         setMetrics(m);
         setPositionsData(pos);
@@ -166,8 +174,10 @@ export function PositionAnalytics({ walletAddress }: Props) {
   // Timeframe or Wallet change
   useEffect(() => {
     setPage(1);
-    setExpandedPositionId(null);
+    setExpandedPositionKey(null);
     setExpandedPairs(new Set());
+    setPositionDetails({});
+    currentDatasetVersionRef.current = null;
     loadData(walletAddress, period);
   }, [walletAddress, period, loadData]);
 
@@ -230,29 +240,46 @@ export function PositionAnalytics({ walletAddress }: Props) {
     window.open(logsUrl, "_blank");
   };
 
-  // Expand position detail on demand
-  const handleToggleExpandPosition = async (posId: string) => {
-    if (expandedPositionId === posId) {
-      setExpandedPositionId(null);
+  // Expand position detail on demand using poolAddress + positionId composite identity
+  const handleToggleExpandPosition = async (pos: CompactPositionRecord) => {
+    const posKey = getPositionKey(pos.poolAddress, pos.positionId);
+    if (expandedPositionKey === posKey) {
+      setExpandedPositionKey(null);
       return;
     }
 
-    setExpandedPositionId(posId);
-    if (!positionDetails[posId]) {
-      setLoadingDetailId(posId);
+    setExpandedPositionKey(posKey);
+    if (!positionDetails[posKey]) {
+      setLoadingDetailKey(posKey);
+      const reqWallet = walletAddress;
+      const reqPeriod = period;
+      const reqVersion = currentDatasetVersionRef.current;
       try {
-        const detail = await getPositionDetail(walletAddress, period, posId);
+        const detail = await getPositionDetail(reqWallet, reqPeriod, pos.positionId, pos.poolAddress);
+        // Prevent stale asynchronous responses from updating another wallet/period's view
+        if (
+          activeWalletRef.current !== reqWallet ||
+          activePeriodRef.current !== reqPeriod ||
+          currentDatasetVersionRef.current !== reqVersion
+        ) {
+          return;
+        }
         if (detail) {
-          setPositionDetails((prev) => ({ ...prev, [posId]: detail }));
+          setPositionDetails((prev) => ({ ...prev, [posKey]: detail }));
         }
       } catch {
         // Fall back to compact row
       } finally {
-        setLoadingDetailId(null);
+        if (
+          activeWalletRef.current === reqWallet &&
+          activePeriodRef.current === reqPeriod &&
+          currentDatasetVersionRef.current === reqVersion
+        ) {
+          setLoadingDetailKey((prev) => (prev === posKey ? null : prev));
+        }
       }
     }
   };
-
   // Toggle pair breakdown expand
   const handleTogglePair = (pairKey: string) => {
     setExpandedPairs((prev) => {
@@ -1307,14 +1334,15 @@ export function PositionAnalytics({ walletAddress }: Props) {
                   <tbody>
                     {paginatedPositions.length > 0 ? (
                       paginatedPositions.map((pos) => {
-                        const isExpanded = expandedPositionId === pos.positionId;
-                        const detail = positionDetails[pos.positionId];
-                        const isLoadingDetail = loadingDetailId === pos.positionId;
+                        const posKey = getPositionKey(pos.poolAddress, pos.positionId);
+                        const isExpanded = expandedPositionKey === posKey;
+                        const detail = positionDetails[posKey];
+                        const isLoadingDetail = loadingDetailKey === posKey;
 
                         return (
-                          <div key={pos.positionId} style={{ display: "contents" }}>
+                          <div key={posKey} style={{ display: "contents" }}>
                             <tr
-                              onClick={() => handleToggleExpandPosition(pos.positionId)}
+                              onClick={() => handleToggleExpandPosition(pos)}
                               style={{ cursor: "pointer" }}
                               className={isExpanded ? "expanded-row" : ""}
                             >

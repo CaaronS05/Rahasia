@@ -133,6 +133,7 @@ export interface PositionsResponse {
   sampling: PositionSamplingMeta;
   dataQuality: OverallDataQualitySummary;
   timeframe: TimeframeMeta;
+  fetchedAt?: string | null;
 }
 
 export interface DistributionBucket {
@@ -375,9 +376,18 @@ export async function getPositions(
 export async function getPositionDetail(
   wallet: string,
   period: AnalyticsPeriod,
-  positionId: string
+  positionId: string,
+  poolAddress?: string
 ): Promise<FullPositionDetail | null> {
-  const url = `${API_BASE}/api/position-analytics/position-detail?wallet=${encodeURIComponent(wallet)}&period=${encodeURIComponent(period)}&positionId=${encodeURIComponent(positionId)}`;
+  const params = new URLSearchParams({
+    wallet,
+    period,
+    positionId,
+  });
+  if (poolAddress) {
+    params.set("poolAddress", poolAddress);
+  }
+  const url = `${API_BASE}/api/position-analytics/position-detail?${params.toString()}`;
   const res = await fetch(url, { cache: "no-store" });
   if (res.status === 404) return null;
   const data = await res.json();

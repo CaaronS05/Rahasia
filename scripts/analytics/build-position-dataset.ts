@@ -215,13 +215,14 @@ function parseCliArgs(): {
     period: AnalyticsPeriod;
     force: boolean;
     dryRun: boolean;
+    storageBaseDir?: string;
 } {
     const args = process.argv.slice(2);
     let wallet: string | null = null;
     let period: AnalyticsPeriod = "30D";
     let force = false;
     let dryRun = false;
-
+    let storageBaseDir: string | undefined = undefined;
     for (let i = 0; i < args.length; i++) {
         const arg = args[i];
         if (arg === "--wallet" && args[i + 1]) {
@@ -238,19 +239,23 @@ function parseCliArgs(): {
             force = true;
         } else if (arg === "--dry-run") {
             dryRun = true;
+        } else if (arg === "--storage-base-dir" && args[i + 1]) {
+            storageBaseDir = args[i + 1].trim();
+            i++;
+        } else if (arg.startsWith("--storage-base-dir=")) {
+            storageBaseDir = arg.slice(19).trim();
         }
     }
-
-    return { wallet, period, force, dryRun };
+    return { wallet, period, force, dryRun, storageBaseDir };
 }
 
 // CLI Execution Entrypoint
 const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
 if (isMain) {
-    const { wallet, period, force, dryRun } = parseCliArgs();
+    const { wallet, period, force, dryRun, storageBaseDir } = parseCliArgs();
 
     if (!wallet) {
-        console.error("Usage: node --experimental-strip-types scripts/analytics/build-position-dataset.ts --wallet <ADDRESS> [--period <30D|90D|ALL_AVAILABLE>] [--force] [--dry-run]");
+        console.error("Usage: node --experimental-strip-types scripts/analytics/build-position-dataset.ts --wallet <ADDRESS> [--period <30D|90D|ALL_AVAILABLE>] [--force] [--dry-run] [--storage-base-dir <DIR>]");
         process.exit(1);
     }
 
@@ -259,6 +264,7 @@ if (isMain) {
         period,
         force,
         dryRun,
+        storageBaseDir,
     })
         .then((res) => {
             if (!res.success) {
