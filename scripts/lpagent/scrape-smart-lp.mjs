@@ -1,4 +1,6 @@
 import fs from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 import { chromium } from "playwright-core";
 
@@ -9,34 +11,168 @@ import { chromium } from "playwright-core";
 const CDP_URL = "http://127.0.0.1:9222";
 const API_MATCH = "/api/v1/smart-lp";
 
-const OUTPUT = new URL(
-    "../../data/raw/lpagent/smart-lp-latest.json",
-    import.meta.url
+function resolvePath(envVar, defaultRelativeUrl) {
+    if (process.env[envVar]) {
+        return path.resolve(process.cwd(), process.env[envVar]);
+    }
+    return fileURLToPath(new URL(defaultRelativeUrl, import.meta.url));
+}
+
+const OUTPUT_PATH = resolvePath(
+    "LPAGENT_OUTPUT_PATH",
+    "../../data/raw/lpagent/smart-lp-latest.json"
 );
 
-const CHECKPOINT = new URL(
-    "../../data/checkpoints/lpagent.jsonl",
-    import.meta.url
+const CHECKPOINT_PATH = resolvePath(
+    "LPAGENT_CHECKPOINT_PATH",
+    "../../data/checkpoints/lpagent.jsonl"
 );
-
-// Sebelumnya request terlalu rapat.
-// Sekarang sekitar 1.5 - 2 detik antar page.
-const PAGE_DELAY_MS = 1500;
-const JITTER_MS = 500;
-
-const MAX_RETRIES = 5;
 
 const CONCURRENCY =
     Math.max(
         1,
         parseInt(
             process.env.LPAGENT_CONCURRENCY ??
-            "3",
+            "8",
             10
-        ) || 3
+        ) || 8
     );
 
-const WORKER_STAGGER_MS = 250;
+const MAX_IN_FLIGHT =
+    Math.max(
+        1,
+        parseInt(
+            process.env.LPAGENT_MAX_IN_FLIGHT ??
+            "10",
+            10
+        ) || 10
+    );
+
+const PAGE_DELAY_MS =
+    process.env.LPAGENT_PAGE_DELAY_MS !== undefined
+        ? Math.max(0, parseInt(process.env.LPAGENT_PAGE_DELAY_MS, 10))
+        : 0;
+
+const JITTER_MS =
+    process.env.LPAGENT_JITTER_MS !== undefined
+        ? Math.max(0, parseInt(process.env.LPAGENT_JITTER_MS, 10))
+        : (PAGE_DELAY_MS > 0 ? 500 : 0);
+
+const WORKER_STAGGER_MS =
+    process.env.LPAGENT_WORKER_STAGGER_MS !== undefined
+        ? Math.max(0, parseInt(process.env.LPAGENT_WORKER_STAGGER_MS, 10))
+        : 250;
+
+const PAGE_LIMIT =
+    process.env.LPAGENT_PAGE_LIMIT
+        ? Math.max(1, parseInt(process.env.LPAGENT_PAGE_LIMIT, 10))
+        : null;
+
+const PAGE_START =
+    process.env.LPAGENT_PAGE_START
+        ? Math.max(1, parseInt(process.env.LPAGENT_PAGE_START, 10))
+        : 1;
+
+const MAX_RETRIES = 5;
+
+// ======================================================
+// REQUEST SCHEDULER
+// ======================================================
+
+class RequestScheduler {
+    constructor({
+        maxInFlight = 6,
+        minInFlight = 1,
+        minIntervalMs = 40,
+    } = {}) {
+        this.maxInFlight = Math.max(1, maxInFlight);
+        this.minInFlight = Math.max(1, Math.min(minInFlight, this.maxInFlight));
+        this.currentLimit = this.maxInFlight;
+        this.minIntervalMs = Math.max(0, minIntervalMs);
+        this.activeRequests = 0;
+        this.queue = [];
+        this.lastDispatchTime = 0;
+        this.consecutiveSuccesses = 0;
+        this.pausedUntil = 0;
+    }
+
+    async acquireSlot() {
+        return new Promise((resolve) => {
+            this.queue.push(resolve);
+            this._processQueue();
+        });
+    }
+
+    releaseSlot() {
+        this.activeRequests = Math.max(0, this.activeRequests - 1);
+        this._processQueue();
+    }
+
+    _processQueue() {
+        if (this.queue.length === 0) return;
+
+        const now = Date.now();
+        if (now < this.pausedUntil) {
+            const delay = this.pausedUntil - now;
+            setTimeout(() => this._processQueue(), delay);
+            return;
+        }
+
+        if (this.activeRequests >= this.currentLimit) {
+            return;
+        }
+
+        const elapsed = now - this.lastDispatchTime;
+        if (elapsed < this.minIntervalMs) {
+            const waitTime = this.minIntervalMs - elapsed;
+            setTimeout(() => this._processQueue(), waitTime);
+            return;
+        }
+
+        this.activeRequests++;
+        this.lastDispatchTime = Date.now();
+        const next = this.queue.shift();
+        if (next) next();
+
+        if (this.queue.length > 0 && this.activeRequests < this.currentLimit) {
+            setTimeout(() => this._processQueue(), this.minIntervalMs);
+        }
+    }
+
+    onSuccess(latencyMs = 0) {
+        if (this.currentLimit < this.maxInFlight && latencyMs < 5000) {
+            this.consecutiveSuccesses++;
+            if (this.consecutiveSuccesses >= 15) {
+                this.currentLimit = Math.min(this.maxInFlight, this.currentLimit + 1);
+                this.consecutiveSuccesses = 0;
+                this._processQueue();
+            }
+        }
+    }
+
+    onRateLimit(retryAfterSeconds = null) {
+        this.consecutiveSuccesses = 0;
+        const prev = this.currentLimit;
+        this.currentLimit = Math.max(
+            this.minInFlight,
+            Math.floor(this.currentLimit * 0.6)
+        );
+        const pauseSec =
+            Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0
+                ? retryAfterSeconds
+                : 20;
+        this.pausedUntil = Date.now() + pauseSec * 1000;
+        console.log(
+            `[SCHEDULER] 429 backoff: concurrency reduced ${prev} -> ${this.currentLimit}, paused ${pauseSec}s`
+        );
+    }
+}
+
+const scheduler = new RequestScheduler({
+    maxInFlight: MAX_IN_FLIGHT,
+    minInFlight: 1,
+    minIntervalMs: 40,
+});
 
 // ======================================================
 // HELPERS
@@ -46,16 +182,14 @@ const sleep = (ms) =>
     new Promise((resolve) => setTimeout(resolve, ms));
 
 async function politeDelay() {
+    if (PAGE_DELAY_MS <= 0) return;
     const jitter =
-        Math.floor(Math.random() * JITTER_MS);
-
+        JITTER_MS > 0 ? Math.floor(Math.random() * JITTER_MS) : 0;
     const delay =
         PAGE_DELAY_MS + jitter;
-
     console.log(
         `[DELAY] ${(delay / 1000).toFixed(1)}s`
     );
-
     await sleep(delay);
 }
 
@@ -137,7 +271,7 @@ async function loadCheckpoint(
     try {
         const text =
             await fs.readFile(
-                CHECKPOINT,
+                CHECKPOINT_PATH,
                 "utf8"
             );
 
@@ -247,11 +381,16 @@ async function savePageCheckpoint({
         checkpointWriteQueue
             .catch(() => { })
             .then(
-                () =>
-                    fs.appendFile(
-                        CHECKPOINT,
+                async () => {
+                    await fs.mkdir(
+                        path.dirname(CHECKPOINT_PATH),
+                        { recursive: true }
+                    );
+                    await fs.appendFile(
+                        CHECKPOINT_PATH,
                         line
-                    )
+                    );
+                }
             );
 
     await checkpointWriteQueue;
@@ -270,7 +409,17 @@ async function fetchPageWithRetry(
         attempt <= MAX_RETRIES;
         attempt++
     ) {
+        await scheduler.acquireSlot();
+        let slotReleased = false;
+        const releaseSlot = () => {
+            if (!slotReleased) {
+                slotReleased = true;
+                scheduler.releaseSlot();
+            }
+        };
+
         let response;
+        const reqStart = performance.now();
 
         // --------------------------------
         // NETWORK ERROR
@@ -283,6 +432,7 @@ async function fetchPageWithRetry(
                     { headers }
                 );
         } catch (error) {
+            releaseSlot();
             if (
                 attempt === MAX_RETRIES
             ) {
@@ -297,7 +447,7 @@ async function fetchPageWithRetry(
                 );
 
             console.log(
-                `[NETWORK] ${error.message}`
+                `[NETWORK] ${error.message} (${error.cause?.message ?? error.cause ?? "no cause"})`
             );
 
             console.log(
@@ -317,14 +467,19 @@ async function fetchPageWithRetry(
             try {
                 const json =
                     await response.json();
+                const latencyMs = Math.round(performance.now() - reqStart);
+                releaseSlot();
+                scheduler.onSuccess(latencyMs);
 
                 return {
                     status:
                         response.status,
 
                     json,
+                    latencyMs,
                 };
             } catch (error) {
+                releaseSlot();
                 if (
                     attempt ===
                     MAX_RETRIES
@@ -357,6 +512,7 @@ async function fetchPageWithRetry(
 
         const status =
             response.status;
+        releaseSlot();
 
         // --------------------------------
         // AUTH
@@ -378,6 +534,15 @@ async function fetchPageWithRetry(
         // --------------------------------
 
         if (status === 429) {
+            const retryAfterHeader =
+                Number(
+                    response.headers.get(
+                        "retry-after"
+                    )
+                );
+
+            scheduler.onRateLimit(retryAfterHeader);
+
             if (
                 attempt ===
                 MAX_RETRIES
@@ -386,13 +551,6 @@ async function fetchPageWithRetry(
                     "429 Too Many Requests after retries."
                 );
             }
-
-            const retryAfterHeader =
-                Number(
-                    response.headers.get(
-                        "retry-after"
-                    )
-                );
 
             const waitSeconds =
                 Number.isFinite(
@@ -665,7 +823,8 @@ const captured =
     await requestPromise;
 
 console.log(
-    "[3] Smart LP request captured"
+    "[3] Smart LP request captured:",
+    captured.url
 );
 
 // ======================================================
@@ -752,9 +911,14 @@ function isCheckpointComplete(
         return false;
     }
 
+    const targetStart = PAGE_START;
+    const targetEnd = PAGE_LIMIT
+        ? Math.min(totalPages, PAGE_START + PAGE_LIMIT - 1)
+        : totalPages;
+
     for (
-        let page = 1;
-        page <= totalPages;
+        let page = targetStart;
+        page <= targetEnd;
         page++
     ) {
         if (
@@ -781,7 +945,7 @@ if (
     );
 
     await fs.rm(
-        CHECKPOINT,
+        CHECKPOINT_PATH,
         { force: true }
     );
 
@@ -840,7 +1004,7 @@ console.log(
 // ======================================================
 
 function getFirstMissingPage() {
-    let pageNumber = 1;
+    let pageNumber = PAGE_START;
 
     while (
         checkpoint.pages.has(
@@ -918,6 +1082,17 @@ async function fetchAndSavePage(
             ) &&
             detectedTotal > 0
         ) {
+            if (totalPages && detectedTotal > totalPages) {
+                console.log(
+                    `[PAGINATION] Total pages updated: ${totalPages} -> ${detectedTotal}`
+                );
+                const maxAllowed = PAGE_LIMIT
+                    ? Math.min(detectedTotal, PAGE_START + PAGE_LIMIT - 1)
+                    : detectedTotal;
+                for (let p = totalPages + 1; p <= maxAllowed; p++) {
+                    enqueuePage(p);
+                }
+            }
             totalPages =
                 detectedTotal;
         }
@@ -1037,32 +1212,33 @@ if (!totalPages) {
 // PARALLEL PAGE WORKERS
 // ======================================================
 
-if (totalPages) {
-    const missingPages =
-        [];
+// ======================================================
+// PARALLEL PAGE WORKERS & DYNAMIC QUEUE
+// ======================================================
 
-    for (
-        let page = 1;
-        page <= totalPages;
-        page++
-    ) {
-        if (
-            !checkpoint.pages.has(
-                page
-            )
-        ) {
-            missingPages.push(
-                page
-            );
-        }
+const pendingPages = [];
+const enqueuedPages = new Set();
+
+function enqueuePage(p) {
+    if (!checkpoint.pages.has(p) && !enqueuedPages.has(p)) {
+        enqueuedPages.add(p);
+        pendingPages.push(p);
+    }
+}
+
+if (totalPages) {
+    const targetStart = PAGE_START;
+    const targetEnd = PAGE_LIMIT
+        ? Math.min(totalPages, PAGE_START + PAGE_LIMIT - 1)
+        : totalPages;
+
+    for (let page = targetStart; page <= targetEnd; page++) {
+        enqueuePage(page);
     }
 
     console.log(
-        `[QUEUE] ${missingPages.length} pages remaining`
+        `[QUEUE] ${pendingPages.length} pages remaining (${targetStart}..${targetEnd})`
     );
-
-    let nextPageIndex =
-        0;
 
     async function runPageWorker(
         workerId
@@ -1070,7 +1246,8 @@ if (totalPages) {
         // Hindari semua worker request tepat
         // pada millisecond yang sama.
         if (
-            workerId > 1
+            workerId > 1 &&
+            WORKER_STAGGER_MS > 0
         ) {
             await sleep(
                 (
@@ -1082,20 +1259,18 @@ if (totalPages) {
         }
 
         while (true) {
-            const index =
-                nextPageIndex++;
-
-            if (
-                index >=
-                missingPages.length
-            ) {
+            if (pendingPages.length === 0) {
                 return;
             }
 
-            const page =
-                missingPages[
-                index
-                ];
+            const page = pendingPages.shift();
+            if (page === undefined) {
+                return;
+            }
+
+            if (checkpoint.pages.has(page)) {
+                continue;
+            }
 
             try {
                 await fetchAndSavePage(
@@ -1110,21 +1285,23 @@ if (totalPages) {
                 throw error;
             }
 
-            await politeDelay();
+            if (PAGE_DELAY_MS > 0) {
+                await politeDelay();
+            }
         }
     }
 
     const workerCount =
         Math.min(
             CONCURRENCY,
-            missingPages.length
+            pendingPages.length
         );
 
     if (
         workerCount > 0
     ) {
         console.log(
-            `[WORKERS] Starting ${workerCount} page workers`
+            `[WORKERS] Starting ${workerCount} page workers (concurrency=${CONCURRENCY}, maxInFlight=${MAX_IN_FLIGHT})`
         );
 
         await Promise.all(
@@ -1146,11 +1323,52 @@ if (totalPages) {
 }
 
 // ======================================================
-// FINAL OUTPUT
+// COMPLETENESS & DATA VALIDATION GATE
 // ======================================================
+
+const targetStart = PAGE_START;
+const targetEnd = PAGE_LIMIT
+    ? Math.min(totalPages ?? 1, PAGE_START + PAGE_LIMIT - 1)
+    : (totalPages ?? 1);
+
+const missingFromCheckpoint = [];
+for (let p = targetStart; p <= targetEnd; p++) {
+    if (!checkpoint.pages.has(p)) {
+        missingFromCheckpoint.push(p);
+    }
+}
+
+if (missingFromCheckpoint.length > 0) {
+    console.error(
+        `\n[VALIDATION FAIL] Checkpoint incomplete! Missing ${missingFromCheckpoint.length} pages: [${missingFromCheckpoint.slice(0, 10).join(", ")}${missingFromCheckpoint.length > 10 ? "..." : ""}]`
+    );
+    console.error(
+        "[VALIDATION FAIL] Refusing to write final output or delete checkpoint."
+    );
+    process.exit(1);
+}
+
+console.log(
+    `\n[VALIDATION PASS] Contiguous page coverage verified: pages ${targetStart}..${targetEnd} (${checkpoint.pages.size} pages)`
+);
 
 const wallets =
     [...walletMap.values()];
+
+if (wallets.length === 0) {
+    console.error(
+        "[VALIDATION FAIL] Zero unique wallets extracted. Refusing to write final output."
+    );
+    process.exit(1);
+}
+
+console.log(
+    `[VALIDATION PASS] ${wallets.length} unique wallets validated`
+);
+
+// ======================================================
+// FINAL OUTPUT
+// ======================================================
 
 const output = {
     generatedAt:
@@ -1172,8 +1390,13 @@ const output = {
     wallets,
 };
 
+await fs.mkdir(
+    path.dirname(OUTPUT_PATH),
+    { recursive: true }
+);
+
 await fs.writeFile(
-    OUTPUT,
+    OUTPUT_PATH,
 
     JSON.stringify(
         output,
@@ -1188,7 +1411,7 @@ await fs.writeFile(
 // Setelah output final berhasil ditulis,
 // scrape berikutnya harus mengambil data fresh.
 await fs.rm(
-    CHECKPOINT,
+    CHECKPOINT_PATH,
     { force: true }
 );
 
@@ -1205,13 +1428,10 @@ Pages   : ${checkpoint.pages.size}/${totalPages ?? "?"}
 Wallets : ${wallets.length}
 
 Output:
-${OUTPUT}
+${OUTPUT_PATH}
 
 Checkpoint:
 cleared after successful scrape
 `);
 
 process.exit(0);
-
-// Jangan browser.close()
-// karena browser merupakan Brave milikmu.

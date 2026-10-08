@@ -101,7 +101,7 @@ export function WalletDataControlPanel({
 
   // LP Agent State
   const [lpAgentState, setLpAgentState] = useState<LpAgentState | null>(null);
-  const [lpConcurrency, setLpConcurrency] = useState<number>(5);
+  const [lpConcurrency, setLpConcurrency] = useState<number>(8);
   const [lpFabriqConcurrency, setLpFabriqConcurrency] = useState<number>(10);
 
   // Shared Fabriq History State

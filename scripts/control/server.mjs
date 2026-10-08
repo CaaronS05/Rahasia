@@ -1494,7 +1494,7 @@ async function startLpAgentRefresh({
 } = {}) {
     assertDataPipelineAvailable();
 
-    const safeConcurrency = sanitizeConcurrency(concurrency ?? 5);
+    const safeConcurrency = sanitizeConcurrency(concurrency ?? 8);
     const safeFabriqConcurrency = sanitizeConcurrency(fabriqConcurrency ?? 10);
     const validatedHistory = validateHistoryConfig(historyMode, startMonth);
 
@@ -1558,8 +1558,8 @@ async function startLpAgentRefresh({
             ["scripts/lpagent/scrape-smart-lp.mjs"],
             {
                 LPAGENT_CONCURRENCY: String(safeConcurrency),
+                LPAGENT_MAX_IN_FLIGHT: String(process.env.LPAGENT_MAX_IN_FLIGHT ?? "10"),
             },
-            parseLpAgentLine
         );
 
         if (lpAgentState.status === "stopping" || lpAgentState.status === "stopped") {
