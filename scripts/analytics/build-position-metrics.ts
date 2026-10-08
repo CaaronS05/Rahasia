@@ -62,21 +62,7 @@ export async function executeBuildPositionMetrics(
     log(`[POSITION-METRICS] Period: ${period} | Force: ${force}`);
     log(`=======================================================`);
 
-    // 1. Check existing cached metrics snapshot if force is not requested
-    if (!force) {
-        const cachedMetrics = loadPositionMetrics(wallet, period, metricsBaseDir);
-        if (cachedMetrics) {
-            log(`[POSITION-METRICS] Found existing metrics snapshot. Returning cached result.`);
-            return {
-                success: true,
-                metrics: cachedMetrics,
-                persistedPath: null,
-                fromCache: true,
-            };
-        }
-    }
-
-    // 2. Load Step 1 Position Analytics Dataset snapshot
+    // 1. Load Step 1 Position Analytics Dataset snapshot
     const expectedDatasetPath = getDatasetFilePath(wallet, period, positionsBaseDir);
     log(`[POSITION-METRICS] Loading Step 1 dataset from: ${expectedDatasetPath}`);
 
@@ -88,6 +74,23 @@ export async function executeBuildPositionMetrics(
     }
 
     log(`[POSITION-METRICS] Successfully loaded ${dataset.positions.length} positions.`);
+
+    // 2. Check existing cached metrics snapshot if force is not requested
+    if (!force) {
+        const cachedMetrics = loadPositionMetrics(wallet, period, metricsBaseDir, dataset.fetchedAt);
+        if (cachedMetrics) {
+            log(`[POSITION-METRICS] Found valid metrics snapshot matching source dataset fetchedAt (${dataset.fetchedAt}). Returning cached result.`);
+            return {
+                success: true,
+                metrics: cachedMetrics,
+                persistedPath: null,
+                fromCache: true,
+            };
+        }
+        log(`[POSITION-METRICS] Cached metrics are stale or missing for source dataset (${dataset.fetchedAt}). Recomputing metrics...`);
+    } else {
+        log(`[POSITION-METRICS] Force flag enabled. Recomputing metrics...`);
+    }
     log(`[POSITION-METRICS] Computing pure analytical metrics...`);
 
     // 3. Compute metrics via pure engine (no side effects)

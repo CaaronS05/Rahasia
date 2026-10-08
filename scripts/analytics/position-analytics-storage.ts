@@ -93,11 +93,14 @@ export function getMetricsFilePath(
 
 /**
  * Load existing position metrics result if available and valid.
+ * If expectedFetchedAt is specified, validates that the cached metrics match
+ * the source dataset snapshot provenance.
  */
 export function loadPositionMetrics(
     wallet: string,
     period: AnalyticsPeriod,
-    baseDir = DEFAULT_METRICS_STORAGE_BASE
+    baseDir = DEFAULT_METRICS_STORAGE_BASE,
+    expectedFetchedAt?: string
 ): PositionMetricsResult | null {
     const filePath = getMetricsFilePath(wallet, period, baseDir);
     if (!fs.existsSync(filePath)) {
@@ -116,6 +119,9 @@ export function loadPositionMetrics(
             parsed.capital &&
             parsed.profitability
         ) {
+            if (expectedFetchedAt && parsed.sourceDatasetFetchedAt !== expectedFetchedAt) {
+                return null;
+            }
             return parsed as PositionMetricsResult;
         }
     } catch {

@@ -441,6 +441,8 @@ export function computePositionAnalyticsMetrics(
         weekStartWib: string;
         weekEndWib: string;
         pnlUsdSum: number;
+        observedPnlCount: number;
+        unknownPnlCount: number;
         closedPositionCount: number;
         winCount: number;
         lossCount: number;
@@ -457,6 +459,8 @@ export function computePositionAnalyticsMetrics(
                 weekStartWib: wibInfo.weekStartWib,
                 weekEndWib: wibInfo.weekEndWib,
                 pnlUsdSum: 0,
+                observedPnlCount: 0,
+                unknownPnlCount: 0,
                 closedPositionCount: 0,
                 winCount: 0,
                 lossCount: 0,
@@ -467,6 +471,9 @@ export function computePositionAnalyticsMetrics(
         weekItem.closedPositionCount++;
         if (isFiniteNumber(p.pnlUsd)) {
             weekItem.pnlUsdSum += p.pnlUsd;
+            weekItem.observedPnlCount++;
+        } else {
+            weekItem.unknownPnlCount++;
         }
         if (p.winLoss === "WIN") weekItem.winCount++;
         else if (p.winLoss === "LOSS") weekItem.lossCount++;
@@ -479,10 +486,12 @@ export function computePositionAnalyticsMetrics(
         return {
             weekStartDateWib: item.weekStartWib,
             weekEndDateWib: item.weekEndWib,
-            realizedPnlUsd: Number(item.pnlUsdSum.toFixed(4)),
+            realizedPnlUsd: item.observedPnlCount > 0 ? Number(item.pnlUsdSum.toFixed(4)) : null,
             closedPositionCount: item.closedPositionCount,
             winCount: item.winCount,
             lossCount: item.lossCount,
+            observedPnlCount: item.observedPnlCount,
+            unknownPnlCount: item.unknownPnlCount,
         };
     });
 
@@ -492,6 +501,11 @@ export function computePositionAnalyticsMetrics(
     const weeklyPnls: number[] = [];
 
     for (const w of weeklyRealizedPositionPnlUsd) {
+        if (w.realizedPnlUsd === null) {
+            // If every PnL observation in a week is unknown, weekly realized PnL is null.
+            // Do not classify such weeks as breakeven, profitable, or losing.
+            continue;
+        }
         weeklyPnls.push(w.realizedPnlUsd);
         if (w.realizedPnlUsd > 0.0001) {
             profitableWeeksCount++;
@@ -588,44 +602,62 @@ export function computePositionAnalyticsMetrics(
     let observedEntriesPerDay: number | null = null;
     const effectiveEndMs = dataset.timeframe?.effectiveEnd ? Date.parse(dataset.timeframe.effectiveEnd) : Date.now();
 
+    let periodStartMs: number | null = null;
+    if (dataset.period === "30D") {
+        periodStartMs = dataset.timeframe?.effectiveStart
+            ? Date.parse(dataset.timeframe.effectiveStart)
+            : effectiveEndMs - 30 * 86400 * 1000;
+        if (!Number.isFinite(periodStartMs)) {
+            periodStartMs = effectiveEndMs - 30 * 86400 * 1000;
+        }
+    } else if (dataset.period === "90D") {
+        periodStartMs = dataset.timeframe?.effectiveStart
+            ? Date.parse(dataset.timeframe.effectiveStart)
+            : effectiveEndMs - 90 * 86400 * 1000;
+        if (!Number.isFinite(periodStartMs)) {
+            periodStartMs = effectiveEndMs - 90 * 86400 * 1000;
+        }
+    } else {
+        periodStartMs = null; // ALL_AVAILABLE
+    }
+
+    // Filter qualifying opening timestamps strictly within the requested timeframe window
+    const qualifyingOpenings = openedAtObs.filter((p) => {
+        const openMs = Date.parse(p.openedAt!);
+        if (!Number.isFinite(openMs)) return false;
+        if (openMs > effectiveEndMs) return false;
+        if (periodStartMs !== null && openMs < periodStartMs) return false;
+        return true;
+    });
+
     if (openedAtObs.length === 0) {
         observedEntriesPerDay = null;
     } else if (dataset.period === "30D") {
-        const periodStartMs = effectiveEndMs - 30 * 86400 * 1000;
-        const countInWindow = openedAtObs.filter((p) => {
-            const openMs = Date.parse(p.openedAt!);
-            return Number.isFinite(openMs) && openMs >= periodStartMs && openMs <= effectiveEndMs;
-        }).length;
-        observedEntriesPerDay = Number((countInWindow / 30).toFixed(2));
+        observedEntriesPerDay = Number((qualifyingOpenings.length / 30).toFixed(2));
     } else if (dataset.period === "90D") {
-        const periodStartMs = effectiveEndMs - 90 * 86400 * 1000;
-        const countInWindow = openedAtObs.filter((p) => {
-            const openMs = Date.parse(p.openedAt!);
-            return Number.isFinite(openMs) && openMs >= periodStartMs && openMs <= effectiveEndMs;
-        }).length;
-        observedEntriesPerDay = Number((countInWindow / 90).toFixed(2));
+        observedEntriesPerDay = Number((qualifyingOpenings.length / 90).toFixed(2));
     } else {
         // ALL_AVAILABLE
-        if (openedAtObs.length === 1) {
+        if (qualifyingOpenings.length === 0) {
+            observedEntriesPerDay = 0;
+        } else if (qualifyingOpenings.length === 1) {
             observedEntriesPerDay = 1;
         } else {
-            const openTimestamps = openedAtObs.map((p) => Date.parse(p.openedAt!)).filter(Number.isFinite);
-            if (openTimestamps.length > 0) {
-                const minTs = Math.min(...openTimestamps);
-                const maxTs = Math.max(...openTimestamps);
-                const spanDays = Math.max(1, (maxTs - minTs) / (86400 * 1000));
-                observedEntriesPerDay = Number((openTimestamps.length / spanDays).toFixed(2));
-            }
+            const openTimestamps = qualifyingOpenings.map((p) => Date.parse(p.openedAt!)).filter(Number.isFinite);
+            const minTs = Math.min(...openTimestamps);
+            const maxTs = Math.max(...openTimestamps);
+            const spanDays = Math.max(1, (maxTs - minTs) / (86400 * 1000));
+            observedEntriesPerDay = Number((openTimestamps.length / spanDays).toFixed(2));
         }
     }
 
-    // Hourly activity in WIB (00..23)
+    // Hourly activity in WIB (00..23) using consistent qualifying opening timestamps
     const hourlyCounts = new Array(24).fill(0);
-    // Weekday activity in WIB (1=Mon..7=Sun)
+    // Weekday activity in WIB (1=Mon..7=Sun) using consistent qualifying opening timestamps
     const weekdayCounts = new Array(7).fill(0);
     const activeDatesWib = new Set<string>();
 
-    for (const p of openedAtObs) {
+    for (const p of qualifyingOpenings) {
         const wibInfo = parseWibDateInfo(p.openedAt!);
         if (!wibInfo) continue;
         hourlyCounts[wibInfo.hourWib]++;
@@ -633,11 +665,11 @@ export function computePositionAnalyticsMetrics(
         activeDatesWib.add(wibInfo.wibIsoDate);
     }
 
-    const totalOpenedCount = openedAtObs.length;
+    const totalQualifyingOpenedCount = qualifyingOpenings.length;
     const entryActivityByHourWib: HourlyActivityItem[] = hourlyCounts.map((count, hour) => ({
         hourWib: hour,
         count,
-        pct: totalOpenedCount > 0 ? Number(((count / totalOpenedCount) * 100).toFixed(2)) : 0,
+        pct: totalQualifyingOpenedCount > 0 ? Number(((count / totalQualifyingOpenedCount) * 100).toFixed(2)) : 0,
     }));
 
     const weekdayNames = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
@@ -645,12 +677,13 @@ export function computePositionAnalyticsMetrics(
         weekdayWib: weekdayNames[idx],
         dayIndexWib: idx + 1,
         count,
-        pct: totalOpenedCount > 0 ? Number(((count / totalOpenedCount) * 100).toFixed(2)) : 0,
+        pct: totalQualifyingOpenedCount > 0 ? Number(((count / totalQualifyingOpenedCount) * 100).toFixed(2)) : 0,
     }));
 
-    const openingTimeCoverage = {
+    const openingTimeCoverage: OpeningTimeCoverage = {
         analyzedPositions: totalAnalyzed,
         openedAtObservations: openedAtObs.length,
+        qualifyingOpenedAtObservations: qualifyingOpenings.length,
         coveragePct: totalAnalyzed > 0
             ? Number(((openedAtObs.length / totalAnalyzed) * 100).toFixed(2))
             : 0,

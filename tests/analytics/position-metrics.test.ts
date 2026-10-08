@@ -652,4 +652,225 @@ describe("Position Analytics Step 2 Test Suite", () => {
         // Cleanup temp test directory
         fs.rmSync(tempTestDir, { recursive: true, force: true });
     });
+
+    // --------------------------------------------------
+    // TEST 18: Metrics cache invalidation & recomputation on dataset refresh
+    // --------------------------------------------------
+    it("18. Metrics cache: invalidates and recomputes stale metrics when source dataset is refreshed", async () => {
+        const testWallet = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU";
+        const tempTestDir = path.resolve("data/test-analytics-cache");
+        const posDir = path.join(tempTestDir, "positions");
+        const metDir = path.join(tempTestDir, "metrics");
+
+        const initialDataset = createMockDataset([
+            {
+                initialEntryUsd: 500,
+                totalDepositsUsd: 500,
+                pnlUsd: 50,
+                winLoss: "WIN",
+                dataQuality: {
+                    initialEntryStatus: "VERIFIED_OPEN_EVENT",
+                    transactionCoverage: "FULL_LIFECYCLE",
+                    positionCompleteness: "COMPLETE",
+                    warnings: [],
+                },
+            },
+        ], {
+            wallet: testWallet,
+            fetchedAt: "2026-03-10T12:00:00Z",
+        });
+
+        savePositionAnalyticsDataset(initialDataset, posDir);
+
+        // First run: builds and caches metrics
+        const firstRun = await executeBuildPositionMetrics({
+            wallet: testWallet,
+            period: "30D",
+            force: false,
+            positionsBaseDir: posDir,
+            metricsBaseDir: metDir,
+        });
+        assert.equal(firstRun.success, true);
+        assert.equal(firstRun.fromCache, false);
+        assert.equal(firstRun.metrics?.profitability.sampleTotalPnlUsd, 50);
+        assert.equal(firstRun.metrics?.sourceDatasetFetchedAt, "2026-03-10T12:00:00Z");
+
+        // Second run without dataset change: returns cached metrics
+        const cachedRun = await executeBuildPositionMetrics({
+            wallet: testWallet,
+            period: "30D",
+            force: false,
+            positionsBaseDir: posDir,
+            metricsBaseDir: metDir,
+        });
+        assert.equal(cachedRun.success, true);
+        assert.equal(cachedRun.fromCache, true);
+        assert.equal(cachedRun.metrics?.profitability.sampleTotalPnlUsd, 50);
+
+        // Source dataset refreshed: fetchedAt updated and data changed
+        const refreshedDataset = createMockDataset([
+            {
+                initialEntryUsd: 500,
+                totalDepositsUsd: 500,
+                pnlUsd: 120,
+                winLoss: "WIN",
+                dataQuality: {
+                    initialEntryStatus: "VERIFIED_OPEN_EVENT",
+                    transactionCoverage: "FULL_LIFECYCLE",
+                    positionCompleteness: "COMPLETE",
+                    warnings: [],
+                },
+            },
+        ], {
+            wallet: testWallet,
+            fetchedAt: "2026-03-11T09:00:00Z",
+        });
+        savePositionAnalyticsDataset(refreshedDataset, posDir);
+
+        // Third run without force: automatically detects stale cache, recomputes from new dataset
+        const refreshedRun = await executeBuildPositionMetrics({
+            wallet: testWallet,
+            period: "30D",
+            force: false,
+            positionsBaseDir: posDir,
+            metricsBaseDir: metDir,
+        });
+        assert.equal(refreshedRun.success, true);
+        assert.equal(refreshedRun.fromCache, false);
+        assert.equal(refreshedRun.metrics?.profitability.sampleTotalPnlUsd, 120);
+        assert.equal(refreshedRun.metrics?.sourceDatasetFetchedAt, "2026-03-11T09:00:00Z");
+
+        // Verify persisted metrics on disk updated
+        const loaded = loadPositionMetrics(testWallet, "30D", metDir);
+        assert.ok(loaded);
+        assert.equal(loaded.profitability.sampleTotalPnlUsd, 120);
+        assert.equal(loaded.sourceDatasetFetchedAt, "2026-03-11T09:00:00Z");
+
+        // Cleanup
+        fs.rmSync(tempTestDir, { recursive: true, force: true });
+    });
+
+    // --------------------------------------------------
+    // TEST 19: Weekly PnL all-unknown vs partial observations
+    // --------------------------------------------------
+    it("19. Weekly PnL: all-unknown PnL yields null realizedPnlUsd (never breakeven), handles partial transparently", () => {
+        const dataset = createMockDataset([
+            // Week 1 (2026-03-02 Monday): 2 positions, BOTH have unknown PnL
+            { closedAt: "2026-03-02T10:00:00Z", pnlUsd: null, winLoss: "UNKNOWN" },
+            { closedAt: "2026-03-03T10:00:00Z", pnlUsd: null, winLoss: "UNKNOWN" },
+
+            // Week 2 (2026-03-09 Monday): 2 positions, 1 WIN (+150), 1 UNKNOWN (null)
+            { closedAt: "2026-03-09T10:00:00Z", pnlUsd: 150, winLoss: "WIN" },
+            { closedAt: "2026-03-10T10:00:00Z", pnlUsd: null, winLoss: "UNKNOWN" },
+
+            // Week 3 (2026-03-16 Monday): 2 positions, +50 and -50 -> genuine breakeven
+            { closedAt: "2026-03-16T10:00:00Z", pnlUsd: 50, winLoss: "WIN" },
+            { closedAt: "2026-03-17T10:00:00Z", pnlUsd: -50, winLoss: "LOSS" },
+        ]);
+
+        const metrics = computePositionAnalyticsMetrics(dataset);
+        const weeks = metrics.riskAndConsistency.weeklyRealizedPositionPnlUsd;
+        assert.equal(weeks.length, 3);
+
+        // Week 1: All unknown -> realizedPnlUsd MUST be null, not zero
+        assert.equal(weeks[0].realizedPnlUsd, null);
+        assert.equal(weeks[0].closedPositionCount, 2);
+        assert.equal(weeks[0].observedPnlCount, 0);
+        assert.equal(weeks[0].unknownPnlCount, 2);
+        assert.equal(weeks[0].winCount, 0);
+        assert.equal(weeks[0].lossCount, 0);
+
+        // Week 2: Partial observation -> sums known observations (+150) and reports counts transparently
+        assert.equal(weeks[1].realizedPnlUsd, 150);
+        assert.equal(weeks[1].closedPositionCount, 2);
+        assert.equal(weeks[1].observedPnlCount, 1);
+        assert.equal(weeks[1].unknownPnlCount, 1);
+        assert.equal(weeks[1].winCount, 1);
+        assert.equal(weeks[1].lossCount, 0);
+
+        // Week 3: Genuine breakeven -> realizedPnlUsd is 0
+        assert.equal(weeks[2].realizedPnlUsd, 0);
+        assert.equal(weeks[2].closedPositionCount, 2);
+        assert.equal(weeks[2].observedPnlCount, 2);
+        assert.equal(weeks[2].unknownPnlCount, 0);
+
+        // Classification counts:
+        // Week 1 is neither profitable, losing, nor breakeven.
+        // Week 2 is profitable.
+        // Week 3 is genuine breakeven.
+        assert.equal(metrics.riskAndConsistency.profitableWeeksCount, 1);
+        assert.equal(metrics.riskAndConsistency.losingWeeksCount, 0);
+        assert.equal(metrics.riskAndConsistency.breakevenWeeksCount, 1);
+    });
+
+    // --------------------------------------------------
+    // TEST 20: Entry activity qualifying timestamps within requested window
+    // --------------------------------------------------
+    it("20. Entry activity: hourly, weekday and entries/day use consistent qualifying opening timestamps within requested window", () => {
+        const dataset30D = createMockDataset([
+            // Position 1: opened 2026-03-05T08:00:00Z (Thursday 15:00 WIB) -> inside 30D window
+            { openedAt: "2026-03-05T08:00:00Z", closedAt: "2026-03-06T10:00:00Z" },
+            // Position 2: opened 2026-03-06T10:00:00Z (Friday 17:00 WIB) -> inside 30D window
+            { openedAt: "2026-03-06T10:00:00Z", closedAt: "2026-03-07T10:00:00Z" },
+            // Position 3: opened 2025-10-01T08:00:00Z (Wednesday 15:00 WIB, ~5 months old)
+            // Closed in 30D window (2026-03-08), but opened OUTSIDE 30D window!
+            { openedAt: "2025-10-01T08:00:00Z", closedAt: "2026-03-08T10:00:00Z" },
+        ], {
+            period: "30D",
+            timeframe: {
+                requestedPeriod: "30D",
+                effectiveStart: "2026-02-08T12:00:00Z",
+                effectiveEnd: "2026-03-10T12:00:00Z",
+                firstAvailableTimestamp: "2025-10-01T08:00:00Z",
+                lastAvailableTimestamp: "2026-03-10T12:00:00Z",
+            },
+        });
+
+        const metrics = computePositionAnalyticsMetrics(dataset30D);
+
+        // Entries/day: only 2 qualifying entries in 30D window -> 2 / 30 = 0.07
+        assert.equal(metrics.tradingBehavior.observedEntriesPerDay, 0.07);
+
+        // Hourly activity: only 2 qualifying positions
+        // Position 1: 15:00 WIB -> count = 1, pct = 50%
+        // Position 2: 17:00 WIB -> count = 1, pct = 50%
+        // Position 3 (15:00 WIB from Oct 2025) MUST NOT be counted!
+        assert.equal(metrics.tradingBehavior.entryActivityByHourWib[15].count, 1);
+        assert.equal(metrics.tradingBehavior.entryActivityByHourWib[15].pct, 50);
+        assert.equal(metrics.tradingBehavior.entryActivityByHourWib[17].count, 1);
+        assert.equal(metrics.tradingBehavior.entryActivityByHourWib[17].pct, 50);
+
+        const totalHourlyCounts = metrics.tradingBehavior.entryActivityByHourWib.reduce((sum, h) => sum + h.count, 0);
+        assert.equal(totalHourlyCounts, 2);
+
+        // Weekday activity: only 2 qualifying positions
+        // Thursday (dayIndex 4) -> count = 1, pct = 50%
+        // Friday (dayIndex 5) -> count = 1, pct = 50%
+        // Wednesday (dayIndex 3, from Oct 2025 Position 3) MUST NOT be counted!
+        const wednesday = metrics.tradingBehavior.entryActivityByWeekdayWib.find((w) => w.weekdayWib === "Wednesday");
+        assert.ok(wednesday);
+        assert.equal(wednesday.count, 0);
+
+        const thursday = metrics.tradingBehavior.entryActivityByWeekdayWib.find((w) => w.weekdayWib === "Thursday");
+        assert.ok(thursday);
+        assert.equal(thursday.count, 1);
+        assert.equal(thursday.pct, 50);
+
+        const friday = metrics.tradingBehavior.entryActivityByWeekdayWib.find((w) => w.weekdayWib === "Friday");
+        assert.ok(friday);
+        assert.equal(friday.count, 1);
+        assert.equal(friday.pct, 50);
+
+        const totalWeekdayCounts = metrics.tradingBehavior.entryActivityByWeekdayWib.reduce((sum, w) => sum + w.count, 0);
+        assert.equal(totalWeekdayCounts, 2);
+
+        // Active entry days: 2 distinct dates
+        assert.equal(metrics.tradingBehavior.activeEntryDays, 2);
+
+        // Clear closed-position sample limitations retained
+        assert.equal(metrics.tradingBehavior.entryActivityLabel, "Observed entries among analyzed closed positions");
+        assert.equal(metrics.tradingBehavior.openingTimeCoverage.analyzedPositions, 3);
+        assert.equal(metrics.tradingBehavior.openingTimeCoverage.openedAtObservations, 3);
+        assert.equal(metrics.tradingBehavior.openingTimeCoverage.qualifyingOpenedAtObservations, 2);
+    });
 });

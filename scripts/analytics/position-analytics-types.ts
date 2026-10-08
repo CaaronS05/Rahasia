@@ -202,10 +202,12 @@ export interface ProfitabilityAnalytics {
 export interface WeeklyRealizedPnlItem {
     weekStartDateWib: string; // YYYY-MM-DD
     weekEndDateWib: string;   // YYYY-MM-DD
-    realizedPnlUsd: number;
+    realizedPnlUsd: number | null;
     closedPositionCount: number;
     winCount: number;
     lossCount: number;
+    observedPnlCount?: number;
+    unknownPnlCount?: number;
 }
 
 export interface SampleRealizedPnlDrawdown {
@@ -257,6 +259,7 @@ export interface PairPositionSizeItem {
 export interface OpeningTimeCoverage {
     analyzedPositions: number;
     openedAtObservations: number;
+    qualifyingOpenedAtObservations?: number;
     coveragePct: number;
 }
 
