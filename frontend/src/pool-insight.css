@@ -818,3 +818,128 @@
   padding: 0 10px !important;
   font-size: 11px !important;
 }
+
+/* Token Groups Table & Nested Pools */
+.token-groups-table {
+  width: 100%;
+}
+
+.token-group-row {
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.token-group-row:hover {
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.token-group-row.expanded {
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.token-group-expand-btn {
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: all 120ms ease;
+}
+
+.token-group-expand-btn:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+.token-pools-badge {
+  display: inline-block;
+  padding: 3px 8px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.token-group-details-row {
+  background: rgba(0, 0, 0, 0.22);
+}
+
+.token-group-pools-wrapper {
+  padding: 10px 16px 14px 44px;
+  border-top: 1px solid rgba(255, 255, 255, 0.04);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.token-group-nested-pools-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+
+.token-group-nested-pools-table th {
+  background: transparent !important;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 6px 12px;
+  color: var(--muted);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.token-group-nested-pools-table td {
+  padding: 8px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+  color: var(--text);
+}
+
+.token-group-nested-pools-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.token-pool-row {
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.token-pool-row:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.token-pool-row.selected-pool {
+  background: rgba(85, 214, 157, 0.08);
+}
+
+.token-pool-open-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--muted);
+  opacity: 0.7;
+  transition: all 120ms ease;
+}
+
+.token-pool-row:hover .token-pool-open-link {
+  color: var(--green);
+  opacity: 1;
+}
+
+.token-group-toggle-all-btn {
+  height: 28px !important;
+  padding: 0 10px !important;
+  font-size: 11px !important;
+}
+
+.cell-muted {
+  color: var(--muted);
+}

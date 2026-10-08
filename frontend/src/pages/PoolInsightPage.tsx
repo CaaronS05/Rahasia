@@ -1,6 +1,7 @@
 import {
   AlertCircle,
   ArrowLeft,
+  ArrowRight,
   Check,
   ChevronDown,
   ChevronRight,
@@ -13,7 +14,7 @@ import {
   Sparkles,
   X,
 } from "lucide-react";
-import React, { Fragment, useCallback, useEffect, useState } from "react";
+import React, { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import {
   fetchPoolDetail,
   fetchPoolWallets,
@@ -149,6 +150,62 @@ function CopyButton({ text, label = "Copy address" }: { text: string; label?: st
     </button>
   );
 }
+export interface TokenPoolGroup {
+  groupKey: string;
+  tokenMint: string;
+  tokenName: string;
+  pools: ScannedPoolItem[];
+  poolCount: number;
+  mostRecentScanAt: string;
+}
+
+export function groupPoolsByToken(pools: ScannedPoolItem[]): TokenPoolGroup[] {
+  const groupMap = new Map<string, TokenPoolGroup>();
+
+  for (const pool of pools) {
+    const mint = pool.tokenMint?.trim();
+
+    // Grouping rules:
+    // 1. Group by exact tokenMint, NOT symbol or pair name.
+    // 2. Only group pools with the same actual token mint and corresponding SOL pairing.
+    // 3. Two tokens with the same symbol but different mint addresses must remain separate groups.
+    // 4. Never merge pool records or their underlying data.
+    // 5. Preserve all individual pool addresses.
+    // 6. If tokenMint is unavailable, avoid incorrect grouping: keep that pool as a separate entry.
+    let key: string;
+    if (!mint) {
+      key = `unminted:${pool.poolAddress}`;
+    } else {
+      const pairUpper = (pool.pair || "").trim().toUpperCase();
+      const isSolPair = pairUpper.endsWith("/SOL") || pairUpper.endsWith("-SOL");
+      key = isSolPair ? `mint:${mint}:SOL` : `mint:${mint}:${pairUpper}`;
+    }
+
+    const existing = groupMap.get(key);
+    if (!existing) {
+      groupMap.set(key, {
+        groupKey: key,
+        tokenMint: mint || "",
+        tokenName: pool.pair?.trim() || "Unknown Token",
+        pools: [pool],
+        poolCount: 1,
+        mostRecentScanAt: pool.lastScannedAt || pool.firstScannedAt || "",
+      });
+    } else {
+      existing.pools.push(pool);
+      existing.poolCount = existing.pools.length;
+      if (
+        pool.lastScannedAt &&
+        (!existing.mostRecentScanAt ||
+          Date.parse(pool.lastScannedAt) > Date.parse(existing.mostRecentScanAt))
+      ) {
+        existing.mostRecentScanAt = pool.lastScannedAt;
+      }
+    }
+  }
+
+  return Array.from(groupMap.values());
+}
 
 export function PoolInsightPage() {
   const [subnav, setSubnav] = useState<Subnav>(() => parseNavFromUrl().tab);
@@ -206,6 +263,47 @@ export function PoolInsightPage() {
   const [pools, setPools] = useState<ScannedPoolItem[]>([]);
   const [loadingPools, setLoadingPools] = useState(true);
   const [poolsError, setPoolsError] = useState<string | null>(null);
+  const [expandedGroupKeys, setExpandedGroupKeys] = useState<Set<string>>(new Set());
+
+  const tokenGroups = useMemo(() => groupPoolsByToken(pools), [pools]);
+
+  const toggleGroup = useCallback((groupKey: string) => {
+    setExpandedGroupKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(groupKey)) {
+        next.delete(groupKey);
+      } else {
+        next.add(groupKey);
+      }
+      return next;
+    });
+  }, []);
+
+  const handleToggleAllGroups = useCallback(() => {
+    if (tokenGroups.length === 0) return;
+    if (expandedGroupKeys.size === tokenGroups.length) {
+      setExpandedGroupKeys(new Set());
+    } else {
+      setExpandedGroupKeys(new Set(tokenGroups.map((g) => g.groupKey)));
+    }
+  }, [tokenGroups, expandedGroupKeys.size]);
+
+  // Keep token group expanded if a pool within it is currently selected
+  useEffect(() => {
+    if (selectedPoolAddress && tokenGroups.length > 0) {
+      const groupWithPool = tokenGroups.find((g) =>
+        g.pools.some((p) => p.poolAddress === selectedPoolAddress)
+      );
+      if (groupWithPool) {
+        setExpandedGroupKeys((prev) => {
+          if (prev.has(groupWithPool.groupKey)) return prev;
+          const next = new Set(prev);
+          next.add(groupWithPool.groupKey);
+          return next;
+        });
+      }
+    }
+  }, [selectedPoolAddress, tokenGroups]);
 
   // View 2: Selected Pool Detail & Wallets state
   const [poolDetail, setPoolDetail] = useState<ScannedPoolItem | null>(null);
@@ -1149,14 +1247,25 @@ export function PoolInsightPage() {
           </section>
         </div>
       )) : (
-        /* POOL EXPLORER: SCANNED POOLS LIST ONLY */
+        /* POOL EXPLORER: SCANNED POOLS LIST GROUPED BY TOKEN */
         <section className="pool-insight-table-card" aria-label="Scanned Pools">
           <div className="pool-insight-table-toolbar">
             <div className="pool-insight-table-toolbar-left">
-              <strong>{pools.length.toLocaleString()} Scanned Pools</strong>
-              <span>DLMM pools analyzed</span>
+              <strong>{tokenGroups.length.toLocaleString()} Token {tokenGroups.length === 1 ? "Group" : "Groups"}</strong>
+              <span>({pools.length.toLocaleString()} Scanned DLMM {pools.length === 1 ? "Pool" : "Pools"})</span>
             </div>
             <div className="pool-insight-table-toolbar-right">
+              {tokenGroups.length > 0 && (
+                <button
+                  type="button"
+                  className="secondary-button token-group-toggle-all-btn"
+                  onClick={handleToggleAllGroups}
+                >
+                  {expandedGroupKeys.size === tokenGroups.length
+                    ? "Collapse All"
+                    : "Expand All"}
+                </button>
+              )}
               <button
                 className="icon-btn"
                 onClick={loadPools}
@@ -1182,42 +1291,130 @@ export function PoolInsightPage() {
             <div className="state-card">No scanned pools found.</div>
           ) : (
             <div style={{ overflowX: "auto" }}>
-              <table className="pool-insight-table">
+              <table className="pool-insight-table token-groups-table">
                 <thead>
                   <tr>
-                    <th>PAIR</th>
-                    <th>POOL ADDRESS</th>
-                    <th>BIN STEP</th>
-                    <th>BASE FEE</th>
-                    <th>WALLETS</th>
-                    <th>TRADES</th>
+                    <th style={{ width: 44, textAlign: "center" }}></th>
+                    <th>TOKEN / PAIR</th>
+                    <th>TOKEN MINT</th>
+                    <th className="cell-number">SCANNED POOLS</th>
                     <th>LAST SCANNED</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {pools.map((pool) => (
-                    <tr
-                      key={pool.poolAddress}
-                      className="clickable-row"
-                      onClick={() => updateNav("intelligence", pool.poolAddress)}
-                      title={`Open ${pool.pair} intelligence`}
-                    >
-                      <td>
-                        <span className="cell-pair">{pool.pair}</span>
-                      </td>
-                      <td>
-                        <div className="cell-address">
-                          <span>{shortWallet(pool.poolAddress, 6, 4)}</span>
-                          <CopyButton text={pool.poolAddress} label="Copy pool address" />
-                        </div>
-                      </td>
-                      <td className="cell-number">{pool.binStep}</td>
-                      <td className="cell-number">{pool.baseFeePct}%</td>
-                      <td className="cell-number">{pool.walletCount.toLocaleString()}</td>
-                      <td className="cell-number">{pool.tradeCount.toLocaleString()}</td>
-                      <td>{formatTimestamp(pool.lastScannedAt)}</td>
-                    </tr>
-                  ))}
+                  {tokenGroups.map((group) => {
+                    const isExpanded = expandedGroupKeys.has(group.groupKey);
+                    return (
+                      <Fragment key={group.groupKey}>
+                        <tr
+                          className={`token-group-row clickable-row ${isExpanded ? "expanded" : ""}`}
+                          onClick={() => toggleGroup(group.groupKey)}
+                          title={`${isExpanded ? "Collapse" : "Expand"} ${group.tokenName} pools`}
+                          role="button"
+                          tabIndex={0}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              toggleGroup(group.groupKey);
+                            }
+                          }}
+                        >
+                          <td style={{ width: 44, textAlign: "center" }}>
+                            <button
+                              type="button"
+                              className="token-group-expand-btn"
+                              aria-label={isExpanded ? `Collapse ${group.tokenName}` : `Expand ${group.tokenName}`}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                toggleGroup(group.groupKey);
+                              }}
+                            >
+                              {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                            </button>
+                          </td>
+                          <td>
+                            <span className="cell-pair">{group.tokenName}</span>
+                          </td>
+                          <td>
+                            {group.tokenMint ? (
+                              <div className="cell-address">
+                                <span>{shortWallet(group.tokenMint, 6, 4)}</span>
+                                <CopyButton text={group.tokenMint} label="Copy token mint" />
+                              </div>
+                            ) : (
+                              <span className="cell-muted">—</span>
+                            )}
+                          </td>
+                          <td className="cell-number">
+                            <span className="token-pools-badge">
+                              {group.poolCount} {group.poolCount === 1 ? "Pool" : "Pools"}
+                            </span>
+                          </td>
+                          <td>{formatTimestamp(group.mostRecentScanAt)}</td>
+                        </tr>
+
+                        {isExpanded && (
+                          <tr className="token-group-details-row">
+                            <td colSpan={5} style={{ padding: 0 }}>
+                              <div className="token-group-pools-wrapper">
+                                <table className="token-group-nested-pools-table">
+                                  <thead>
+                                    <tr>
+                                      <th>POOL ADDRESS</th>
+                                      <th className="cell-number">BIN STEP</th>
+                                      <th className="cell-number">BASE FEE</th>
+                                      <th className="cell-number">WALLETS</th>
+                                      <th className="cell-number">TRADES</th>
+                                      <th>LAST SCANNED</th>
+                                      <th style={{ width: 50 }}></th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {group.pools.map((pool) => {
+                                      const isSelected = selectedPoolAddress === pool.poolAddress;
+                                      return (
+                                        <tr
+                                          key={pool.poolAddress}
+                                          className={`token-pool-row clickable-row ${isSelected ? "selected-pool" : ""}`}
+                                          onClick={() => updateNav("intelligence", pool.poolAddress)}
+                                          title={`Open ${pool.pair} (${shortWallet(pool.poolAddress, 6, 4)}) pool intelligence`}
+                                          role="button"
+                                          tabIndex={0}
+                                          onKeyDown={(e) => {
+                                            if (e.key === "Enter" || e.key === " ") {
+                                              e.preventDefault();
+                                              updateNav("intelligence", pool.poolAddress);
+                                            }
+                                          }}
+                                        >
+                                          <td>
+                                            <div className="cell-address">
+                                              <span>{shortWallet(pool.poolAddress, 6, 4)}</span>
+                                              <CopyButton text={pool.poolAddress} label="Copy pool address" />
+                                            </div>
+                                          </td>
+                                          <td className="cell-number">{pool.binStep}</td>
+                                          <td className="cell-number">{pool.baseFeePct}%</td>
+                                          <td className="cell-number">{pool.walletCount.toLocaleString()}</td>
+                                          <td className="cell-number">{pool.tradeCount.toLocaleString()}</td>
+                                          <td>{formatTimestamp(pool.lastScannedAt)}</td>
+                                          <td style={{ textAlign: "right" }}>
+                                            <span className="token-pool-open-link">
+                                              View <ArrowRight size={11} />
+                                            </span>
+                                          </td>
+                                        </tr>
+                                      );
+                                    })}
+                                  </tbody>
+                                </table>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
