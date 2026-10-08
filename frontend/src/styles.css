@@ -2943,3 +2943,59 @@ button {
   margin-top: 3px;
   color: #e6e3dd;
 }
+
+.single-intel-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #1e1e1e;
+  border: 1px solid #333;
+  color: #d1d5db;
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.single-intel-btn:hover:not(:disabled) {
+  background: #2a2a2a;
+  border-color: #4b5563;
+  color: #fff;
+}
+.single-intel-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.single-intel-btn.primary {
+  background: #d97706;
+  border-color: #b45309;
+  color: #fff;
+}
+.single-intel-btn.primary:hover:not(:disabled) {
+  background: #b45309;
+}
+.single-intel-status-box {
+  margin: 10px 14px;
+  padding: 8px 12px;
+  border-radius: 4px;
+  font-size: 11.5px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.single-intel-status-box.info {
+  background: rgba(59, 130, 246, 0.1);
+  border: 1px solid rgba(59, 130, 246, 0.25);
+  color: #93c5fd;
+}
+.single-intel-status-box.error {
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.25);
+  color: #fca5a5;
+}
+.single-intel-status-box.warning {
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.25);
+  color: #fcd34d;
+}

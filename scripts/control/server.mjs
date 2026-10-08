@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { discoverTokenPools } from "../pool/discover-token-pools.mjs";
 
 const HOST = "127.0.0.1";
-const PORT = 8787;
+const PORT = Number.parseInt(process.env.CONTROL_SERVER_PORT || process.env.PORT || "8787", 10);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -3937,8 +3937,11 @@ function startPoolRefresh(poolAddress, options = {}) {
 }
 
 // One shared lock covers process lifetime, stage gaps, and stopping process trees.
+let activeSingleWalletChild = null; // { address, child, startedAt }
+const singleWalletStates = new Map(); // address -> { status, stage, startedAt, finishedAt, error }
+
 function dataPipelineBusy() {
-    return Boolean(currentChild || lpAgentChild || poolScannerChild || walletIntelligenceChild || poolRefreshChild) ||
+    return Boolean(currentChild || lpAgentChild || poolScannerChild || walletIntelligenceChild || poolRefreshChild || activeSingleWalletChild?.child) ||
         [state, lpAgentState, poolScannerState, walletIntelligenceState, poolRefreshState]
             .some((value) => value.status === "running" || value.status === "stopping");
 }
@@ -4072,6 +4075,171 @@ function stopWalletIntelligencePipeline() {
     timer.unref();
     return true;
 }
+function isValidSolanaAddress(address) {
+    if (typeof address !== "string") return false;
+    const trimmed = address.trim();
+    if (trimmed.length < 32 || trimmed.length > 44) return false;
+    return /^[1-9A-HJ-NP-Za-km-z]+$/.test(trimmed);
+}
+
+function getSingleWalletResultPath(address) {
+    return path.join(ROOT, "data/v1/single-wallet", `${address}.json`);
+}
+
+function getSingleWalletStatus(address) {
+    const norm = address.trim();
+    const isActive = Boolean(activeSingleWalletChild && activeSingleWalletChild.address === norm);
+    if (isActive) {
+        const recorded = singleWalletStates.get(norm);
+        return {
+            wallet: norm,
+            status: "running",
+            stage: recorded?.stage || "analyzing",
+            startedAt: activeSingleWalletChild.startedAt,
+            finishedAt: null,
+            error: null,
+            hasResult: fs.existsSync(getSingleWalletResultPath(norm)),
+        };
+    }
+
+    const recorded = singleWalletStates.get(norm);
+    const hasResult = fs.existsSync(getSingleWalletResultPath(norm));
+
+    // Check if reference cohort exists
+    const hasCohort = fs.existsSync(path.join(ROOT, "data/v1/wallet-quality-scores.json"));
+    if (!hasCohort) {
+        return {
+            wallet: norm,
+            status: "reference_required",
+            stage: "unavailable",
+            startedAt: null,
+            finishedAt: null,
+            error: "Reference cohort required. Please run initial Wallet Intelligence screening first.",
+            hasResult: false,
+        };
+    }
+
+    if (recorded) {
+        return {
+            wallet: norm,
+            status: recorded.status,
+            stage: recorded.stage,
+            startedAt: recorded.startedAt,
+            finishedAt: recorded.finishedAt,
+            error: recorded.error,
+            hasResult,
+        };
+    }
+
+    return {
+        wallet: norm,
+        status: hasResult ? "completed" : "idle",
+        stage: hasResult ? "completed" : "idle",
+        startedAt: null,
+        finishedAt: null,
+        error: null,
+        hasResult,
+    };
+}
+
+function startSingleWalletAnalysis(address, force = false) {
+    const norm = address.trim();
+    if (!isValidSolanaAddress(norm)) {
+        const err = new Error("Invalid Solana address");
+        err.statusCode = 400;
+        throw err;
+    }
+
+    const hasCohort = fs.existsSync(path.join(ROOT, "data/v1/wallet-quality-scores.json"));
+    if (!hasCohort) {
+        const err = new Error("Reference cohort required. Please run initial Wallet Intelligence screening first.");
+        err.statusCode = 422;
+        throw err;
+    }
+
+    if (activeSingleWalletChild) {
+        const err = new Error(
+            activeSingleWalletChild.address === norm
+                ? "Analysis already running for this wallet"
+                : `Another wallet analysis is currently in progress (${activeSingleWalletChild.address})`
+        );
+        err.statusCode = 409;
+        throw err;
+    }
+
+    assertDataPipelineAvailable();
+
+    const startedAt = new Date().toISOString();
+    singleWalletStates.set(norm, {
+        status: "running",
+        stage: "analyzing",
+        startedAt,
+        finishedAt: null,
+        error: null,
+    });
+
+    const child = spawn(
+        process.execPath,
+        [
+            "--experimental-strip-types",
+            "scripts/v1/single-wallet-intelligence.ts",
+            norm,
+            ...(force ? ["--force"] : []),
+        ],
+        {
+            cwd: ROOT,
+            env: { ...process.env },
+            detached: process.platform !== "win32",
+            stdio: ["ignore", "pipe", "pipe"],
+        }
+    );
+
+    activeSingleWalletChild = { address: norm, child, startedAt };
+
+    let stderrBuffer = "";
+    child.stderr.on("data", (chunk) => {
+        stderrBuffer += String(chunk);
+    });
+
+    child.on("error", (err) => {
+        if (activeSingleWalletChild?.child === child) {
+            activeSingleWalletChild = null;
+        }
+        singleWalletStates.set(norm, {
+            status: "error",
+            stage: "error",
+            startedAt,
+            finishedAt: new Date().toISOString(),
+            error: err.message,
+        });
+    });
+
+    child.on("exit", (code, signal) => {
+        if (activeSingleWalletChild?.child === child) {
+            activeSingleWalletChild = null;
+        }
+        const finishedAt = new Date().toISOString();
+        if (code === 0) {
+            singleWalletStates.set(norm, {
+                status: "completed",
+                stage: "completed",
+                startedAt,
+                finishedAt,
+                error: null,
+            });
+        } else {
+            singleWalletStates.set(norm, {
+                status: "error",
+                stage: "error",
+                startedAt,
+                finishedAt,
+                error: stderrBuffer.trim() || `Analysis process exited with code ${code}${signal ? ` (${signal})` : ""}`,
+            });
+        }
+    });
+
+    return getSingleWalletStatus(norm);
+}
 
 const server = http.createServer(async (request, response) => {
     if (request.method === "OPTIONS") {
@@ -4103,6 +4271,39 @@ const server = http.createServer(async (request, response) => {
             ...walletIntelligencePublicState(),
             ...(stopped ? {} : { error: "Wallet Intelligence is not running or is already stopping" }),
         });
+        return;
+    }
+    // Single Wallet Intelligence endpoints
+    const singleStartMatch = url.pathname.match(/^\/api\/wallet-intelligence\/single\/([^/]+)\/start\/?$/);
+    if (request.method === "POST" && singleStartMatch) {
+        const address = safeDecodeURIComponent(singleStartMatch[1]);
+        try {
+            const body = await readJson(request).catch(() => ({}));
+            const res = startSingleWalletAnalysis(address, Boolean(body?.force));
+            json(request, response, 202, res);
+        } catch (err) {
+            json(request, response, err.statusCode || 500, { error: err.message });
+        }
+        return;
+    }
+
+    const singleStatusMatch = url.pathname.match(/^\/api\/wallet-intelligence\/single\/([^/]+)\/status\/?$/);
+    if (request.method === "GET" && singleStatusMatch) {
+        const address = safeDecodeURIComponent(singleStatusMatch[1]);
+        json(request, response, 200, getSingleWalletStatus(address));
+        return;
+    }
+
+    const singleResultMatch = url.pathname.match(/^\/api\/wallet-intelligence\/single\/([^/]+)\/result\/?$/);
+    if (request.method === "GET" && singleResultMatch) {
+        const address = safeDecodeURIComponent(singleResultMatch[1]);
+        const resPath = getSingleWalletResultPath(address);
+        try {
+            const content = JSON.parse(await fs.promises.readFile(resPath, "utf8"));
+            json(request, response, 200, content);
+        } catch {
+            json(request, response, 404, { error: "No analysis result found for this wallet" });
+        }
         return;
     }
 

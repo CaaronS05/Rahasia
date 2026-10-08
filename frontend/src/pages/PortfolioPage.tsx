@@ -1,14 +1,25 @@
 import {
+  AlertCircle,
   ArrowLeft,
   CalendarDays,
   Copy,
+  Loader2,
+  Play,
+  RotateCw,
   Search,
   ShieldCheck,
   Star,
   TrendingUp,
 } from "lucide-react";
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import type { Wallet } from "../types";
+import {
+  getSingleWalletStatus,
+  startSingleWalletAnalysis,
+  getSingleWalletResult,
+  type SingleWalletIntelligenceStatus,
+  type SingleWalletIntelligenceResult,
+} from "../lib/walletIntelligenceControl";
 import { fmt } from "../lib/format";
 import { PortfolioCalendar } from "../components/portfolio/PortfolioCalendar";
 import {
@@ -20,9 +31,9 @@ type WalletWithFabriq = Wallet & {
   fabriq?: {
     fetchedAt?: string;
     month?: string;
-    stats?: Record<string, any>;
-    calendar?: any;
-    calendars?: Record<string, any>;
+    stats?: Record<string, unknown>;
+    calendar?: unknown;
+    calendars?: Record<string, unknown>;
   };
 };
 
@@ -156,6 +167,121 @@ export function PortfolioPage({
     }
     return undefined;
   }, [wallet, requestedAddress, wallets]);
+  // Single-wallet intelligence state
+  const [singleStatus, setSingleStatus] = useState<SingleWalletIntelligenceStatus | null>(null);
+  const [singleResult, setSingleResult] = useState<SingleWalletIntelligenceResult | null>(null);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let isMounted = true;
+    let pollTimer: number | null = null;
+
+    setSingleStatus(null);
+    setSingleResult(null);
+    setIsAnalyzing(false);
+    setAnalysisError(null);
+
+    const owner = currentWallet?.owner;
+    if (!owner) return;
+
+    async function checkStatusAndResult() {
+      try {
+        const status = await getSingleWalletStatus(owner);
+        if (!isMounted) return;
+        setSingleStatus(status);
+
+        if (status.status === "running") {
+          setIsAnalyzing(true);
+          pollTimer = setTimeout(checkStatusAndResult, 1500);
+          return;
+        }
+
+        setIsAnalyzing(false);
+
+        if (status.hasResult) {
+          const result = await getSingleWalletResult(owner);
+          if (!isMounted) return;
+          setSingleResult(result);
+        }
+      } catch {
+        if (!isMounted) return;
+      }
+    }
+
+    void checkStatusAndResult();
+
+    return () => {
+      isMounted = false;
+      clearTimeout(pollTimer);
+    };
+  }, [currentWallet?.owner]);
+
+  const handleRunAnalysis = async () => {
+    const owner = currentWallet?.owner;
+    if (!owner || isAnalyzing) return;
+
+    setIsAnalyzing(true);
+    setAnalysisError(null);
+
+    try {
+      await startSingleWalletAnalysis(owner, true);
+      const poll = async () => {
+        try {
+          const st = await getSingleWalletStatus(owner);
+          setSingleStatus(st);
+          if (st.status === "completed") {
+            const res = await getSingleWalletResult(owner);
+            setSingleResult(res);
+            setIsAnalyzing(false);
+          } else if (st.status === "error") {
+            setAnalysisError(st.error || "Analysis failed");
+            setIsAnalyzing(false);
+          } else {
+            setTimeout(poll, 1500);
+          }
+        } catch (err: unknown) {
+          setAnalysisError(err instanceof Error ? err.message : String(err));
+          setIsAnalyzing(false);
+        }
+      };
+      setTimeout(poll, 1000);
+    } catch (err: unknown) {
+      setAnalysisError(err instanceof Error ? err.message : String(err));
+      setIsAnalyzing(false);
+    }
+  };
+
+  const activeIntelligence = useMemo(() => {
+    if (singleResult) {
+      return {
+        qualityScore: singleResult.qualityScore,
+        riskScore: singleResult.riskScore,
+        confidenceScore: singleResult.confidenceScore,
+        style: singleResult.style,
+        shortlisted: singleResult.shortlisted,
+        performance: singleResult.performance,
+        referenceCohort: singleResult.referenceCohort,
+        analyzedAt: singleResult.analyzedAt,
+        isSingleWallet: true,
+      };
+    }
+    if (currentWallet?.intelligenceV1) {
+      return {
+        qualityScore: currentWallet.intelligenceV1.qualityScore,
+        riskScore: currentWallet.intelligenceV1.riskScore,
+        confidenceScore: currentWallet.intelligenceV1.confidenceScore,
+        style: currentWallet.intelligenceV1.style,
+        shortlisted: currentWallet.intelligenceV1.shortlisted,
+        performance: currentWallet.intelligenceV1.performance,
+        referenceCohort: null,
+        analyzedAt: null,
+        isSingleWallet: false,
+      };
+    }
+    return null;
+  }, [singleResult, currentWallet?.intelligenceV1]);
+
 
   const enrichedWallet = currentWallet as WalletWithFabriq | undefined;
   const stats = enrichedWallet?.fabriq?.stats ?? {};
@@ -428,20 +554,67 @@ export function PortfolioPage({
               </section>
 
               <article className="portfolio-panel" style={{ marginBottom: "11px" }}>
-                <div className="panel-title">
-                  <h3>LP Intelligence</h3>
-                  <span>ⓘ</span>
+                <div className="panel-title" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                    <h3>LP Intelligence</h3>
+                    <span>ⓘ</span>
+                  </div>
+
+                  <button
+                    className="single-intel-btn"
+                    onClick={handleRunAnalysis}
+                    disabled={isAnalyzing}
+                    title={isAnalyzing ? "Analysis in progress" : (activeIntelligence ? "Re-run Wallet Intelligence for this wallet" : "Run Wallet Intelligence for this wallet")}
+                  >
+                    {isAnalyzing ? (
+                      <>
+                        <Loader2 size={12} className="spin" />
+                        <span>Analyzing Wallet...</span>
+                      </>
+                    ) : activeIntelligence ? (
+                      <>
+                        <RotateCw size={12} />
+                        <span>Re-analyze Wallet</span>
+                      </>
+                    ) : (
+                      <>
+                        <Play size={12} />
+                        <span>Run Wallet Intelligence</span>
+                      </>
+                    )}
+                  </button>
                 </div>
 
-                {currentWallet.intelligenceV1 ? (
+                {isAnalyzing ? (
+                  <div className="single-intel-status-box info">
+                    <Loader2 size={13} className="spin" />
+                    <span>Analyzing closed positions & risk metrics for this wallet...</span>
+                  </div>
+                ) : null}
+
+                {analysisError ? (
+                  <div className="single-intel-status-box error">
+                    <AlertCircle size={13} />
+                    <span>{analysisError}</span>
+                  </div>
+                ) : null}
+
+                {singleStatus?.status === "reference_required" && !activeIntelligence ? (
+                  <div className="single-intel-status-box warning">
+                    <AlertCircle size={13} />
+                    <span>Reference cohort required. Please run initial Wallet Intelligence screening first from Data &rarr; Screening.</span>
+                  </div>
+                ) : null}
+
+                {activeIntelligence ? (
                   <div>
                     <div className="v1-intel-grid">
                       <div className="v1-intel-card">
                         <span>Quality Score</span>
                         <strong>
-                          {currentWallet.intelligenceV1.qualityScore !== null &&
-                          currentWallet.intelligenceV1.qualityScore !== undefined
-                            ? fmt(currentWallet.intelligenceV1.qualityScore, 1)
+                          {activeIntelligence.qualityScore !== null &&
+                          activeIntelligence.qualityScore !== undefined
+                            ? fmt(activeIntelligence.qualityScore, 1)
                             : "—"}
                         </strong>
                         <small>Cohort relative (0–100)</small>
@@ -450,9 +623,9 @@ export function PortfolioPage({
                       <div className="v1-intel-card">
                         <span>Risk Score</span>
                         <strong>
-                          {currentWallet.intelligenceV1.riskScore !== null &&
-                          currentWallet.intelligenceV1.riskScore !== undefined
-                            ? fmt(currentWallet.intelligenceV1.riskScore, 1)
+                          {activeIntelligence.riskScore !== null &&
+                          activeIntelligence.riskScore !== undefined
+                            ? fmt(activeIntelligence.riskScore, 1)
                             : "—"}
                         </strong>
                         <small>Historical loss risk (0–100)</small>
@@ -461,9 +634,9 @@ export function PortfolioPage({
                       <div className="v1-intel-card">
                         <span>Confidence Score</span>
                         <strong>
-                          {currentWallet.intelligenceV1.confidenceScore !== null &&
-                          currentWallet.intelligenceV1.confidenceScore !== undefined
-                            ? fmt(currentWallet.intelligenceV1.confidenceScore, 1)
+                          {activeIntelligence.confidenceScore !== null &&
+                          activeIntelligence.confidenceScore !== undefined
+                            ? fmt(activeIntelligence.confidenceScore, 1)
                             : "—"}
                         </strong>
                         <small>Evidence sample & span (0–100)</small>
@@ -472,7 +645,7 @@ export function PortfolioPage({
                       <div className="v1-intel-card">
                         <span>Style</span>
                         <strong style={{ fontSize: "16px", marginTop: "8px" }}>
-                          {formatStyleDisplay(currentWallet.intelligenceV1.style)}
+                          {formatStyleDisplay(activeIntelligence.style)}
                         </strong>
                         <small>Historical DLMM behavior</small>
                       </div>
@@ -480,7 +653,7 @@ export function PortfolioPage({
                       <div className="v1-intel-card">
                         <span>Shortlist Status</span>
                         <div style={{ marginTop: "7px" }}>
-                          {currentWallet.intelligenceV1.shortlisted ? (
+                          {activeIntelligence.shortlisted ? (
                             <span
                               className="v1-shortlist-badge"
                               title="Passes V1 historical monitoring criteria"
@@ -494,33 +667,33 @@ export function PortfolioPage({
                           )}
                         </div>
                         <small>
-                          {currentWallet.intelligenceV1.shortlisted
+                          {activeIntelligence.shortlisted
                             ? "Passes V1 historical monitoring criteria"
                             : "Monitoring criteria not met"}
                         </small>
                       </div>
                     </div>
 
-                    {currentWallet.intelligenceV1.performance ? (
+                    {activeIntelligence.performance ? (
                       <div className="v1-perf-strip">
                         <div className="v1-perf-item">
                           <span>Total PnL</span>
                           <strong
                             className={
-                              currentWallet.intelligenceV1.performance.totalPnl >= 0
+                              activeIntelligence.performance.totalPnl >= 0
                                 ? "positive"
                                 : "negative"
                             }
                           >
-                            {currentWallet.intelligenceV1.performance.totalPnl >= 0 ? "+" : ""}
-                            {fmt(currentWallet.intelligenceV1.performance.totalPnl, 2)} SOL
+                            {activeIntelligence.performance.totalPnl >= 0 ? "+" : ""}
+                            {fmt(activeIntelligence.performance.totalPnl, 2)} SOL
                           </strong>
                         </div>
 
                         <div className="v1-perf-item">
                           <span>Profit Factor</span>
                           <strong>
-                            {fmt(currentWallet.intelligenceV1.performance.profitFactor, 2)}
+                            {fmt(activeIntelligence.performance.profitFactor, 2)}
                           </strong>
                         </div>
 
@@ -528,45 +701,58 @@ export function PortfolioPage({
                           <span>Median Position PnL %</span>
                           <strong
                             className={
-                              currentWallet.intelligenceV1.performance.medianPositionPnlPct >= 0
+                              activeIntelligence.performance.medianPositionPnlPct >= 0
                                 ? "positive"
                                 : "negative"
                             }
                           >
-                            {currentWallet.intelligenceV1.performance.medianPositionPnlPct >= 0
+                            {activeIntelligence.performance.medianPositionPnlPct >= 0
                               ? "+"
                               : ""}
-                            {fmt(currentWallet.intelligenceV1.performance.medianPositionPnlPct, 2)}%
+                            {fmt(activeIntelligence.performance.medianPositionPnlPct, 2)}%
                           </strong>
                         </div>
 
                         <div className="v1-perf-item">
                           <span>Win Rate</span>
                           <strong>
-                            {fmt(currentWallet.intelligenceV1.performance.positionWinRate, 1)}%
+                            {fmt(activeIntelligence.performance.positionWinRate, 1)}%
                           </strong>
                         </div>
 
                         <div className="v1-perf-item">
                           <span>Closed Positions</span>
                           <strong>
-                            {currentWallet.intelligenceV1.performance.closedPositionCount}
+                            {activeIntelligence.performance.closedPositionCount}
                           </strong>
                         </div>
                       </div>
                     ) : null}
+
+                    {activeIntelligence.referenceCohort ? (
+                      <div style={{ padding: "8px 14px 2px", fontSize: "10.5px", color: "#66625c", display: "flex", justifyContent: "space-between" }}>
+                        <span>Reference: {activeIntelligence.referenceCohort.validWallets} wallets (V1 Strict)</span>
+                        <span>Analyzed: {new Date(activeIntelligence.analyzedAt || "").toLocaleDateString()}</span>
+                      </div>
+                    ) : null}
                   </div>
-                ) : (
+                ) : !isAnalyzing ? (
                   <div
                     style={{
                       padding: "20px 18px",
                       color: "#9a968f",
                       fontSize: "12px",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
                     }}
                   >
-                    No V1 intelligence available
+                    <span>No V1 intelligence calculated for this wallet yet.</span>
+                    <button className="single-intel-btn primary" onClick={handleRunAnalysis}>
+                      <Play size={12} /> Run Analysis Now
+                    </button>
                   </div>
-                )}
+                ) : null}
               </article>
 
               <section className="portfolio-middle-grid">
