@@ -2803,7 +2803,7 @@ function startCanonicalPersistence(tokenCa, isChained = false) {
     if (!isChained) {
         assertDataPipelineAvailable();
     } else {
-        if (Boolean(currentChild || lpAgentChild || walletIntelligenceChild || poolRefreshChild)) {
+        if (Boolean(currentChild || lpAgentChild || walletIntelligenceChild || poolRefreshChild || activeSingleWalletChild?.child || activePositionAnalyticsChild?.child)) {
             const error = new Error("Another data pipeline is currently running");
             error.statusCode = 409;
             throw error;
@@ -4105,10 +4105,23 @@ function startPoolRefresh(poolAddress, options = {}) {
 // One shared lock covers process lifetime, stage gaps, and stopping process trees.
 let activeSingleWalletChild = null; // { address, child, startedAt }
 const singleWalletStates = new Map(); // address -> { status, stage, startedAt, finishedAt, error }
+let activePositionAnalyticsChild = null; // { wallet, period, child, startedAt, runId, isStopping, abortNextStage }
+let positionAnalyticsState = {
+    status: "idle",
+    wallet: null,
+    period: null,
+    stage: "idle",
+    stageDetails: null,
+    startedAt: null,
+    finishedAt: null,
+    error: null,
+    runId: null,
+};
+const positionAnalyticsStates = new Map(); // `${wallet}:${period}` -> state
 
 function dataPipelineBusy() {
-    return Boolean(currentChild || lpAgentChild || poolScannerChild || walletIntelligenceChild || poolRefreshChild || activeSingleWalletChild?.child) ||
-        [state, lpAgentState, poolScannerState, walletIntelligenceState, poolRefreshState]
+    return Boolean(currentChild || lpAgentChild || poolScannerChild || walletIntelligenceChild || poolRefreshChild || activeSingleWalletChild?.child || activePositionAnalyticsChild?.child) ||
+        [state, lpAgentState, poolScannerState, walletIntelligenceState, poolRefreshState, positionAnalyticsState]
             .some((value) => value.status === "running" || value.status === "stopping");
 }
 
@@ -4654,6 +4667,460 @@ function stopSingleWalletAnalysis(address) {
     return getSingleWalletStatus(norm);
 }
 
+function isValidAnalyticsPeriod(period) {
+    return period === "30D" || period === "90D" || period === "ALL_AVAILABLE";
+}
+
+function getPositionDatasetPath(wallet, period) {
+    return path.join(ROOT, "data/analytics/positions", wallet, `${period}.json`);
+}
+
+function getPositionMetricsPath(wallet, period) {
+    return path.join(ROOT, "data/analytics/metrics", wallet, `${period}.json`);
+}
+
+function getLastAnalyzedAt(wallet, period) {
+    try {
+        const metricsPath = getPositionMetricsPath(wallet, period);
+        if (fs.existsSync(metricsPath)) {
+            const raw = fs.readFileSync(metricsPath, "utf8");
+            const data = JSON.parse(raw);
+            return data.generatedAt || data.sourceDatasetFetchedAt || null;
+        }
+        const datasetPath = getPositionDatasetPath(wallet, period);
+        if (fs.existsSync(datasetPath)) {
+            const raw = fs.readFileSync(datasetPath, "utf8");
+            const data = JSON.parse(raw);
+            return data.fetchedAt || null;
+        }
+    } catch {
+        return null;
+    }
+    return null;
+}
+
+function getPositionAnalyticsStatus(address, period = "30D") {
+    const norm = (address || "").trim();
+    const key = `${norm}:${period}`;
+    const isActive = Boolean(
+        activePositionAnalyticsChild &&
+        activePositionAnalyticsChild.wallet === norm &&
+        activePositionAnalyticsChild.period === period
+    );
+    const recorded = positionAnalyticsStates.get(key);
+    const hasDataset = fs.existsSync(getPositionDatasetPath(norm, period));
+    const hasMetrics = fs.existsSync(getPositionMetricsPath(norm, period));
+    const lastAnalyzedAt = getLastAnalyzedAt(norm, period);
+
+    if (isActive) {
+        const isStopping = positionAnalyticsState.status === "stopping" || Boolean(activePositionAnalyticsChild?.isStopping);
+        return {
+            wallet: norm,
+            period,
+            status: isStopping ? "stopping" : positionAnalyticsState.status,
+            stage: positionAnalyticsState.stage,
+            stageDetails: positionAnalyticsState.stageDetails,
+            runId: activePositionAnalyticsChild.runId,
+            startedAt: activePositionAnalyticsChild.startedAt,
+            elapsedMs: Math.max(0, Date.now() - new Date(activePositionAnalyticsChild.startedAt).getTime()),
+            finishedAt: null,
+            error: null,
+            hasDataset,
+            hasMetrics,
+            lastAnalyzedAt,
+        };
+    }
+
+    if (recorded) {
+        return {
+            wallet: norm,
+            period,
+            status: recorded.status,
+            stage: recorded.stage,
+            stageDetails: recorded.stageDetails,
+            runId: recorded.runId,
+            startedAt: recorded.startedAt,
+            elapsedMs: recorded.startedAt && recorded.finishedAt
+                ? Math.max(0, new Date(recorded.finishedAt).getTime() - new Date(recorded.startedAt).getTime())
+                : 0,
+            finishedAt: recorded.finishedAt,
+            error: recorded.error,
+            hasDataset,
+            hasMetrics,
+            lastAnalyzedAt,
+        };
+    }
+
+    return {
+        wallet: norm,
+        period,
+        status: hasMetrics ? "completed" : "idle",
+        stage: hasMetrics ? "completed" : "idle",
+        stageDetails: null,
+        runId: null,
+        startedAt: null,
+        elapsedMs: 0,
+        finishedAt: null,
+        error: null,
+        hasDataset,
+        hasMetrics,
+        lastAnalyzedAt,
+    };
+}
+
+function startPositionAnalytics(address, period = "30D", force = false) {
+    const norm = (address || "").trim();
+    if (!isValidSolanaAddress(norm)) {
+        const err = new Error("Invalid Solana address");
+        err.statusCode = 400;
+        throw err;
+    }
+    if (!isValidAnalyticsPeriod(period)) {
+        const err = new Error('Invalid period. Must be "30D", "90D", or "ALL_AVAILABLE"');
+        err.statusCode = 400;
+        throw err;
+    }
+
+    if (activePositionAnalyticsChild) {
+        const isSame = activePositionAnalyticsChild.wallet === norm && activePositionAnalyticsChild.period === period;
+        const err = new Error(
+            isSame
+                ? `Position analysis already running for ${norm} (${period})`
+                : `Another position analysis is currently in progress (${activePositionAnalyticsChild.wallet})`
+        );
+        err.statusCode = 409;
+        throw err;
+    }
+
+    assertDataPipelineAvailable();
+
+    const key = `${norm}:${period}`;
+    const startedAt = new Date().toISOString();
+    const datasetPath = getPositionDatasetPath(norm, period);
+    const datasetExists = fs.existsSync(datasetPath);
+
+    // If Step 1 data exists and not forcing refresh, jump directly to metrics builder
+    const skipDataset = !force && datasetExists;
+    const initialStage = skipDataset ? "metrics" : "dataset";
+
+    const runId = activityLogger.startRun({
+        source: "position_analytics",
+        wallet: norm,
+        stage: initialStage,
+    });
+
+    positionAnalyticsState = {
+        status: "running",
+        wallet: norm,
+        period,
+        stage: initialStage,
+        stageDetails: skipDataset
+            ? "Computing position analytics metrics from existing dataset..."
+            : "Building position analytics dataset from Fabriq DLMM positions...",
+        startedAt,
+        finishedAt: null,
+        error: null,
+        runId,
+    };
+
+    positionAnalyticsStates.set(key, { ...positionAnalyticsState });
+
+    activityLogger.log({
+        runId,
+        source: "position_analytics",
+        wallet: norm,
+        stage: initialStage,
+        level: "INFO",
+        message: skipDataset
+            ? `Starting Step 2 Metrics Builder for ${norm} (${period}) using existing dataset.`
+            : `Starting Step 1 Position Dataset Builder for ${norm} (${period}) (force: ${force}).`,
+    });
+
+    function spawnStage(stageType) {
+        const scriptName = stageType === "dataset"
+            ? "scripts/analytics/build-position-dataset.ts"
+            : "scripts/analytics/build-position-metrics.ts";
+
+        const scriptArgs = [
+            "--experimental-strip-types",
+            scriptName,
+            "--wallet", norm,
+            "--period", period,
+            ...(force ? ["--force"] : []),
+        ];
+
+        const child = spawn(
+            process.execPath,
+            scriptArgs,
+            {
+                cwd: ROOT,
+                env: { ...process.env },
+                detached: process.platform !== "win32",
+                stdio: ["ignore", "pipe", "pipe"],
+            }
+        );
+
+        activePositionAnalyticsChild = {
+            wallet: norm,
+            period,
+            child,
+            startedAt,
+            runId,
+            stageType,
+            isStopping: false,
+            abortNextStage: false,
+        };
+
+        let stdoutBuffer = "";
+        let stderrBuffer = "";
+
+        child.stdout.on("data", (chunk) => {
+            stdoutBuffer += String(chunk);
+            const lines = stdoutBuffer.split("\n");
+            stdoutBuffer = lines.pop() ?? "";
+            for (const line of lines) {
+                const trimmed = stripAnsi(line).trim();
+                if (!trimmed) continue;
+                activityLogger.log({
+                    runId,
+                    source: "position_analytics",
+                    wallet: norm,
+                    stage: positionAnalyticsState.stage,
+                    level: inferLogLevel(trimmed),
+                    message: trimmed,
+                });
+            }
+        });
+
+        child.stderr.on("data", (chunk) => {
+            stderrBuffer += String(chunk);
+            const lines = stderrBuffer.split("\n");
+            stderrBuffer = lines.pop() ?? "";
+            for (const line of lines) {
+                const trimmed = stripAnsi(line).trim();
+                if (!trimmed) continue;
+                activityLogger.log({
+                    runId,
+                    source: "position_analytics",
+                    wallet: norm,
+                    stage: positionAnalyticsState.stage,
+                    level: "ERROR",
+                    message: trimmed,
+                });
+            }
+        });
+
+        child.on("error", (err) => {
+            const finishedAt = new Date().toISOString();
+            const cleanErr = stripAnsi(err.message);
+            activityLogger.log({
+                runId,
+                source: "position_analytics",
+                wallet: norm,
+                stage: positionAnalyticsState.stage,
+                level: "ERROR",
+                message: `Process error in ${stageType}: ${cleanErr}`,
+            });
+            positionAnalyticsState.status = "error";
+            positionAnalyticsState.stage = "error";
+            positionAnalyticsState.stageDetails = `Process error: ${cleanErr}`;
+            positionAnalyticsState.error = cleanErr;
+            positionAnalyticsState.finishedAt = finishedAt;
+            positionAnalyticsStates.set(key, { ...positionAnalyticsState });
+            activityLogger.finishRun(runId, {
+                status: "error",
+                stage: "error",
+                error: cleanErr,
+            });
+            activePositionAnalyticsChild = null;
+        });
+
+        child.on("exit", (code, signal) => {
+            if (stdoutBuffer.trim()) {
+                const trimmed = stripAnsi(stdoutBuffer).trim();
+                activityLogger.log({
+                    runId,
+                    source: "position_analytics",
+                    wallet: norm,
+                    stage: positionAnalyticsState.stage,
+                    level: inferLogLevel(trimmed),
+                    message: trimmed,
+                });
+            }
+            if (stderrBuffer.trim()) {
+                const trimmed = stripAnsi(stderrBuffer).trim();
+                activityLogger.log({
+                    runId,
+                    source: "position_analytics",
+                    wallet: norm,
+                    stage: positionAnalyticsState.stage,
+                    level: "ERROR",
+                    message: trimmed,
+                });
+            }
+
+            const wasStopping = Boolean(
+                activePositionAnalyticsChild?.isStopping ||
+                positionAnalyticsState.status === "stopping"
+            );
+
+            if (wasStopping) {
+                const finishedAt = new Date().toISOString();
+                positionAnalyticsState.status = "stopped";
+                positionAnalyticsState.stage = "stopped";
+                positionAnalyticsState.stageDetails = "Analysis stopped by user request.";
+                positionAnalyticsState.error = null;
+                positionAnalyticsState.finishedAt = finishedAt;
+                positionAnalyticsStates.set(key, { ...positionAnalyticsState });
+                activityLogger.finishRun(runId, {
+                    status: "stopped",
+                    stage: "stopped",
+                    error: null,
+                });
+                activePositionAnalyticsChild = null;
+                return;
+            }
+
+            if (code !== 0) {
+                const finishedAt = new Date().toISOString();
+                const cleanErr = extractCleanErrorMessage(stderrBuffer, stdoutBuffer) || `${stageType} stage failed (exit ${code})`;
+                positionAnalyticsState.status = "error";
+                positionAnalyticsState.stage = "error";
+                positionAnalyticsState.stageDetails = `${stageType} failed`;
+                positionAnalyticsState.error = cleanErr;
+                positionAnalyticsState.finishedAt = finishedAt;
+                positionAnalyticsStates.set(key, { ...positionAnalyticsState });
+                activityLogger.finishRun(runId, {
+                    status: "error",
+                    stage: "error",
+                    error: cleanErr,
+                    exitCode: code,
+                });
+                activePositionAnalyticsChild = null;
+                return;
+            }
+
+            // Successful exit of this stage!
+            if (stageType === "dataset") {
+                if (activePositionAnalyticsChild?.abortNextStage) {
+                    const finishedAt = new Date().toISOString();
+                    positionAnalyticsState.status = "stopped";
+                    positionAnalyticsState.stage = "stopped";
+                    positionAnalyticsState.stageDetails = "Analysis stopped before metrics calculation.";
+                    positionAnalyticsState.finishedAt = finishedAt;
+                    positionAnalyticsStates.set(key, { ...positionAnalyticsState });
+                    activityLogger.finishRun(runId, {
+                        status: "stopped",
+                        stage: "stopped",
+                        error: null,
+                    });
+                    activePositionAnalyticsChild = null;
+                    return;
+                }
+
+                // Transition to Stage 2: Metrics Builder
+                positionAnalyticsState.stage = "metrics";
+                positionAnalyticsState.stageDetails = "Step 1 complete. Computing Step 2 metrics...";
+                activityLogger.updateRun(runId, { stage: "metrics" });
+                activityLogger.log({
+                    runId,
+                    source: "position_analytics",
+                    wallet: norm,
+                    stage: "metrics",
+                    level: "INFO",
+                    message: `Step 1 Dataset built successfully. Now running Step 2 Metrics Builder...`,
+                });
+
+                spawnStage("metrics");
+                return;
+            }
+
+            // Metrics stage finished successfully
+            const finishedAt = new Date().toISOString();
+            positionAnalyticsState.status = "completed";
+            positionAnalyticsState.stage = "completed";
+            positionAnalyticsState.stageDetails = "Position analytics complete.";
+            positionAnalyticsState.error = null;
+            positionAnalyticsState.finishedAt = finishedAt;
+            positionAnalyticsStates.set(key, { ...positionAnalyticsState });
+            activityLogger.finishRun(runId, {
+                status: "completed",
+                stage: "completed",
+                exitCode: 0,
+            });
+            activePositionAnalyticsChild = null;
+        });
+    }
+
+    spawnStage(initialStage);
+    return getPositionAnalyticsStatus(norm, period);
+}
+
+function stopPositionAnalytics(address) {
+    const norm = (address || "").trim();
+    if (!isValidSolanaAddress(norm)) {
+        const err = new Error("Invalid Solana address");
+        err.statusCode = 400;
+        throw err;
+    }
+
+    if (!activePositionAnalyticsChild || activePositionAnalyticsChild.wallet !== norm) {
+        if (positionAnalyticsState.status === "stopping" && positionAnalyticsState.wallet === norm) {
+            return getPositionAnalyticsStatus(norm, positionAnalyticsState.period || "30D");
+        }
+        const err = new Error(
+            activePositionAnalyticsChild
+                ? `Cannot stop: active position analysis belongs to wallet ${activePositionAnalyticsChild.wallet}`
+                : "No active position analysis running for this wallet"
+        );
+        err.statusCode = 409;
+        throw err;
+    }
+
+    const active = activePositionAnalyticsChild;
+    active.isStopping = true;
+    active.abortNextStage = true;
+    positionAnalyticsState.status = "stopping";
+    positionAnalyticsState.stage = "stopping";
+    positionAnalyticsState.stageDetails = "Stopping position analytics pipeline...";
+
+    activityLogger.log({
+        runId: active.runId,
+        source: "position_analytics",
+        wallet: norm,
+        stage: "stopping",
+        level: "INFO",
+        message: `Stopping position analytics for ${norm} by user request...`,
+    });
+
+    const child = active.child;
+    const pid = child.pid;
+    const killTree = (signal) => {
+        if (pid && process.platform !== "win32") {
+            try { process.kill(-pid, signal); return; } catch { /* Fall back to child */ }
+        }
+        try { child.kill(signal); } catch { /* Already exited */ }
+    };
+
+    killTree("SIGTERM");
+    const timer = setTimeout(() => {
+        if (activePositionAnalyticsChild?.child === child) {
+            activityLogger.log({
+                runId: active.runId,
+                source: "position_analytics",
+                wallet: norm,
+                stage: "stopping",
+                level: "WARN",
+                message: `Graceful stop timed out for ${norm} (3s). Force-killing with SIGKILL...`,
+            });
+            killTree("SIGKILL");
+        }
+    }, 3000);
+    timer.unref();
+
+    return getPositionAnalyticsStatus(norm, active.period);
+}
+
 
 const server = http.createServer(async (request, response) => {
     if (request.method === "OPTIONS") {
@@ -4732,6 +5199,158 @@ const server = http.createServer(async (request, response) => {
             json(request, response, 200, content);
         } catch {
             json(request, response, 404, { error: "No analysis result found for this wallet" });
+        }
+        return;
+    }
+
+    // ------------------------------------------------------
+    // POSITION ANALYTICS API
+    // ------------------------------------------------------
+    if (url.pathname === "/api/position-analytics/status" && request.method === "GET") {
+        const wallet = url.searchParams.get("wallet");
+        const period = url.searchParams.get("period") || "30D";
+        if (!isValidSolanaAddress(wallet)) {
+            json(request, response, 400, { error: "Invalid Solana wallet address" });
+            return;
+        }
+        if (!isValidAnalyticsPeriod(period)) {
+            json(request, response, 400, { error: 'Invalid period. Must be "30D", "90D", or "ALL_AVAILABLE"' });
+            return;
+        }
+        json(request, response, 200, getPositionAnalyticsStatus(wallet, period));
+        return;
+    }
+
+    if (url.pathname === "/api/position-analytics/metrics" && request.method === "GET") {
+        const wallet = url.searchParams.get("wallet");
+        const period = url.searchParams.get("period") || "30D";
+        if (!isValidSolanaAddress(wallet)) {
+            json(request, response, 400, { error: "Invalid Solana wallet address" });
+            return;
+        }
+        if (!isValidAnalyticsPeriod(period)) {
+            json(request, response, 400, { error: 'Invalid period. Must be "30D", "90D", or "ALL_AVAILABLE"' });
+            return;
+        }
+        const metricsPath = getPositionMetricsPath(wallet, period);
+        try {
+            const content = JSON.parse(await fs.promises.readFile(metricsPath, "utf8"));
+            json(request, response, 200, { ...content, metrics: content });
+        } catch {
+            json(request, response, 404, { error: "Metrics not found for this wallet and period" });
+        }
+        return;
+    }
+
+    if (url.pathname === "/api/position-analytics/positions" && request.method === "GET") {
+        const wallet = url.searchParams.get("wallet");
+        const period = url.searchParams.get("period") || "30D";
+        if (!isValidSolanaAddress(wallet)) {
+            json(request, response, 400, { error: "Invalid Solana wallet address" });
+            return;
+        }
+        if (!isValidAnalyticsPeriod(period)) {
+            json(request, response, 400, { error: 'Invalid period. Must be "30D", "90D", or "ALL_AVAILABLE"' });
+            return;
+        }
+        const datasetPath = getPositionDatasetPath(wallet, period);
+        try {
+            const content = JSON.parse(await fs.promises.readFile(datasetPath, "utf8"));
+            const rawPositions = Array.isArray(content?.positions) ? content.positions : [];
+            const compactPositions = rawPositions.map((p) => ({
+                positionId: p.positionId,
+                poolAddress: p.poolAddress,
+                pairName: p.pairName,
+                tokenXMint: p.tokenXMint,
+                tokenYMint: p.tokenYMint,
+                tokenXSymbol: p.tokenXSymbol,
+                tokenYSymbol: p.tokenYSymbol,
+                openedAt: p.openedAt,
+                closedAt: p.closedAt,
+                holdDurationSeconds: p.holdDurationSeconds,
+                initialEntryUsd: p.initialEntryUsd,
+                firstObservedAddUsd: p.firstObservedAddUsd,
+                additionalLiquidityUsd: p.additionalLiquidityUsd,
+                totalDepositsUsd: p.totalDepositsUsd,
+                totalWithdrawalsUsd: p.totalWithdrawalsUsd,
+                claimedFeesUsd: p.claimedFeesUsd,
+                pnlUsd: p.pnlUsd,
+                pnlPct: p.pnlPct,
+                winLoss: p.winLoss,
+                dataQuality: p.dataQuality,
+                lifecycleMeta: {
+                    openingEventObserved: p.lifecycle?.openingEventObserved ?? false,
+                    closingEventObserved: p.lifecycle?.closingEventObserved ?? false,
+                    eventCount: p.lifecycle?.eventCount ?? p.lifecycle?.events?.length ?? 0,
+                },
+            }));
+            json(request, response, 200, {
+                positions: compactPositions,
+                totalCount: compactPositions.length,
+                sampling: content.sampling,
+                dataQuality: content.dataQuality,
+                timeframe: content.timeframe,
+            });
+        } catch {
+            json(request, response, 404, { error: "Positions dataset not found for this wallet and period" });
+        }
+        return;
+    }
+
+    if (url.pathname === "/api/position-analytics/position-detail" && request.method === "GET") {
+        const wallet = url.searchParams.get("wallet");
+        const period = url.searchParams.get("period") || "30D";
+        const positionId = url.searchParams.get("positionId");
+        if (!isValidSolanaAddress(wallet)) {
+            json(request, response, 400, { error: "Invalid Solana wallet address" });
+            return;
+        }
+        if (!isValidAnalyticsPeriod(period)) {
+            json(request, response, 400, { error: 'Invalid period. Must be "30D", "90D", or "ALL_AVAILABLE"' });
+            return;
+        }
+        if (!positionId) {
+            json(request, response, 400, { error: "Missing positionId parameter" });
+            return;
+        }
+        const datasetPath = getPositionDatasetPath(wallet, period);
+        try {
+            const content = JSON.parse(await fs.promises.readFile(datasetPath, "utf8"));
+            const rawPositions = Array.isArray(content?.positions) ? content.positions : [];
+            const pos = rawPositions.find((p) => p.positionId === positionId);
+            if (!pos) {
+                json(request, response, 404, { error: "Position not found in dataset" });
+                return;
+            }
+            json(request, response, 200, { position: pos });
+        } catch {
+            json(request, response, 404, { error: "Positions dataset not found for this wallet and period" });
+        }
+        return;
+    }
+
+    if (url.pathname === "/api/position-analytics/start" && request.method === "POST") {
+        try {
+            const body = await readJson(request).catch(() => ({}));
+            const wallet = body.wallet;
+            const period = body.period || "30D";
+            const force = Boolean(body.force);
+            const status = startPositionAnalytics(wallet, period, force);
+            json(request, response, 202, status);
+        } catch (err) {
+            json(request, response, err.statusCode || 500, { error: err.message });
+        }
+        return;
+    }
+
+    if (url.pathname === "/api/position-analytics/stop" && request.method === "POST") {
+        try {
+            const body = await readJson(request).catch(() => ({}));
+            const wallet = body.wallet || url.searchParams.get("wallet");
+            const status = stopPositionAnalytics(wallet);
+            json(request, response, 202, status);
+        } catch (err) {
+            json(request, response, err.statusCode || 500, { error: err.message });
         }
         return;
     }

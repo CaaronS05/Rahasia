@@ -29,6 +29,14 @@ import {
   CumulativePnlChart,
   DailyPnlChart,
 } from "../components/portfolio/PnlCharts";
+import { PositionAnalytics } from "../components/portfolio/PositionAnalytics";
+
+function isValidSolanaAddress(address: string | undefined | null): boolean {
+  if (!address || typeof address !== "string") return false;
+  const trimmed = address.trim();
+  if (trimmed.length < 32 || trimmed.length > 44) return false;
+  return /^[1-9A-HJ-NP-Za-km-z]+$/.test(trimmed);
+}
 function formatHumanErrorSummary(err: string): string {
   if (!err) return "Analysis failed";
   if (err.includes("CDP_UNREACHABLE") || err.includes("unreachable on port 9222")) {
@@ -502,13 +510,12 @@ export function PortfolioPage({
           <h2>Open a wallet portfolio</h2>
           <p>Paste a wallet address above, or click a wallet from Wallet Explorer.</p>
         </section>
-      ) : !currentWallet ? (
+      ) : !currentWallet && !isValidSolanaAddress(requestedAddress) ? (
         <section className="portfolio-empty">
           <Search size={32} />
-          <h2>Wallet not found</h2>
+          <h2>Invalid wallet address</h2>
           <p>
-            The address <strong>{requestedAddress}</strong> is not in the current local
-            dataset.
+            The address <strong>{requestedAddress}</strong> is not a valid Solana address.
           </p>
           <button className="secondary-button" onClick={onBack}>
             Back to Wallet Explorer
@@ -524,36 +531,37 @@ export function PortfolioPage({
 
               <div>
                 <div className="wallet-address-line">
-                  <h2>{shortWallet(currentWallet.owner)}</h2>
+                  <h2>{shortWallet(currentWallet ? currentWallet.owner : requestedAddress!)}</h2>
                   <button
                     className="copy-wallet portfolio-copy"
-                    onClick={() => navigator.clipboard.writeText(currentWallet.owner)}
+                    onClick={() => navigator.clipboard.writeText(currentWallet ? currentWallet.owner : requestedAddress!)}
                   >
                     <Copy size={13} />
                   </button>
-                  <button
-                    className={`portfolio-track-button ${isTracked ? "tracked" : ""
-                      }`}
-                    onClick={() => onToggleTrack(currentWallet.owner)}
-                  >
-                    <Star
-                      size={13}
-                      fill={isTracked ? "currentColor" : "none"}
-                    />
-                    {isTracked ? "Tracked" : "Track"}
-                  </button>
+                  {currentWallet ? (
+                    <button
+                      className={`portfolio-track-button ${isTracked ? "tracked" : ""}`}
+                      onClick={() => onToggleTrack(currentWallet.owner)}
+                    >
+                      <Star
+                        size={13}
+                        fill={isTracked ? "currentColor" : "none"}
+                      />
+                      {isTracked ? "Tracked" : "Track"}
+                    </button>
+                  ) : null}
                   <span className="network-pill">
                     <span className="solana-mark">≋</span>
                     Solana
                   </span>
                 </div>
-                <p>{freshness(enrichedWallet?.fabriq?.fetchedAt)}</p>
+                <p>{currentWallet ? freshness(enrichedWallet?.fabriq?.fetchedAt) : "Direct wallet lookup"}</p>
               </div>
             </div>
           </section>
 
           <nav className="portfolio-tabs">
-            {["Overview", "Active Positions", "Closed Positions", "Transactions", "Balances"].map(
+            {["Overview", "Position Analytics", "Active Positions", "Closed Positions", "Transactions", "Balances"].map(
               (item) => (
                 <button
                   key={item}
@@ -566,13 +574,27 @@ export function PortfolioPage({
             )}
           </nav>
 
-          {tab !== "Overview" ? (
+          {tab === "Position Analytics" ? (
+            <PositionAnalytics walletAddress={currentWallet ? currentWallet.owner : requestedAddress!} />
+          ) : tab !== "Overview" ? (
             <section className="portfolio-empty portfolio-tab-placeholder">
               <h2>{tab}</h2>
               <p>
                 This tab is ready for the next data integration phase. The current master
                 dataset contains Fabriq overview stats and calendar data.
               </p>
+            </section>
+          ) : !currentWallet ? (
+            <section className="portfolio-empty">
+              <Search size={32} />
+              <h2>Overview statistics unavailable</h2>
+              <p>
+                The address <strong>{requestedAddress}</strong> is not in the current master
+                dataset. You can view its closed DLMM positions in the <strong>Position Analytics</strong> tab.
+              </p>
+              <button className="primary-button" onClick={() => setTab("Position Analytics")}>
+                Open Position Analytics
+              </button>
             </section>
           ) : (
             <>
