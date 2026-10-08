@@ -52,10 +52,27 @@ export interface SingleWalletPerformance {
   closedPositionCount: number;
   pnlConcentrationTop1: number;
 }
+export interface SingleWalletSamplingMeta {
+  totalEligiblePositions: number;
+  analyzedPositions: number;
+  excludedPositions: number;
+  coveragePct: number;
+  isSampled: boolean;
+  selectionMethod: "LATEST_CLOSED_1000";
+  duplicatesRemoved?: number;
+}
+
 
 export interface SingleWalletIntelligenceResult {
   wallet: string;
   analyzedAt: string;
+  sampling?: SingleWalletSamplingMeta;
+  totalEligiblePositions?: number;
+  analyzedPositions?: number;
+  excludedPositions?: number;
+  coveragePct?: number;
+  isSampled?: boolean;
+  selectionMethod?: "LATEST_CLOSED_1000";
   referenceCohort: {
     version: "v1";
     generatedAt: string;

@@ -2943,6 +2943,40 @@ button {
   margin-top: 3px;
   color: #e6e3dd;
 }
+.v1-sampled-badge {
+  font-size: 8.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: rgba(245, 158, 11, 0.15);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  color: #f59e0b;
+  display: inline-flex;
+  align-items: center;
+  vertical-align: middle;
+}
+
+.v1-sample-disclaimer {
+  margin: 6px 14px 4px;
+  padding: 6px 10px;
+  font-size: 11px;
+  border-radius: 4px;
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.22);
+  color: #fbbf24;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  line-height: 1.4;
+}
+
+.v1-sample-disclaimer.complete {
+  background: rgba(59, 130, 246, 0.06);
+  border-color: rgba(59, 130, 246, 0.18);
+  color: #93c5fd;
+}
 
 .single-intel-btn {
   display: inline-flex;

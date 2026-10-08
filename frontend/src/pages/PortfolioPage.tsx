@@ -383,6 +383,13 @@ export function PortfolioPage({
         performance: singleResult.performance,
         referenceCohort: singleResult.referenceCohort,
         analyzedAt: singleResult.analyzedAt,
+        sampling: singleResult.sampling,
+        totalEligiblePositions: singleResult.sampling?.totalEligiblePositions ?? singleResult.totalEligiblePositions,
+        analyzedPositions: singleResult.sampling?.analyzedPositions ?? singleResult.analyzedPositions,
+        excludedPositions: singleResult.sampling?.excludedPositions ?? singleResult.excludedPositions,
+        coveragePct: singleResult.sampling?.coveragePct ?? singleResult.coveragePct,
+        isSampled: singleResult.sampling?.isSampled ?? singleResult.isSampled,
+        selectionMethod: singleResult.sampling?.selectionMethod ?? singleResult.selectionMethod,
         isSingleWallet: true,
       };
     }
@@ -930,7 +937,7 @@ export function PortfolioPage({
                     {activeIntelligence.performance ? (
                       <div className="v1-perf-strip">
                         <div className="v1-perf-item">
-                          <span>Total PnL</span>
+                          <span>Total PnL (USD)</span>
                           <strong
                             className={
                               activeIntelligence.performance.totalPnl >= 0
@@ -938,8 +945,7 @@ export function PortfolioPage({
                                 : "negative"
                             }
                           >
-                            {activeIntelligence.performance.totalPnl >= 0 ? "+" : ""}
-                            {fmt(activeIntelligence.performance.totalPnl, 2)} SOL
+                            {activeIntelligence.performance.totalPnl >= 0 ? "+" : ""}${fmt(activeIntelligence.performance.totalPnl, 2)} USD
                           </strong>
                         </div>
 
@@ -974,13 +980,47 @@ export function PortfolioPage({
                         </div>
 
                         <div className="v1-perf-item">
-                          <span>Closed Positions</span>
-                          <strong>
-                            {activeIntelligence.performance.closedPositionCount}
+                          <span style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                            Positions
+                            {activeIntelligence.isSampled ? (
+                              <span className="v1-sampled-badge" title="Capped at 1,000 most recently closed positions">
+                                Sampled
+                              </span>
+                            ) : null}
+                          </span>
+                          <strong title={activeIntelligence.totalEligiblePositions ? `${activeIntelligence.analyzedPositions ?? activeIntelligence.performance.closedPositionCount} analyzed out of ${activeIntelligence.totalEligiblePositions} qualifying (${activeIntelligence.coveragePct ?? 100}% coverage)` : undefined}>
+                            {activeIntelligence.totalEligiblePositions && activeIntelligence.totalEligiblePositions !== activeIntelligence.performance.closedPositionCount
+                              ? `${activeIntelligence.analyzedPositions ?? activeIntelligence.performance.closedPositionCount} / ${activeIntelligence.totalEligiblePositions}`
+                              : activeIntelligence.performance.closedPositionCount}
                           </strong>
                         </div>
+
+                        {activeIntelligence.coveragePct !== undefined && activeIntelligence.coveragePct !== null ? (
+                          <div className="v1-perf-item">
+                            <span>Coverage</span>
+                            <strong>
+                              {activeIntelligence.coveragePct}%
+                            </strong>
+                          </div>
+                        ) : null}
                       </div>
                     ) : null}
+                    {activeIntelligence.isSampled ? (
+                      <div className="v1-sample-disclaimer">
+                        <span>ⓘ</span>
+                        <span>
+                          <strong>Sampling notice:</strong> Scores and position PnL represent the analyzed sample of the {activeIntelligence.analyzedPositions ?? 1000} most recently closed positions ({activeIntelligence.coveragePct}% coverage of {activeIntelligence.totalEligiblePositions} eligible closed positions in the 30-day window).
+                        </span>
+                      </div>
+                    ) : activeIntelligence.totalEligiblePositions ? (
+                      <div className="v1-sample-disclaimer complete">
+                        <span>ⓘ</span>
+                        <span>
+                          Scores and position PnL represent all {activeIntelligence.totalEligiblePositions} qualifying closed positions in the 30-day window (100% complete coverage).
+                        </span>
+                      </div>
+                    ) : null}
+
 
                     {activeIntelligence.referenceCohort ? (
                       <div style={{ padding: "8px 14px 2px", fontSize: "10.5px", color: "#66625c", display: "flex", justifyContent: "space-between" }}>

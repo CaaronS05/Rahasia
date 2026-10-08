@@ -31,6 +31,18 @@ process.on("SIGINT", () => handleTerminationSignal("SIGINT"));
 // ======================================================
 
 export type WalletStyleV1 = "SNIPER" | "FARMER" | "MIXED_UNCLASSIFIED";
+export const MAX_ANALYZED_POSITIONS = 1000;
+
+export interface SingleWalletSamplingMeta {
+  totalEligiblePositions: number;
+  analyzedPositions: number;
+  excludedPositions: number;
+  coveragePct: number;
+  isSampled: boolean;
+  selectionMethod: "LATEST_CLOSED_1000";
+  duplicatesRemoved: number;
+}
+
 
 export interface SingleWalletPerformance {
   totalPnl: number;
@@ -51,6 +63,13 @@ export interface SingleWalletShortlistReasons {
 export interface SingleWalletAnalysisResult {
   wallet: string;
   analyzedAt: string;
+  sampling: SingleWalletSamplingMeta;
+  totalEligiblePositions?: number;
+  analyzedPositions?: number;
+  excludedPositions?: number;
+  coveragePct?: number;
+  isSampled?: boolean;
+  selectionMethod?: "LATEST_CLOSED_1000";
   referenceCohort: {
     version: "v1";
     generatedAt: string;
@@ -95,6 +114,65 @@ export interface SingleWalletAnalysisResult {
     };
   };
 }
+export function comparePositionsLatestClosedDesc(a: ClosedPositionItem, b: ClosedPositionItem): number {
+  const aTime = parseTimestampMs(a.closedAt) ?? 0;
+  const bTime = parseTimestampMs(b.closedAt) ?? 0;
+  if (bTime !== aTime) {
+    return bTime - aTime; // Most recently closed first
+  }
+  // Deterministic tie-breaking: pool key ASC, then positionId ASC
+  const poolComp = (a.pool || "").localeCompare(b.pool || "");
+  if (poolComp !== 0) return poolComp;
+  return (a.positionId || "").localeCompare(b.positionId || "");
+}
+
+export function sampleLatestClosedPositions(
+  rawPositions: ClosedPositionItem[],
+  maxPositions = MAX_ANALYZED_POSITIONS
+): {
+  selectedPositions: ClosedPositionItem[];
+  samplingMeta: SingleWalletSamplingMeta;
+} {
+  const seen = new Set<string>();
+  const deduplicated: ClosedPositionItem[] = [];
+  let duplicatesRemoved = 0;
+
+  for (const pos of rawPositions) {
+    const key = `${pos.pool}:${pos.positionId}`;
+    if (seen.has(key)) {
+      duplicatesRemoved++;
+      continue;
+    }
+    seen.add(key);
+    deduplicated.push(pos);
+  }
+
+  // Sort globally by closedAt DESC across ALL discovered pools with deterministic tie-breaking
+  deduplicated.sort(comparePositionsLatestClosedDesc);
+
+  const totalEligiblePositions = deduplicated.length;
+  const isSampled = totalEligiblePositions > maxPositions;
+  const selectedPositions = isSampled ? deduplicated.slice(0, maxPositions) : deduplicated;
+  const analyzedPositions = selectedPositions.length;
+  const excludedPositions = Math.max(0, totalEligiblePositions - analyzedPositions);
+  const coveragePct =
+    totalEligiblePositions > 0
+      ? Number(((analyzedPositions / totalEligiblePositions) * 100).toFixed(2))
+      : 100;
+
+  const samplingMeta: SingleWalletSamplingMeta = {
+    totalEligiblePositions,
+    analyzedPositions,
+    excludedPositions,
+    coveragePct,
+    isSampled,
+    selectionMethod: "LATEST_CLOSED_1000",
+    duplicatesRemoved,
+  };
+
+  return { selectedPositions, samplingMeta };
+}
+
 
 interface ReferenceQualityData {
   generatedAt: string;
@@ -360,13 +438,13 @@ interface DailyRecordItem {
 
 async function fetchSingleWalletFabriqData(
   wallet: string,
-  historyDays = 30,
-  maxClosedPositions = 300
+  historyDays = 30
 ): Promise<{
   positions: ClosedPositionItem[];
   daily: DailyRecordItem[];
   valid: boolean;
   reason: string | null;
+  duplicatesRemoved: number;
 }> {
   const cutoffMs = Date.now() - historyDays * 24 * 60 * 60 * 1000;
 
@@ -442,7 +520,8 @@ async function fetchSingleWalletFabriqData(
   const poolIdsToQuery = Array.from(allDlmmPoolIds);
   const poolBatchSize = 25;
   const closedPositions: ClosedPositionItem[] = [];
-
+  const seenPosKeys = new Set<string>();
+  let duplicatesRemoved = 0;
   for (let i = 0; i < poolIdsToQuery.length; i += poolBatchSize) {
     const batch = poolIdsToQuery.slice(i, i + poolBatchSize);
     const posParams = new URLSearchParams();
@@ -477,9 +556,15 @@ async function fetchSingleWalletFabriqData(
             if (!pos || typeof pos !== "object") continue;
             const p = pos as Record<string, unknown>;
             if (!p.id) continue;
+            const posKey = `${poolKey}:${String(p.id)}`;
+            if (seenPosKeys.has(posKey)) {
+              duplicatesRemoved++;
+              continue;
+            }
+            seenPosKeys.add(posKey);
+
             const closeTs = p.latest_close_ts ?? p.closed_at ?? p.closedAt;
             const closeMs = parseTimestampMs(closeTs);
-
             if (closeMs !== null && closeMs >= cutoffMs) {
               const openTs = p.opened_at ?? p.openedAt ?? null;
               const openMs = parseTimestampMs(openTs);
@@ -530,14 +615,7 @@ async function fetchSingleWalletFabriqData(
                 winLoss,
               });
 
-              if (closedPositions.length > maxClosedPositions) {
-                return {
-                  positions: [],
-                  daily: [],
-                  valid: false,
-                  reason: `WORKLOAD_GUARD (> ${maxClosedPositions})`,
-                };
-              }
+              // Old WORKLOAD_GUARD removed: Single-Wallet Intelligence never rejects wallets > 1000 positions.
             }
           }
         }
@@ -547,10 +625,9 @@ async function fetchSingleWalletFabriqData(
 
   if (closedPositions.length === 0) {
     return {
-      positions: [],
-      daily: [],
       valid: false,
       reason: "0_CLOSED_POSITIONS",
+      duplicatesRemoved,
     };
   }
 
@@ -610,6 +687,7 @@ async function fetchSingleWalletFabriqData(
     daily,
     valid: true,
     reason: null,
+    duplicatesRemoved,
   };
 }
 
@@ -788,17 +866,25 @@ export async function analyzeSingleWallet(
     daily = fetched.daily;
   }
 
-  // STAGE 9: Position processing
-  logStage(9, "POSITION_PROCESSING", `Processing ${positions.length} positions and computing risk & quality metrics for ${normalizedWallet}...`);
+  // Apply 1,000 closed-position sampling cap with global DESC sorting & deterministic tie-break
+  const { selectedPositions, samplingMeta } = sampleLatestClosedPositions(positions, MAX_ANALYZED_POSITIONS);
 
-  // 3. Compute Raw Descriptive Metrics
-  const closedPositionCount = positions.length;
-  const uniqueDlmmPools = new Set(positions.map((p) => p.pool).filter(Boolean)).size;
+  // STAGE 9: Position processing & logging sampling statistics
+  logStage(
+    9,
+    "POSITION_PROCESSING",
+    `[SAMPLING] Total qualifying: ${samplingMeta.totalEligiblePositions} | Duplicates removed: ${samplingMeta.duplicatesRemoved} | ` +
+    `Selected: ${samplingMeta.analyzedPositions} | Excluded older: ${samplingMeta.excludedPositions} | ` +
+    `Coverage: ${samplingMeta.coveragePct}% (${samplingMeta.isSampled ? "SAMPLED LATEST 1000" : "COMPLETE"})`
+  );
 
-  const totalPnl = Number(positions.reduce((sum, p) => sum + p.pnl, 0).toFixed(4));
-  const winningPositions = positions.filter((p) => p.winLoss === "WIN");
-  const losingPositions = positions.filter((p) => p.winLoss === "LOSS");
+  // 3. Compute Raw Descriptive Metrics using ONLY selected positions
+  const closedPositionCount = selectedPositions.length;
+  const uniqueDlmmPools = new Set(selectedPositions.map((p) => p.pool).filter(Boolean)).size;
 
+  const totalPnl = Number(selectedPositions.reduce((sum, p) => sum + p.pnl, 0).toFixed(4));
+  const winningPositions = selectedPositions.filter((p) => p.winLoss === "WIN");
+  const losingPositions = selectedPositions.filter((p) => p.winLoss === "LOSS");
   const grossProfit = Number(winningPositions.reduce((sum, p) => sum + p.pnl, 0).toFixed(4));
   const grossLoss = Number(Math.abs(losingPositions.reduce((sum, p) => sum + p.pnl, 0)).toFixed(4));
 
@@ -811,7 +897,7 @@ export async function analyzeSingleWallet(
 
   const positionWinRate = Number(((winningPositions.length / closedPositionCount) * 100).toFixed(2));
 
-  const pnlPcts = positions
+  const pnlPcts = selectedPositions
     .map((p) => p.pnlPct)
     .filter((v): v is number => typeof v === "number" && Number.isFinite(v));
 
@@ -822,7 +908,7 @@ export async function analyzeSingleWallet(
   const pnlConcentrationTop1 = grossProfit > 0 ? Number(((maxWinPnl / grossProfit) * 100).toFixed(2)) : 0;
 
   // 4. Compute Position Risk & Daily Risk
-  const posRisk = computePositionRisk(positions);
+  const posRisk = computePositionRisk(selectedPositions);
   const dailyRisk = computeDailyRisk(daily);
 
   const cvar10PositionPnlPct = posRisk.cvar10PositionPnlPct;
@@ -865,7 +951,7 @@ export async function analyzeSingleWallet(
 
   let minMs = Infinity;
   let maxMs = -Infinity;
-  for (const p of positions) {
+  for (const p of selectedPositions) {
     const oMs = parseTimestampMs(p.openedAt);
     const cMs = parseTimestampMs(p.closedAt);
     if (oMs !== null && oMs < minMs) minMs = oMs;
@@ -879,7 +965,7 @@ export async function analyzeSingleWallet(
   const confidenceScore = Number((positionSampleScore * 0.75 + historySpanScore * 0.25).toFixed(2));
 
   // 6. Style Classification
-  const holdHours = positions
+  const holdHours = selectedPositions
     .map((p) => p.holdDurationHours)
     .filter((v): v is number => typeof v === "number" && Number.isFinite(v));
   const medianHoldHours = computeMedian(holdHours) ?? 0;
@@ -904,6 +990,13 @@ export async function analyzeSingleWallet(
   const result: SingleWalletAnalysisResult = {
     wallet: normalizedWallet,
     analyzedAt: new Date().toISOString(),
+    sampling: samplingMeta,
+    totalEligiblePositions: samplingMeta.totalEligiblePositions,
+    analyzedPositions: samplingMeta.analyzedPositions,
+    excludedPositions: samplingMeta.excludedPositions,
+    coveragePct: samplingMeta.coveragePct,
+    isSampled: samplingMeta.isSampled,
+    selectionMethod: samplingMeta.selectionMethod,
     referenceCohort: {
       version: "v1",
       generatedAt: cohort.meta.generatedAt,
@@ -997,6 +1090,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
       console.log(`Confidence : ${res.confidenceScore}/100`);
       console.log(`Style      : ${res.style}`);
       console.log(`Shortlist  : ${res.shortlisted ? "YES" : "NO"}`);
+      console.log(`Positions  : ${res.sampling.analyzedPositions} analyzed / ${res.sampling.totalEligiblePositions} eligible (${res.sampling.coveragePct}% coverage${res.sampling.isSampled ? " - SAMPLED" : ""})`);
       console.log(`Cohort     : ${res.referenceCohort.validWallets} wallets (${res.referenceCohort.generatedAt})`);
       console.log("==================================================");
     })
