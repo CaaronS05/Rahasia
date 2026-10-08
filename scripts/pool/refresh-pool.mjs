@@ -12,6 +12,7 @@ const SCANNED_POOLS_PATH = path.join(ROOT, "data/master/scanned-pools.json");
 function parseArgs() {
   const args = process.argv.slice(2);
   let poolAddress = null;
+  let workers = null;
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -20,16 +21,37 @@ function parseArgs() {
       i++;
     } else if (arg.startsWith("--pool=")) {
       poolAddress = arg.slice("--pool=".length).trim();
+    } else if (arg === "--workers" && args[i + 1]) {
+      const parsed = parseInt(args[i + 1], 10);
+      if (Number.isInteger(parsed) && parsed >= 1) {
+        workers = parsed;
+      }
+      i++;
+    } else if (arg.startsWith("--workers=")) {
+      const parsed = parseInt(arg.slice("--workers=".length), 10);
+      if (Number.isInteger(parsed) && parsed >= 1) {
+        workers = parsed;
+      }
     }
+  }
+
+  if (!workers && process.env.FABRIQ_CONCURRENCY) {
+    const parsed = parseInt(process.env.FABRIQ_CONCURRENCY, 10);
+    if (Number.isInteger(parsed) && parsed >= 1) {
+      workers = parsed;
+    }
+  }
+  if (!workers) {
+    workers = 8;
   }
 
   if (!poolAddress) {
     throw new Error(
-      "Pool address is required.\nUsage: node scripts/pool/refresh-pool.mjs --pool <POOL_ADDRESS>"
+      "Pool address is required.\nUsage: node scripts/pool/refresh-pool.mjs --pool <POOL_ADDRESS> [--workers <N>]"
     );
   }
 
-  return { poolAddress };
+  return { poolAddress, workers };
 }
 
 function runSubprocess(cmd, args, stepName) {
@@ -57,13 +79,15 @@ function runSubprocess(cmd, args, stepName) {
 }
 
 async function main() {
-  const { poolAddress } = parseArgs();
+  const { poolAddress, workers } = parseArgs();
 
   console.log("========================================");
   console.log("EXACT POOL REFRESH ORCHESTRATOR");
   console.log("========================================");
   console.log(`Target Pool: ${poolAddress}`);
-
+  if (workers) {
+    console.log(`Workers:     ${workers}`);
+  }
   // 1. Read canonical scanned-pools.json
   let scannedPoolsData;
   try {
@@ -113,14 +137,18 @@ async function main() {
 
   // Stage 2: ENRICHING
   console.log(`[REFRESH_POOL] STAGE enriching`);
+  const enrichArgs = [
+    "scripts/pool/enrich-selected-wallets.mjs",
+    "--token",
+    tokenMint,
+    "--refresh",
+  ];
+  if (workers) {
+    enrichArgs.push("--workers", String(workers));
+  }
   await runSubprocess(
     process.execPath,
-    [
-      "scripts/pool/enrich-selected-wallets.mjs",
-      "--token",
-      tokenMint,
-      "--refresh",
-    ],
+    enrichArgs,
     "ENRICHING"
   );
 

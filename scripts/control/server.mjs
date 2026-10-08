@@ -144,7 +144,7 @@ let poolScannerState = {
     status: "idle",
     stage: "idle",
     tokenCa: null,
-    fabriqWorkers: 2,
+    fabriqWorkers: 8,
     startedAt: null,
     finishedAt: null,
     exitCode: null,
@@ -2006,7 +2006,7 @@ function stopPoolScanner() {
     return poolScannerPublicState();
 }
 
-function startPoolScanner(tokenCa, fabriqWorkers = 2) {
+function startPoolScanner(tokenCa, fabriqWorkers = 8) {
     assertDataPipelineAvailable();
     const isResuming = checkPoolScannerResumable(tokenCa);
 
@@ -2165,7 +2165,7 @@ function startSelectedPoolScanner(tokenCa, selectedPoolAddresses) {
         status: "running",
         stage: "extract",
         tokenCa,
-        fabriqWorkers: 2,
+        fabriqWorkers: 8,
         startedAt: new Date().toISOString(),
         finishedAt: null,
         exitCode: null,
@@ -2308,7 +2308,7 @@ function startSelectedPoolScanner(tokenCa, selectedPoolAddresses) {
     });
 }
 
-function startSelectedWalletsEnrichment(tokenCa, fabriqWorkers = 2, limit = null) {
+function startSelectedWalletsEnrichment(tokenCa, fabriqWorkers = 8, limit = null) {
     assertDataPipelineAvailable();
 
     poolScannerUserStopped = false;
@@ -3610,7 +3610,7 @@ function poolRefreshPublicState(queryPoolAddress = null) {
     };
 }
 
-function startPoolRefresh(poolAddress) {
+function startPoolRefresh(poolAddress, options = {}) {
     assertDataPipelineAvailable();
 
     poolRefreshState = {
@@ -3629,12 +3629,29 @@ function startPoolRefresh(poolAddress) {
         poolAddress,
     ];
 
+    const workers = options?.workers ?? (
+        process.env.FABRIQ_CONCURRENCY
+            ? parseInt(process.env.FABRIQ_CONCURRENCY, 10)
+            : 8
+    );
+
+    if (workers && Number.isInteger(workers) && workers >= 1) {
+        args.push("--workers", String(workers));
+    }
+
+    const childEnv = {
+        ...process.env,
+        ...(workers && Number.isInteger(workers) && workers >= 1
+            ? { FABRIQ_CONCURRENCY: String(workers) }
+            : {}),
+    };
+
     poolRefreshChild = spawn(
         process.execPath,
         args,
         {
             cwd: ROOT,
-            env: process.env,
+            env: childEnv,
             stdio: ["ignore", "pipe", "pipe"],
         }
     );
@@ -4395,7 +4412,13 @@ const server = http.createServer(async (request, response) => {
             }
 
             try {
-                const jobState = startPoolRefresh(poolAddress);
+                const queryWorkers = url.searchParams.get("workers");
+                const parsedWorkers = queryWorkers ? parseInt(queryWorkers, 10) : null;
+                const options = {};
+                if (parsedWorkers && Number.isInteger(parsedWorkers) && parsedWorkers >= 1) {
+                    options.workers = parsedWorkers;
+                }
+                const jobState = startPoolRefresh(poolAddress, options);
                 json(request, response, 202, jobState);
             } catch (err) {
                 json(request, response, 500, {
@@ -5010,7 +5033,7 @@ const server = http.createServer(async (request, response) => {
             return;
         }
 
-        let fabriqWorkers = 2;
+        let fabriqWorkers = 8;
         if (body?.fabriqWorkers !== undefined && body?.fabriqWorkers !== null) {
             const rawVal = body.fabriqWorkers;
             const strVal = String(rawVal).trim();
@@ -5533,7 +5556,7 @@ const server = http.createServer(async (request, response) => {
 
         const tokenCa = rawToken.trim();
 
-        let fabriqWorkers = 2;
+        let fabriqWorkers = 8;
         if (body?.fabriqWorkers !== undefined && body?.fabriqWorkers !== null) {
             const rawVal = body.fabriqWorkers;
             const strVal = String(rawVal).trim();

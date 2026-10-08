@@ -35,11 +35,40 @@ const CDP_URL = "http://127.0.0.1:9222";
 
 const TIMEZONE = "Asia/Jakarta";
 
-const DELAY_MS = 500;
+const DELAY_MS =
+    process.env.FABRIQ_WALLET_DELAY_MS !== undefined
+        ? Math.max(
+            0,
+            parseInt(
+                process.env.FABRIQ_WALLET_DELAY_MS,
+                10
+            ) || 0
+        )
+        : 0;
+
+const MAX_IN_FLIGHT =
+    Math.max(
+        1,
+        parseInt(
+            process.env.FABRIQ_MAX_IN_FLIGHT ??
+            process.env.FABRIQ_HTTP_CONCURRENCY ??
+            "12",
+            10
+        ) || 12
+    );
+
+const MIN_IN_FLIGHT =
+    Math.max(
+        1,
+        parseInt(
+            process.env.FABRIQ_MIN_IN_FLIGHT ?? "2",
+            10
+        ) || 2
+    );
+
 const MAX_RETRIES = 3;
 const STALE_AFTER_HOURS = 24;
 const RETRY_404_DELAY_MS = 5000;
-
 const REFRESH_BEFORE =
     process.env.FABRIQ_REFRESH_BEFORE
         ? Date.parse(
@@ -51,9 +80,9 @@ const CONCURRENCY =
     Math.max(
         1,
         parseInt(
-            process.env.FABRIQ_CONCURRENCY ?? "2",
+            process.env.FABRIQ_CONCURRENCY ?? "8",
             10
-        ) || 2
+        ) || 8
     );
 
 const LIMIT =
@@ -71,6 +100,149 @@ const LIMIT =
 
 const sleep = (ms) =>
     new Promise((resolve) => setTimeout(resolve, ms));
+
+const metrics = {
+    totalRequests: 0,
+    activeRequests: 0,
+    peakActiveRequests: 0,
+    statsLatencies: [],
+    calendarLatencies: [],
+    allLatencies: [],
+    walletTimesMs: [],
+    http429Count: 0,
+    http403Count: 0,
+    http404Count: 0,
+    http5xxCount: 0,
+    networkErrorCount: 0,
+    retryWaitTimeMs: 0,
+    checkpointWriteTimeMs: 0,
+    jwtRefreshTimeMs: 0,
+    jwtRefreshCount: 0,
+};
+
+function percentile(arr, p) {
+    if (!arr.length) return 0;
+    const sorted = [...arr].sort((a, b) => a - b);
+    const index = Math.ceil((p / 100) * sorted.length) - 1;
+    return sorted[Math.max(0, Math.min(index, sorted.length - 1))];
+}
+
+function average(arr) {
+    if (!arr.length) return 0;
+    return arr.reduce((a, b) => a + b, 0) / arr.length;
+}
+
+class RequestScheduler {
+    constructor({
+        maxInFlight = 10,
+        minInFlight = 2,
+        initialInFlight = 8,
+        minIntervalMs = 20,
+    } = {}) {
+        this.maxInFlight = maxInFlight;
+        this.minInFlight = minInFlight;
+        this.currentLimit = Math.min(
+            maxInFlight,
+            Math.max(minInFlight, initialInFlight)
+        );
+        this.activeInFlight = 0;
+        this.minIntervalMs = minIntervalMs;
+        this.lastDispatchTime = 0;
+        this.queue = [];
+        this.pausedUntil = 0;
+        this.consecutiveSuccesses = 0;
+        this.pumpScheduled = false;
+    }
+
+    acquire() {
+        return new Promise((resolve) => {
+            this.queue.push(resolve);
+            this.pump();
+        });
+    }
+
+    release() {
+        if (this.activeInFlight > 0) {
+            this.activeInFlight--;
+        }
+        this.pump();
+    }
+
+    onSuccess(latencyMs) {
+        this.consecutiveSuccesses++;
+        if (this.consecutiveSuccesses >= 20 && latencyMs < 2000) {
+            if (this.currentLimit < this.maxInFlight) {
+                this.currentLimit++;
+            }
+            this.consecutiveSuccesses = 0;
+        }
+    }
+
+    onRateLimit(retryAfterSeconds) {
+        this.consecutiveSuccesses = 0;
+        this.currentLimit = Math.max(
+            this.minInFlight,
+            Math.floor(this.currentLimit * 0.7)
+        );
+        this.pausedUntil =
+            Date.now() + (retryAfterSeconds * 1000);
+        console.log(
+            `[SCHEDULER] 429 backoff → limit=${this.currentLimit}, pause=${retryAfterSeconds}s`
+        );
+    }
+
+    onServerError() {
+        this.consecutiveSuccesses = 0;
+        if (this.currentLimit > this.minInFlight) {
+            this.currentLimit--;
+            console.log(
+                `[SCHEDULER] 5xx backoff → limit=${this.currentLimit}`
+            );
+        }
+    }
+
+    pump() {
+        if (this.pumpScheduled) return;
+
+        const now = Date.now();
+        if (now < this.pausedUntil) {
+            this.pumpScheduled = true;
+            setTimeout(() => {
+                this.pumpScheduled = false;
+                this.pump();
+            }, Math.max(10, this.pausedUntil - now));
+            return;
+        }
+
+        while (
+            this.queue.length > 0 &&
+            this.activeInFlight < this.currentLimit
+        ) {
+            const elapsed =
+                Date.now() - this.lastDispatchTime;
+            if (elapsed < this.minIntervalMs) {
+                this.pumpScheduled = true;
+                setTimeout(() => {
+                    this.pumpScheduled = false;
+                    this.pump();
+                }, this.minIntervalMs - elapsed);
+                return;
+            }
+
+            this.activeInFlight++;
+            this.lastDispatchTime = Date.now();
+            const resolve = this.queue.shift();
+            resolve();
+        }
+    }
+}
+
+const scheduler = new RequestScheduler({
+    maxInFlight: MAX_IN_FLIGHT,
+    minInFlight: MIN_IN_FLIGHT,
+    initialInFlight: Math.min(MAX_IN_FLIGHT, 10),
+    minIntervalMs: 20,
+});
 
 function getWalletOwner(row) {
     if (typeof row === "string") {
@@ -288,7 +460,28 @@ function decodeJwtExpiry(token) {
 // CHECKPOINT
 // ======================================================
 
-async function loadCheckpoint() {
+let checkpointWriteQueue =
+    Promise.resolve();
+
+async function saveCheckpoint(row) {
+    const t0 = performance.now();
+    const line =
+        JSON.stringify(row) + "\n";
+
+    checkpointWriteQueue =
+        checkpointWriteQueue.then(
+            () =>
+                fs.appendFile(
+                    CHECKPOINT,
+                    line
+                )
+        );
+
+    await checkpointWriteQueue;
+    metrics.checkpointWriteTimeMs += performance.now() - t0;
+}
+
+async function loadCheckpoint(targetWallets = null) {
     const map = new Map();
 
     try {
@@ -325,26 +518,94 @@ async function loadCheckpoint() {
         }
     }
 
-    return map;
-}
-
-let checkpointWriteQueue =
-    Promise.resolve();
-
-async function saveCheckpoint(row) {
-    const line =
-        JSON.stringify(row) + "\n";
-
-    checkpointWriteQueue =
-        checkpointWriteQueue.then(
-            () =>
-                fs.appendFile(
-                    CHECKPOINT,
-                    line
-                )
+    // Cross-pool cache reuse gate
+    if (
+        REFRESH_BEFORE === null &&
+        process.env.FABRIQ_CROSS_POOL_CACHE !== "0" &&
+        Array.isArray(targetWallets) &&
+        targetWallets.length > 0
+    ) {
+        const needed = new Set(
+            targetWallets.filter((wallet) => {
+                const row = map.get(wallet);
+                return !(
+                    row?.status === "ok" &&
+                    row?.fabriq?.stats &&
+                    typeof row.fabriq.stats === "object" &&
+                    hasRequiredCalendars(row) &&
+                    isFabriqFresh(row)
+                );
+            })
         );
 
-    await checkpointWriteQueue;
+        if (needed.size > 0) {
+            let reusedCount = 0;
+            const discoveryBase = path.resolve("data/discovery/pool-scanner");
+            const currentCheckpointResolved = path.resolve(CHECKPOINT);
+
+            try {
+                const entries = await fs.readdir(discoveryBase, { withFileTypes: true });
+                for (const entry of entries) {
+                    if (!entry.isDirectory()) continue;
+                    if (needed.size === 0) break;
+
+                    const siblingCheckpoint = path.join(
+                        discoveryBase,
+                        entry.name,
+                        "selected-scan",
+                        "fabriq-checkpoint.jsonl"
+                    );
+
+                    if (path.resolve(siblingCheckpoint) === currentCheckpointResolved) {
+                        continue;
+                    }
+
+                    let siblingText;
+                    try {
+                        siblingText = await fs.readFile(siblingCheckpoint, "utf8");
+                    } catch {
+                        continue;
+                    }
+
+                    const siblingLines = siblingText.split("\n").filter(Boolean);
+                    for (const sLine of siblingLines) {
+                        if (needed.size === 0) break;
+                        try {
+                            const row = JSON.parse(sLine);
+                            if (!row?.owner || !needed.has(row.owner)) continue;
+
+                            if (
+                                row.status === "ok" &&
+                                row.fabriq?.stats &&
+                                typeof row.fabriq.stats === "object" &&
+                                hasRequiredCalendars(row) &&
+                                isFabriqFresh(row)
+                            ) {
+                                map.set(row.owner, row);
+                                needed.delete(row.owner);
+                                await saveCheckpoint(row);
+                                reusedCount++;
+                            }
+                        } catch {
+                            // ignore malformed lines
+                        }
+                    }
+                }
+            } catch (err) {
+                console.warn(
+                    `[CROSS_POOL_CACHE] Warning: could not scan sibling checkpoints: ${err.message}`
+                );
+            }
+
+            if (reusedCount > 0) {
+                console.log(
+                    `[CROSS_POOL_CACHE] Reused ${reusedCount} fresh wallet(s) from sibling pool checkpoints`
+                );
+            }
+        }
+    }
+
+    return map;
 }
 
 // ======================================================
@@ -394,83 +655,92 @@ let tokenRefreshPromise =
     null;
 
 async function refreshTokenFromBrowser() {
-    while (true) {
-        const result =
-            await page.evaluate(
-                async () => {
-                    const response =
-                        await fetch(
-                            "/auth/verify",
-                            {
-                                credentials:
-                                    "include",
+    const t0 = performance.now();
+    try {
+        while (true) {
+            const result =
+                await page.evaluate(
+                    async () => {
+                        const response =
+                            await fetch(
+                                "/auth/verify",
+                                {
+                                    credentials:
+                                        "include",
 
-                                cache:
-                                    "no-store",
-                            }
-                        );
+                                    cache:
+                                        "no-store",
+                                }
+                            );
 
-                    return {
-                        status:
-                            response.status,
+                        return {
+                            status:
+                                response.status,
 
-                        text:
-                            await response.text(),
-                    };
-                }
-            );
+                            text:
+                                await response.text(),
+                        };
+                    }
+                );
 
-        if (result.status === 403) {
-            console.log(
-                "[AUTH WAIT] /auth/verify blocked by Cloudflare (403) — retrying in 5s"
-            );
-            await sleep(5000);
-            continue;
-        }
+            if (result.status === 403) {
+                console.log(
+                    "[AUTH WAIT] /auth/verify blocked by Cloudflare (403) — retrying in 5s"
+                );
+                await sleep(5000);
+                continue;
+            }
 
-        if (result.status !== 200) {
-            throw new Error(
-                `/auth/verify failed: ${result.status} ${result.text.slice(
+            if (result.status !== 200) {
+                throw new Error(
+                    `/auth/verify failed: ${result.status} ${result.text.slice(
+                        0,
+                        200
+                    )}`
+                );
+            }
+
+            const json =
+                JSON.parse(
+                    result.text
+                );
+
+            if (!json.token) {
+                throw new Error(
+                    "JWT missing from /auth/verify"
+                );
+            }
+
+            token =
+                json.token;
+
+            tokenExpiresAt =
+                decodeJwtExpiry(token) ||
+                Date.now() + 45_000;
+
+            const secondsLeft =
+                Math.max(
                     0,
-                    200
-                )}`
+                    Math.floor(
+                        (
+                            tokenExpiresAt -
+                            Date.now()
+                        ) / 1000
+                    )
+                );
+
+            metrics.jwtRefreshCount++;
+            metrics.jwtRefreshTimeMs += performance.now() - t0;
+
+            console.log(
+                `[AUTH] JWT refreshed (${secondsLeft}s)`
             );
+
+            return token;
         }
-
-        const json =
-            JSON.parse(
-                result.text
-            );
-
-        if (!json.token) {
-            throw new Error(
-                "JWT missing from /auth/verify"
-            );
-        }
-
-        token =
-            json.token;
-
-        tokenExpiresAt =
-            decodeJwtExpiry(token) ||
-            Date.now() + 45_000;
-
-        const secondsLeft =
-            Math.max(
-                0,
-                Math.floor(
-                    (
-                        tokenExpiresAt -
-                        Date.now()
-                    ) / 1000
-                )
-            );
-
-        console.log(
-            `[AUTH] JWT refreshed (${secondsLeft}s)`
-        );
-
-        return token;
+    } catch (err) {
+        metrics.jwtRefreshTimeMs += performance.now() - t0;
+        throw err;
     }
 }
 
@@ -511,8 +781,26 @@ async function fabriqFetch(
     initialAttempt = 1
 ) {
     let attempt = initialAttempt;
+    const isStats = url.includes("/portfolio/stats/");
 
     while (true) {
+        let slotHeld = false;
+        await scheduler.acquire();
+        slotHeld = true;
+        const releaseSlot = () => {
+            if (slotHeld) {
+                slotHeld = false;
+                scheduler.release();
+            }
+        };
+
+        metrics.totalRequests++;
+        metrics.activeRequests++;
+        if (metrics.activeRequests > metrics.peakActiveRequests) {
+            metrics.peakActiveRequests = metrics.activeRequests;
+        }
+        const reqT0 = performance.now();
+
         try {
             const jwt = await getToken();
 
@@ -523,11 +811,20 @@ async function fabriqFetch(
                 },
             });
 
+            const reqDur = performance.now() - reqT0;
+            metrics.allLatencies.push(reqDur);
+            if (isStats) {
+                metrics.statsLatencies.push(reqDur);
+            } else {
+                metrics.calendarLatencies.push(reqDur);
+            }
+
             // --------------------------------
             // JWT expired/rejected
             // --------------------------------
 
             if (response.status === 401) {
+                releaseSlot();
                 if (attempt >= MAX_RETRIES) {
                     throw new Error(
                         "401 Unauthorized after retries"
@@ -549,12 +846,7 @@ async function fabriqFetch(
             // --------------------------------
 
             if (response.status === 429) {
-                if (attempt >= MAX_RETRIES) {
-                    throw new Error(
-                        "429 Too Many Requests"
-                    );
-                }
-
+                metrics.http429Count++;
                 const retryAfter =
                     Number(
                         response.headers.get(
@@ -562,10 +854,20 @@ async function fabriqFetch(
                         )
                     ) || 5;
 
+                scheduler.onRateLimit(retryAfter);
+                releaseSlot();
+
+                if (attempt >= MAX_RETRIES) {
+                    throw new Error(
+                        "429 Too Many Requests"
+                    );
+                }
+
                 console.log(
                     `[RATE LIMIT] waiting ${retryAfter}s`
                 );
 
+                metrics.retryWaitTimeMs += retryAfter * 1000;
                 await sleep(
                     retryAfter * 1000
                 );
@@ -579,6 +881,8 @@ async function fabriqFetch(
             // --------------------------------
 
             if (response.status === 403) {
+                metrics.http403Count++;
+                releaseSlot();
                 throw new Error(
                     "403 Forbidden. Check the existing Fabriq browser session."
                 );
@@ -589,10 +893,13 @@ async function fabriqFetch(
             // --------------------------------
 
             if (response.status === 404) {
+                metrics.http404Count++;
+                releaseSlot();
                 console.log(
                     "[WAIT] 404 Not Found — wallet data not ready, retrying in 5000ms"
                 );
 
+                metrics.retryWaitTimeMs += RETRY_404_DELAY_MS;
                 await sleep(
                     RETRY_404_DELAY_MS
                 );
@@ -606,6 +913,9 @@ async function fabriqFetch(
             // --------------------------------
 
             if (response.status >= 500) {
+                metrics.http5xxCount++;
+                scheduler.onServerError();
+                releaseSlot();
                 if (attempt >= MAX_RETRIES) {
                     throw new Error(
                         `Server error ${response.status}`
@@ -619,6 +929,7 @@ async function fabriqFetch(
                     `[RETRY] server ${response.status}, waiting ${delay}ms`
                 );
 
+                metrics.retryWaitTimeMs += delay;
                 await sleep(delay);
 
                 attempt++;
@@ -626,13 +937,18 @@ async function fabriqFetch(
             }
 
             if (!response.ok) {
+                releaseSlot();
                 throw new Error(
                     `${response.status} ${response.statusText}`
                 );
             }
 
-            return await response.json();
+            const data = await response.json();
+            scheduler.onSuccess(reqDur);
+            releaseSlot();
+            return data;
         } catch (error) {
+            releaseSlot();
             // network error
             if (
                 attempt < MAX_RETRIES &&
@@ -649,6 +965,7 @@ async function fabriqFetch(
                     "Server error"
                 )
             ) {
+                metrics.networkErrorCount++;
                 const delay =
                     attempt * 2000;
 
@@ -656,6 +973,7 @@ async function fabriqFetch(
                     `[RETRY] ${error.message} → ${delay}ms`
                 );
 
+                metrics.retryWaitTimeMs += delay;
                 await sleep(delay);
 
                 attempt++;
@@ -663,6 +981,9 @@ async function fabriqFetch(
             }
 
             throw error;
+        } finally {
+            releaseSlot();
+            metrics.activeRequests--;
         }
     }
 }
@@ -677,8 +998,23 @@ async function fetchWallet(wallet) {
         `?timezone=${encodeURIComponent(TIMEZONE)}` +
         `&sources=wallet&sources=hawkfi`;
 
-    const statsResponse =
-        await fabriqFetch(statsUrl);
+    const statsPromise = fabriqFetch(statsUrl);
+
+    const calendarPromises = CALENDAR_MONTHS.map(async (month) => {
+        const calendarUrl =
+            `https://apinew.fabriq.trade/portfolio/calendar/${wallet}` +
+            `?month=${month}` +
+            `&timezone=${encodeURIComponent(TIMEZONE)}` +
+            `&sources=wallet&sources=hawkfi`;
+
+        const resp = await fabriqFetch(calendarUrl);
+        return { month, resp };
+    });
+
+    const [statsResponse, ...calendarResults] = await Promise.all([
+        statsPromise,
+        ...calendarPromises,
+    ]);
 
     if (
         statsResponse?.success !== true ||
@@ -691,21 +1027,10 @@ async function fetchWallet(wallet) {
 
     const calendars = {};
 
-    for (const month of CALENDAR_MONTHS) {
-        const calendarUrl =
-            `https://apinew.fabriq.trade/portfolio/calendar/${wallet}` +
-            `?month=${month}` +
-            `&timezone=${encodeURIComponent(TIMEZONE)}` +
-            `&sources=wallet&sources=hawkfi`;
-
-        const calendarResponse =
-            await fabriqFetch(
-                calendarUrl
-            );
-
+    for (const { month, resp } of calendarResults) {
         if (
-            calendarResponse?.success !== true ||
-            calendarResponse?.data === undefined
+            resp?.success !== true ||
+            resp?.data === undefined
         ) {
             throw new Error(
                 `Invalid Fabriq calendar response for ${month}`
@@ -713,8 +1038,8 @@ async function fetchWallet(wallet) {
         }
 
         const rawMonthData =
-            calendarResponse.data && typeof calendarResponse.data === "object"
-                ? calendarResponse.data
+            resp.data && typeof resp.data === "object"
+                ? resp.data
                 : {};
 
         calendars[month] =
@@ -881,7 +1206,7 @@ await fs.mkdir(path.dirname(CHECKPOINT), { recursive: true });
 await fs.mkdir(path.dirname(OUTPUT), { recursive: true });
 
 const checkpoint =
-    await loadCheckpoint();
+    await loadCheckpoint(allWallets);
 
 const alreadyDone =
     wallets.filter((wallet) => {
@@ -958,11 +1283,13 @@ async function runWorker(
             `\n[W${workerId}] [${i + 1}/${wallets.length}] ${wallet}`
         );
 
+        const walletT0 = performance.now();
         try {
             const result =
                 await fetchWallet(
                     wallet
                 );
+            metrics.walletTimesMs.push(performance.now() - walletT0);
 
             checkpoint.set(
                 wallet,
@@ -1025,9 +1352,9 @@ async function runWorker(
             );
         }
 
-        await sleep(
-            DELAY_MS
-        );
+        if (DELAY_MS > 0) {
+            await sleep(DELAY_MS);
+        }
     }
 }
 
@@ -1150,7 +1477,28 @@ console.log(
     `Checkpoint: ${CHECKPOINT}`
 );
 
-process.exit(0);
+
+const walletsPerMin = runtimeSeconds > 0 ? (successfulResults.length / runtimeSeconds) * 60 : 0;
+console.log("\n========================================");
+console.log("PERFORMANCE PROFILE");
+console.log("========================================");
+console.log(`Wallets Completed: ${successfulResults.length} / ${wallets.length}`);
+console.log(`Throughput       : ${walletsPerMin.toFixed(2)} wallets/min`);
+console.log(`Avg Wallet Time  : ${average(metrics.walletTimesMs).toFixed(0)} ms`);
+console.log(`Total Requests   : ${metrics.totalRequests}`);
+console.log(`Peak In-Flight   : ${metrics.peakActiveRequests}`);
+console.log(`Req Latency (all): mean=${average(metrics.allLatencies).toFixed(0)}ms p50=${percentile(metrics.allLatencies, 50).toFixed(0)}ms p95=${percentile(metrics.allLatencies, 95).toFixed(0)}ms`);
+console.log(`Stats Latency    : mean=${average(metrics.statsLatencies).toFixed(0)}ms p50=${percentile(metrics.statsLatencies, 50).toFixed(0)}ms p95=${percentile(metrics.statsLatencies, 95).toFixed(0)}ms`);
+console.log(`Calendar Latency : mean=${average(metrics.calendarLatencies).toFixed(0)}ms p50=${percentile(metrics.calendarLatencies, 50).toFixed(0)}ms p95=${percentile(metrics.calendarLatencies, 95).toFixed(0)}ms`);
+console.log(`HTTP 429s        : ${metrics.http429Count}`);
+console.log(`HTTP 403s        : ${metrics.http403Count}`);
+console.log(`HTTP 404s        : ${metrics.http404Count}`);
+console.log(`HTTP 5xxs        : ${metrics.http5xxCount}`);
+console.log(`Retry/Wait Time  : ${(metrics.retryWaitTimeMs / 1000).toFixed(2)}s`);
+console.log(`Checkpoint Time  : ${(metrics.checkpointWriteTimeMs / 1000).toFixed(2)}s`);
+console.log(`JWT Refresh Time : ${(metrics.jwtRefreshTimeMs / 1000).toFixed(2)}s (${metrics.jwtRefreshCount} refreshes)`);
+console.log("========================================");
+process.exit(failures.length > 0 ? 1 : 0);
 
 // IMPORTANT:
 // jangan browser.close()
