@@ -3,12 +3,13 @@ import path from "node:path";
 import type {
     AnalyticsPeriod,
     PositionAnalyticsDataset,
+    PositionMetricsResult,
 } from "./position-analytics-types.ts";
 import type { RawEventInput } from "./position-lifecycle-extractor.ts";
 
 export const DEFAULT_ANALYTICS_STORAGE_BASE = "data/analytics/positions";
 export const DEFAULT_CHECKPOINT_STORAGE_BASE = "data/analytics/checkpoints";
-
+export const DEFAULT_METRICS_STORAGE_BASE = "data/analytics/metrics";
 /**
  * Get the standardized path for a wallet period dataset.
  */
@@ -76,6 +77,63 @@ export function savePositionAnalyticsDataset(
 ): string {
     const targetPath = getDatasetFilePath(dataset.wallet, dataset.period, baseDir);
     atomicWriteJsonFile(targetPath, dataset);
+    return targetPath;
+}
+
+/**
+ * Get the standardized path for wallet period metrics output.
+ */
+export function getMetricsFilePath(
+    wallet: string,
+    period: AnalyticsPeriod,
+    baseDir = DEFAULT_METRICS_STORAGE_BASE
+): string {
+    return path.resolve(baseDir, wallet.trim(), `${period}.json`);
+}
+
+/**
+ * Load existing position metrics result if available and valid.
+ */
+export function loadPositionMetrics(
+    wallet: string,
+    period: AnalyticsPeriod,
+    baseDir = DEFAULT_METRICS_STORAGE_BASE
+): PositionMetricsResult | null {
+    const filePath = getMetricsFilePath(wallet, period, baseDir);
+    if (!fs.existsSync(filePath)) {
+        return null;
+    }
+
+    try {
+        const raw = fs.readFileSync(filePath, "utf8");
+        const parsed = JSON.parse(raw);
+        if (
+            parsed &&
+            typeof parsed === "object" &&
+            parsed.schemaVersion === "v1" &&
+            parsed.wallet?.toLowerCase() === wallet.trim().toLowerCase() &&
+            parsed.period === period &&
+            parsed.capital &&
+            parsed.profitability
+        ) {
+            return parsed as PositionMetricsResult;
+        }
+    } catch {
+        return null;
+    }
+
+    return null;
+}
+
+/**
+ * Persist position metrics result atomically.
+ */
+export function savePositionMetrics(
+    metrics: PositionMetricsResult,
+    baseDir = DEFAULT_METRICS_STORAGE_BASE
+): string {
+    const targetPath = getMetricsFilePath(metrics.wallet, metrics.period, baseDir);
+    atomicWriteJsonFile(targetPath, metrics);
     return targetPath;
 }
 
