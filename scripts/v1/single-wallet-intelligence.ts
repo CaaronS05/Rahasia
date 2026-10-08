@@ -5,6 +5,9 @@ import {
   closeFabriqConnection,
   fabriqFetch,
   isFabriqDlmmPool,
+  FabriqCdpError,
+  logStage,
+  stripAnsi,
 } from "../discovery/core/fabriq-position-history.ts";
 import { computeDailyRisk, computePositionRisk } from "./build-wallet-risk-metrics.ts";
 
@@ -773,6 +776,9 @@ export async function analyzeSingleWallet(
     daily = fetched.daily;
   }
 
+  // STAGE 9: Position processing
+  logStage(9, "POSITION_PROCESSING", `Processing ${positions.length} positions and computing risk & quality metrics for ${normalizedWallet}...`);
+
   // 3. Compute Raw Descriptive Metrics
   const closedPositionCount = positions.length;
   const uniqueDlmmPools = new Set(positions.map((p) => p.pool).filter(Boolean)).size;
@@ -943,6 +949,9 @@ export async function analyzeSingleWallet(
     },
   };
 
+  // STAGE 10: Analysis completion
+  logStage(10, "ANALYSIS_COMPLETE", `Single-wallet intelligence analysis complete for ${normalizedWallet} (Quality: ${qualityScore}, Risk: ${riskScore}, Style: ${style})`);
+
   // 9. Atomic persist in isolated single-wallet storage
   await mkdir(SINGLE_WALLET_DIR, { recursive: true });
   const tempPath = `${resultFilePath}.tmp.${Date.now()}`;
@@ -980,7 +989,10 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
       console.log("==================================================");
     })
     .catch((err) => {
-      console.error("\nANALYSIS FAILED:", err instanceof Error ? err.message : String(err));
+      const msg = err instanceof FabriqCdpError
+        ? err.formatUserMessage()
+        : stripAnsi(err instanceof Error ? err.message : String(err));
+      console.error("\nANALYSIS FAILED:", msg);
       process.exit(1);
     })
     .finally(() => {

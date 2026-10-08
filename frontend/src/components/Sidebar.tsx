@@ -7,11 +7,12 @@ import {
   Settings,
   ShieldCheck,
   Star,
+  Terminal,
   WalletCards,
 } from "lucide-react";
 
-type ActivePage = "explore" | "pools" | "track" | "portfolio" | "data";
-type AppPage = "explore" | "track" | "portfolio" | "data";
+type ActivePage = "explore" | "pools" | "track" | "portfolio" | "data" | "activity-logs";
+type AppPage = "explore" | "track" | "portfolio" | "data" | "activity-logs";
 
 type Props = {
   activePage: ActivePage;
@@ -60,6 +61,12 @@ const tools: SidebarItem[] = [
     icon: Database,
     page: "data",
     activeKey: "data",
+  },
+  {
+    label: "Activity Logs",
+    icon: Terminal,
+    page: "activity-logs",
+    activeKey: "activity-logs",
   },
   { label: "Alerts", icon: Bell },
   { label: "Settings", icon: Settings },

@@ -4,6 +4,7 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { discoverTokenPools } from "../pool/discover-token-pools.mjs";
+import { activityLogger, stripAnsi, sanitizeText } from "./activity-log.mjs";
 
 const HOST = "127.0.0.1";
 const PORT = Number.parseInt(process.env.CONTROL_SERVER_PORT || process.env.PORT || "8787", 10);
@@ -24,6 +25,54 @@ let walletIntelligenceChild = null;
 let poolRefreshChild = null;
 let runtimeTicker = null;
 const sseClients = new Set();
+let fabriqRunId = null;
+let lpAgentRunId = null;
+let poolScannerRunId = null;
+let walletIntelligenceRunId = null;
+let poolRefreshRunId = null;
+
+function inferLogLevel(line) {
+    const l = String(line || "").toUpperCase();
+    if (l.includes("ERROR") || l.includes("FAILED") || l.includes("FAIL") || l.includes("EXCEPTION") || l.includes("REJECTED")) return "ERROR";
+    if (l.includes("WARN") || l.includes("RETRY") || l.includes("RATE_LIMITED") || l.includes("WAITING") || l.includes("CLOUDFLARE")) return "WARN";
+    if (l.includes("SUCCESS") || l.includes("COMPLETED") || l.includes("FINISHED")) return "SUCCESS";
+    if (l.includes("DEBUG")) return "DEBUG";
+    return "INFO";
+}
+
+function extractCleanErrorMessage(stderr, stdout) {
+    const combined = `${stderr || ""}\n${stdout || ""}`;
+    const lines = combined.split("\n").map((l) => stripAnsi(l).trim()).filter(Boolean);
+
+    const failedLine = lines.find((l) => l.startsWith("ANALYSIS FAILED:"));
+    if (failedLine) {
+        return failedLine.replace(/^ANALYSIS FAILED:\s*/, "");
+    }
+
+    const classifiedLine = lines.find((l) =>
+        l.includes("CDP_UNREACHABLE") ||
+        l.includes("CDP_PROTOCOL_TIMEOUT") ||
+        l.includes("CDP_SESSION_DISCONNECTED") ||
+        l.includes("FABRIQ_TAB_MISSING") ||
+        l.includes("AUTH_SESSION_ERROR") ||
+        l.includes("FABRIQ_API_ERROR") ||
+        l.includes("RATE_LIMITED")
+    );
+    if (classifiedLine) {
+        return classifiedLine;
+    }
+
+    if (combined.includes("Timeout 120000ms exceeded") || combined.includes("connectOverCDP")) {
+        return "Unable to initialize Brave CDP session (connection timed out).";
+    }
+
+    const stderrLines = (stderr || "").split("\n").map((l) => stripAnsi(l).trim()).filter(Boolean);
+    if (stderrLines.length > 0) {
+        return stderrLines[stderrLines.length - 1];
+    }
+
+    return "Single-wallet analysis failed.";
+}
 
 function getCurrentJakartaMonth() {
     const parts = new Intl.DateTimeFormat("en-US", {
@@ -598,29 +647,23 @@ function parseLpPipelineFabriqLine(line) {
 }
 
 function addLpAgentLog(line) {
-    const cleaned =
-        String(line).trimEnd();
+    const cleaned = String(line).trimEnd();
+    if (!cleaned) return;
 
-    if (!cleaned) {
-        return;
+    console.log(`[LPAGENT] ${cleaned}`);
+    lpAgentState.logs.push(cleaned);
+    if (lpAgentState.logs.length > 200) {
+        lpAgentState.logs = lpAgentState.logs.slice(-200);
     }
 
-    console.log(
-        `[LPAGENT] ${cleaned}`,
-    );
-
-    lpAgentState.logs.push(
-        cleaned,
-    );
-
-    if (
-        lpAgentState.logs.length >
-        200
-    ) {
-        lpAgentState.logs =
-            lpAgentState.logs.slice(
-                -200,
-            );
+    if (lpAgentRunId) {
+        activityLogger.log({
+            runId: lpAgentRunId,
+            source: "lpagent",
+            stage: lpAgentState.stage,
+            level: inferLogLevel(cleaned),
+            message: cleaned,
+        });
     }
 }
 
@@ -730,6 +773,16 @@ function addLog(line) {
 
     if (state.logs.length > 200) {
         state.logs = state.logs.slice(-200);
+    }
+
+    if (fabriqRunId) {
+        activityLogger.log({
+            runId: fabriqRunId,
+            source: "fabriq_enrich",
+            stage: state.stage,
+            level: inferLogLevel(cleaned),
+            message: cleaned,
+        });
     }
 
     broadcast({
@@ -1208,6 +1261,11 @@ async function startPipeline({ mode, concurrency, resume, historyMode, startMont
     }
 
     resetEnrichProgress();
+    fabriqRunId = activityLogger.startRun({
+        source: "fabriq_enrich",
+        stage: "enrich",
+        metadata: { mode: safeMode, workers: safeConcurrency, resume: isResume },
+    });
 
     addLog(`[CONTROL] Starting pipeline: mode=${safeMode}, workers=${safeConcurrency}, resume=${isResume}`);
     if (state.historyMode === "custom") {
@@ -1305,6 +1363,7 @@ async function startPipeline({ mode, concurrency, resume, historyMode, startMont
 
         state.stage = "merge";
         addLog("[CONTROL] Enrichment completed. Running merge:fabriq...");
+        if (fabriqRunId) activityLogger.updateRun(fabriqRunId, { stage: "merge" });
         broadcastState("stage");
 
         const mergeResult = await runChildProcess(
@@ -1353,6 +1412,7 @@ async function startPipeline({ mode, concurrency, resume, historyMode, startMont
 
         state.stage = "publish";
         addLog("[CONTROL] Merge completed. Running publish:wallets...");
+        if (fabriqRunId) activityLogger.updateRun(fabriqRunId, { stage: "publish" });
         broadcastState("stage");
 
         const publishResult = await runChildProcess(
@@ -1402,6 +1462,10 @@ async function startPipeline({ mode, concurrency, resume, historyMode, startMont
         state.exitCode = 0;
         state.finishedAt = new Date().toISOString();
         addLog("[CONTROL] Entire pipeline (enrich -> merge -> publish) completed successfully.");
+        if (fabriqRunId) {
+            activityLogger.finishRun(fabriqRunId, { status: "completed", stage: "completed", exitCode: 0 });
+            fabriqRunId = null;
+        }
         stopRuntimeTicker();
         broadcastState("finish");
     } catch (error) {
@@ -1411,6 +1475,10 @@ async function startPipeline({ mode, concurrency, resume, historyMode, startMont
         state.finishedAt = new Date().toISOString();
         addLog(`[CONTROL] Pipeline error: ${state.error}`);
         stopRuntimeTicker();
+        if (fabriqRunId) {
+            activityLogger.finishRun(fabriqRunId, { status: "error", stage: state.stage, error: state.error });
+            fabriqRunId = null;
+        }
         broadcastState("error");
     }
 }
@@ -1538,6 +1606,11 @@ async function startLpAgentRefresh({
         runtimeSeconds: 0,
         logs: [],
     };
+    lpAgentRunId = activityLogger.startRun({
+        source: "lpagent",
+        stage: "scrape",
+        metadata: { workers: safeConcurrency },
+    });
 
     addLpAgentLog(
         `[CONTROL] Starting LP Agent pipeline: LP workers=${safeConcurrency}, Fabriq workers=${safeFabriqConcurrency}`
@@ -1592,6 +1665,7 @@ async function startLpAgentRefresh({
         // 2. Stage: merge_wallets
         // ----------------------------------------------------
         lpAgentState.stage = "merge_wallets";
+        if (lpAgentRunId) activityLogger.updateRun(lpAgentRunId, { stage: "merge_wallets" });
         addLpAgentLog("[CONTROL] Scrape succeeded. Merging Smart LP wallets into master dataset...");
 
         const mergeResult = await runLpAgentChildProcess(
@@ -1635,6 +1709,7 @@ async function startLpAgentRefresh({
         // 3. Stage: fabriq_enrich
         // ----------------------------------------------------
         lpAgentState.stage = "fabriq_enrich";
+        if (lpAgentRunId) activityLogger.updateRun(lpAgentRunId, { stage: "fabriq_enrich" });
         addLpAgentLog(
             `[CONTROL] Wallet merge succeeded. Enriching missing/stale Fabriq data (workers=${safeFabriqConcurrency})...`
         );
@@ -1697,6 +1772,7 @@ async function startLpAgentRefresh({
         // 4. Stage: fabriq_merge
         // ----------------------------------------------------
         lpAgentState.stage = "fabriq_merge";
+        if (lpAgentRunId) activityLogger.updateRun(lpAgentRunId, { stage: "fabriq_merge" });
         addLpAgentLog("[CONTROL] Fabriq enrichment succeeded. Running merge:fabriq...");
 
         const fabriqMergeResult = await runLpAgentChildProcess(
@@ -1739,6 +1815,7 @@ async function startLpAgentRefresh({
         // 5. Stage: publish
         // ----------------------------------------------------
         lpAgentState.stage = "publish";
+        if (lpAgentRunId) activityLogger.updateRun(lpAgentRunId, { stage: "publish" });
         addLpAgentLog("[CONTROL] Fabriq merge succeeded. Publishing frontend dataset...");
 
         const publishResult = await runLpAgentChildProcess(
@@ -1792,27 +1869,41 @@ async function startLpAgentRefresh({
             );
         }
         addLpAgentLog("[CONTROL] LP Agent wallet pipeline completed successfully.");
+        if (lpAgentRunId) {
+            activityLogger.finishRun(lpAgentRunId, { status: "completed", stage: "completed", exitCode: 0 });
+            lpAgentRunId = null;
+        }
     } catch (error) {
         lpAgentState.status = "error";
         lpAgentState.stage = "error";
         lpAgentState.error = error instanceof Error ? error.message : String(error);
         lpAgentState.finishedAt = new Date().toISOString();
         addLpAgentLog(`[CONTROL] Pipeline exception: ${lpAgentState.error}`);
+        if (lpAgentRunId) {
+            activityLogger.finishRun(lpAgentRunId, { status: "error", stage: lpAgentState.stage, error: lpAgentState.error });
+            lpAgentRunId = null;
+        }
     }
 }
 
 function addPoolScannerLog(line) {
     const cleaned = String(line).trimEnd();
-    if (!cleaned) {
-        return;
-    }
+    if (!cleaned) return;
 
     console.log(`[POOL_SCANNER] ${cleaned}`);
-
     poolScannerState.logs.push(cleaned);
-
     if (poolScannerState.logs.length > 200) {
         poolScannerState.logs = poolScannerState.logs.slice(-200);
+    }
+
+    if (poolScannerRunId) {
+        activityLogger.log({
+            runId: poolScannerRunId,
+            source: "pool_scanner",
+            stage: poolScannerState.stage,
+            level: inferLogLevel(cleaned),
+            message: cleaned,
+        });
     }
 }
 
@@ -2022,6 +2113,11 @@ function startPoolScanner(tokenCa, fabriqWorkers = 8) {
         error: null,
         logs: [],
     };
+    poolScannerRunId = activityLogger.startRun({
+        source: "pool_scanner",
+        stage: poolScannerState.stage || "discovery",
+        metadata: { tokenCa, fabriqWorkers },
+    });
 
     addPoolScannerLog(
         `[CONTROL] Starting Pool Scanner pipeline for token: ${tokenCa}${
@@ -2128,6 +2224,13 @@ function startPoolScanner(tokenCa, fabriqWorkers = 8) {
             addPoolScannerLog("[CONTROL] Pool Scanner pipeline stopped.");
             return;
         }
+        if (poolScannerRunId) {
+            activityLogger.finishRun(poolScannerRunId, {
+                status: "stopped",
+                stage: poolScannerState.stage,
+            });
+            poolScannerRunId = null;
+        }
 
         poolScannerState.finishedAt = new Date().toISOString();
         poolScannerState.exitCode = code;
@@ -2144,6 +2247,14 @@ function startPoolScanner(tokenCa, fabriqWorkers = 8) {
                     ? "[CONTROL] Selected Pool Scanner finished successfully."
                     : "[CONTROL] Pool Scanner pipeline finished successfully."
             );
+            if (poolScannerRunId) {
+                activityLogger.finishRun(poolScannerRunId, {
+                    status: "completed",
+                    stage: poolScannerState.stage,
+                    exitCode: 0,
+                });
+                poolScannerRunId = null;
+            }
         } else {
             poolScannerState.status = "error";
             poolScannerState.stage = "error";
@@ -2153,6 +2264,15 @@ function startPoolScanner(tokenCa, fabriqWorkers = 8) {
             addPoolScannerLog(
                 `[CONTROL] ${poolScannerState.error}`
             );
+            if (poolScannerRunId) {
+                activityLogger.finishRun(poolScannerRunId, {
+                    status: "error",
+                    stage: poolScannerState.stage,
+                    error: poolScannerState.error,
+                    exitCode: code,
+                });
+                poolScannerRunId = null;
+            }
         }
     });
 }
@@ -3821,6 +3941,12 @@ function startPoolRefresh(poolAddress, options = {}) {
         error: null,
         logs: [],
     };
+    poolRefreshRunId = activityLogger.startRun({
+        source: "pool_refresh",
+        poolAddress,
+        stage: "starting",
+        metadata: { poolAddress },
+    });
 
     const args = [
         "scripts/pool/refresh-pool.mjs",
@@ -3888,6 +4014,9 @@ function startPoolRefresh(poolAddress, options = {}) {
         } else if (line.includes("[REFRESH_POOL] ERROR")) {
             poolRefreshState.error = line;
         }
+        if (poolRefreshRunId) {
+            activityLogger.updateRun(poolRefreshRunId, { stage: poolRefreshState.stage });
+        }
     }
 
     poolRefreshChild.stdout.on("data", (chunk) => {
@@ -3895,6 +4024,16 @@ function startPoolRefresh(poolAddress, options = {}) {
             poolRefreshState.logs.push(line);
             if (poolRefreshState.logs.length > 200) poolRefreshState.logs = poolRefreshState.logs.slice(-200);
             parseRefreshLine(line);
+            if (poolRefreshRunId) {
+                activityLogger.log({
+                    runId: poolRefreshRunId,
+                    source: "pool_refresh",
+                    poolAddress: poolRefreshState.poolAddress,
+                    stage: poolRefreshState.stage,
+                    level: inferLogLevel(line),
+                    message: line,
+                });
+            }
         });
     });
 
@@ -3903,6 +4042,16 @@ function startPoolRefresh(poolAddress, options = {}) {
             poolRefreshState.logs.push(line);
             if (poolRefreshState.logs.length > 200) poolRefreshState.logs = poolRefreshState.logs.slice(-200);
             parseRefreshLine(line);
+            if (poolRefreshRunId) {
+                activityLogger.log({
+                    runId: poolRefreshRunId,
+                    source: "pool_refresh",
+                    poolAddress: poolRefreshState.poolAddress,
+                    stage: poolRefreshState.stage,
+                    level: "WARN",
+                    message: line,
+                });
+            }
         });
     });
 
@@ -3912,6 +4061,14 @@ function startPoolRefresh(poolAddress, options = {}) {
         poolRefreshState.stage = "failed";
         poolRefreshState.error = error instanceof Error ? error.message : String(error);
         poolRefreshState.completedAt = new Date().toISOString();
+        if (poolRefreshRunId) {
+            activityLogger.finishRun(poolRefreshRunId, {
+                status: "error",
+                stage: poolRefreshState.stage,
+                error: poolRefreshState.error,
+            });
+            poolRefreshRunId = null;
+        }
     });
 
     poolRefreshChild.on("exit", (code, signal) => {
@@ -3930,6 +4087,15 @@ function startPoolRefresh(poolAddress, options = {}) {
             if (!poolRefreshState.error) {
                 poolRefreshState.error = `Pool refresh failed with exit code ${code}${signal ? ` (signal ${signal})` : ""}`;
             }
+        }
+        if (poolRefreshRunId) {
+            activityLogger.finishRun(poolRefreshRunId, {
+                status: code === 0 ? "completed" : "error",
+                stage: poolRefreshState.stage,
+                error: poolRefreshState.error,
+                exitCode: code,
+            });
+            poolRefreshRunId = null;
         }
     });
 
@@ -3994,6 +4160,17 @@ function walletIntelligencePublicState() {
 function addWalletIntelligenceLog(line) {
     walletIntelligenceState.logs.push(line);
     if (walletIntelligenceState.logs.length > 2000) walletIntelligenceState.logs.shift();
+
+    if (walletIntelligenceRunId) {
+        activityLogger.log({
+            runId: walletIntelligenceRunId,
+            source: "wallet_intelligence",
+            stage: walletIntelligenceState.stage,
+            level: inferLogLevel(line),
+            message: line,
+        });
+    }
+
     if (!line.startsWith("[WALLET_INTELLIGENCE] ") || walletIntelligenceState.status === "stopping") return;
     try {
         const event = JSON.parse(line.slice("[WALLET_INTELLIGENCE] ".length));
@@ -4001,6 +4178,9 @@ function addWalletIntelligenceLog(line) {
         if (!["running", "completed", "error"].includes(event.status)) return;
         walletIntelligenceState.stage = event.stage;
         walletIntelligenceState.stageStates[event.stage] = event.status;
+        if (walletIntelligenceRunId) {
+            activityLogger.updateRun(walletIntelligenceRunId, { stage: event.stage });
+        }
         if (event.status === "error") walletIntelligenceState.error = event.error || `${event.stage} failed`;
     } catch { /* Ordinary logs cannot change control state. */ }
 }
@@ -4013,6 +4193,10 @@ function startWalletIntelligencePipeline() {
         startedAt: new Date().toISOString(), finishedAt: null, exitCode: null, error: null, logs: [],
     };
     addWalletIntelligenceLog("[CONTROL] Starting Wallet Intelligence V1 pipeline.");
+    walletIntelligenceRunId = activityLogger.startRun({
+        source: "wallet_intelligence",
+        stage: "historical_cohort",
+    });
     const child = spawn(process.execPath, ["scripts/v1/run-wallet-intelligence-pipeline.mjs"], {
         cwd: ROOT, env: { ...process.env }, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"],
     });
@@ -4053,6 +4237,15 @@ function startWalletIntelligencePipeline() {
         walletIntelligenceState.finishedAt = new Date().toISOString();
         walletIntelligenceChild = null;
         addWalletIntelligenceLog(`[CONTROL] Wallet Intelligence ${walletIntelligenceState.status}.`);
+        if (walletIntelligenceRunId) {
+            activityLogger.finishRun(walletIntelligenceRunId, {
+                status: walletIntelligenceState.status,
+                stage: walletIntelligenceState.stage,
+                error: walletIntelligenceState.error,
+                exitCode: code,
+            });
+            walletIntelligenceRunId = null;
+        }
     });
 }
 
@@ -4089,21 +4282,23 @@ function getSingleWalletResultPath(address) {
 function getSingleWalletStatus(address) {
     const norm = address.trim();
     const isActive = Boolean(activeSingleWalletChild && activeSingleWalletChild.address === norm);
+    const recorded = singleWalletStates.get(norm);
+    const hasResult = fs.existsSync(getSingleWalletResultPath(norm));
+
     if (isActive) {
-        const recorded = singleWalletStates.get(norm);
         return {
             wallet: norm,
             status: "running",
             stage: recorded?.stage || "analyzing",
+            stageDetails: recorded?.stageDetails || "Analyzing wallet...",
+            runId: recorded?.runId || null,
             startedAt: activeSingleWalletChild.startedAt,
+            elapsedMs: Date.now() - new Date(activeSingleWalletChild.startedAt).getTime(),
             finishedAt: null,
             error: null,
-            hasResult: fs.existsSync(getSingleWalletResultPath(norm)),
+            hasResult,
         };
     }
-
-    const recorded = singleWalletStates.get(norm);
-    const hasResult = fs.existsSync(getSingleWalletResultPath(norm));
 
     // Check if reference cohort exists
     const hasCohort = fs.existsSync(path.join(ROOT, "data/v1/wallet-quality-scores.json"));
@@ -4112,7 +4307,10 @@ function getSingleWalletStatus(address) {
             wallet: norm,
             status: "reference_required",
             stage: "unavailable",
+            stageDetails: null,
+            runId: null,
             startedAt: null,
+            elapsedMs: 0,
             finishedAt: null,
             error: "Reference cohort required. Please run initial Wallet Intelligence screening first.",
             hasResult: false,
@@ -4124,7 +4322,12 @@ function getSingleWalletStatus(address) {
             wallet: norm,
             status: recorded.status,
             stage: recorded.stage,
+            stageDetails: recorded.stageDetails || null,
+            runId: recorded.runId || null,
             startedAt: recorded.startedAt,
+            elapsedMs: recorded.startedAt && recorded.finishedAt
+                ? Math.max(0, new Date(recorded.finishedAt).getTime() - new Date(recorded.startedAt).getTime())
+                : 0,
             finishedAt: recorded.finishedAt,
             error: recorded.error,
             hasResult,
@@ -4135,7 +4338,10 @@ function getSingleWalletStatus(address) {
         wallet: norm,
         status: hasResult ? "completed" : "idle",
         stage: hasResult ? "completed" : "idle",
+        stageDetails: null,
+        runId: null,
         startedAt: null,
+        elapsedMs: 0,
         finishedAt: null,
         error: null,
         hasResult,
@@ -4170,9 +4376,17 @@ function startSingleWalletAnalysis(address, force = false) {
     assertDataPipelineAvailable();
 
     const startedAt = new Date().toISOString();
+    const runId = activityLogger.startRun({
+        source: "single_wallet",
+        wallet: norm,
+        stage: "starting",
+    });
+
     singleWalletStates.set(norm, {
         status: "running",
-        stage: "analyzing",
+        stage: "starting",
+        stageDetails: "Starting single-wallet intelligence analysis...",
+        runId,
         startedAt,
         finishedAt: null,
         error: null,
@@ -4194,23 +4408,84 @@ function startSingleWalletAnalysis(address, force = false) {
         }
     );
 
-    activeSingleWalletChild = { address: norm, child, startedAt };
+    activeSingleWalletChild = { address: norm, child, startedAt, runId };
 
+    let stdoutBuffer = "";
     let stderrBuffer = "";
+
+    function parseSingleWalletLine(line) {
+        const stageMatch = line.match(/\[STAGE\s+(\d+)\/10:\s+([A-Z_]+)\]\s*(.*)/i);
+        if (stageMatch) {
+            const num = stageMatch[1];
+            const name = stageMatch[2];
+            const details = stageMatch[3];
+            const friendlyStage = name.toLowerCase();
+            const rec = singleWalletStates.get(norm);
+            if (rec && rec.status === "running") {
+                rec.stage = friendlyStage;
+                rec.stageDetails = details || `Stage ${num}/10: ${name}`;
+                activityLogger.updateRun(runId, { stage: friendlyStage });
+            }
+        }
+    }
+
+    child.stdout.on("data", (chunk) => {
+        stdoutBuffer += String(chunk);
+        const lines = stdoutBuffer.split("\n");
+        stdoutBuffer = lines.pop() ?? "";
+        for (const line of lines) {
+            const trimmed = stripAnsi(line).trim();
+            if (!trimmed) continue;
+            parseSingleWalletLine(trimmed);
+            activityLogger.log({
+                runId,
+                source: "single_wallet",
+                wallet: norm,
+                stage: singleWalletStates.get(norm)?.stage || "running",
+                level: inferLogLevel(trimmed),
+                message: trimmed,
+            });
+        }
+    });
+
     child.stderr.on("data", (chunk) => {
         stderrBuffer += String(chunk);
+        const lines = stderrBuffer.split("\n");
+        stderrBuffer = lines.pop() ?? "";
+        for (const line of lines) {
+            const trimmed = stripAnsi(line).trim();
+            if (!trimmed) continue;
+            parseSingleWalletLine(trimmed);
+            activityLogger.log({
+                runId,
+                source: "single_wallet",
+                wallet: norm,
+                stage: singleWalletStates.get(norm)?.stage || "error",
+                level: "ERROR",
+                message: trimmed,
+            });
+        }
     });
 
     child.on("error", (err) => {
         if (activeSingleWalletChild?.child === child) {
             activeSingleWalletChild = null;
         }
+        const finishedAt = new Date().toISOString();
+        const cleanError = stripAnsi(err.message);
+        activityLogger.finishRun(runId, {
+            status: "error",
+            stage: "error",
+            error: cleanError,
+        });
         singleWalletStates.set(norm, {
             status: "error",
             stage: "error",
+            stageDetails: cleanError,
+            runId,
             startedAt,
-            finishedAt: new Date().toISOString(),
-            error: err.message,
+            finishedAt,
+            error: cleanError,
         });
     });
 
@@ -4218,22 +4493,66 @@ function startSingleWalletAnalysis(address, force = false) {
         if (activeSingleWalletChild?.child === child) {
             activeSingleWalletChild = null;
         }
+        if (stdoutBuffer.trim()) {
+            const trimmed = stripAnsi(stdoutBuffer).trim();
+            parseSingleWalletLine(trimmed);
+            activityLogger.log({
+                runId,
+                source: "single_wallet",
+                wallet: norm,
+                stage: singleWalletStates.get(norm)?.stage || "running",
+                level: inferLogLevel(trimmed),
+                message: trimmed,
+            });
+            stdoutBuffer = "";
+        }
+        if (stderrBuffer.trim()) {
+            const trimmed = stripAnsi(stderrBuffer).trim();
+            parseSingleWalletLine(trimmed);
+            activityLogger.log({
+                runId,
+                source: "single_wallet",
+                wallet: norm,
+                stage: singleWalletStates.get(norm)?.stage || "error",
+                level: "ERROR",
+                message: trimmed,
+            });
+            stderrBuffer = "";
+        }
+
         const finishedAt = new Date().toISOString();
         if (code === 0) {
+            activityLogger.finishRun(runId, {
+                status: "completed",
+                stage: "completed",
+                exitCode: 0,
+            });
             singleWalletStates.set(norm, {
                 status: "completed",
                 stage: "completed",
+                stageDetails: "Analysis completed successfully.",
+                runId,
                 startedAt,
                 finishedAt,
                 error: null,
             });
         } else {
+            const rawError = extractCleanErrorMessage(stderrBuffer, stdoutBuffer) || `Analysis process exited with code ${code}${signal ? ` (${signal})` : ""}`;
+            const cleanError = stripAnsi(rawError);
+            activityLogger.finishRun(runId, {
+                status: "error",
+                stage: singleWalletStates.get(norm)?.stage || "error",
+                error: cleanError,
+                exitCode: code,
+            });
             singleWalletStates.set(norm, {
                 status: "error",
                 stage: "error",
+                stageDetails: cleanError,
+                runId,
                 startedAt,
                 finishedAt,
-                error: stderrBuffer.trim() || `Analysis process exited with code ${code}${signal ? ` (${signal})` : ""}`,
+                error: cleanError,
             });
         }
     });
@@ -4304,6 +4623,107 @@ const server = http.createServer(async (request, response) => {
         } catch {
             json(request, response, 404, { error: "No analysis result found for this wallet" });
         }
+        return;
+    }
+
+    // ------------------------------------------------------
+    // ACTIVITY LOGS API
+    // ------------------------------------------------------
+    if (request.method === "GET" && url.pathname === "/api/activity-logs/stream") {
+        setCors(request, response);
+        response.writeHead(200, {
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        });
+
+        const filterRunId = url.searchParams.get("runId");
+        const filterSource = url.searchParams.get("source");
+        const filterWallet = url.searchParams.get("wallet")?.toLowerCase();
+
+        const unsubscribe = activityLogger.subscribe((event) => {
+            if (filterRunId && event.runId !== filterRunId) return;
+            if (filterSource && event.source !== filterSource) return;
+            if (filterWallet && (!event.wallet || !event.wallet.toLowerCase().includes(filterWallet))) return;
+
+            try {
+                response.write(`data: ${JSON.stringify(event)}\n\n`);
+            } catch {
+                unsubscribe();
+            }
+        });
+
+        const keepAlive = setInterval(() => {
+            try {
+                response.write(": keep-alive\n\n");
+            } catch {
+                clearInterval(keepAlive);
+                unsubscribe();
+            }
+        }, 15000);
+
+        request.on("close", () => {
+            clearInterval(keepAlive);
+            unsubscribe();
+        });
+        return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/activity-logs") {
+        const source = url.searchParams.get("source") || undefined;
+        const level = url.searchParams.get("level") || undefined;
+        const runId = url.searchParams.get("runId") || undefined;
+        const wallet = url.searchParams.get("wallet") || undefined;
+        const poolAddress = url.searchParams.get("poolAddress") || undefined;
+        const search = url.searchParams.get("search") || undefined;
+        const since = url.searchParams.get("since") || undefined;
+        const afterId = url.searchParams.get("afterId") || undefined;
+        const limit = url.searchParams.get("limit") || "200";
+
+        const result = activityLogger.queryLogs({
+            source,
+            level,
+            runId,
+            wallet,
+            poolAddress,
+            search,
+            since,
+            afterId,
+            limit,
+        });
+        json(request, response, 200, result);
+        return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/activity-runs") {
+        const source = url.searchParams.get("source") || undefined;
+        const wallet = url.searchParams.get("wallet") || undefined;
+        const poolAddress = url.searchParams.get("poolAddress") || undefined;
+        const status = url.searchParams.get("status") || undefined;
+        const limit = url.searchParams.get("limit") || "50";
+
+        const result = activityLogger.queryRuns({
+            source,
+            wallet,
+            poolAddress,
+            status,
+            limit,
+        });
+        json(request, response, 200, result);
+        return;
+    }
+
+    const activityRunDetailMatch = url.pathname.match(/^\/api\/activity-runs\/([^/]+)\/?$/);
+    if (request.method === "GET" && activityRunDetailMatch) {
+        const runId = safeDecodeURIComponent(activityRunDetailMatch[1]);
+        const run = activityLogger.getRun(runId);
+        if (!run) {
+            json(request, response, 404, { error: "Run not found" });
+            return;
+        }
+        const logs = activityLogger.queryLogs({ runId, limit: 1000 }).logs;
+        json(request, response, 200, { run, logs });
         return;
     }
 

@@ -35,7 +35,10 @@ export interface SingleWalletIntelligenceStatus {
   wallet: string;
   status: "idle" | "running" | "completed" | "error" | "reference_required";
   stage: string;
+  stageDetails?: string | null;
+  runId?: string | null;
   startedAt: string | null;
+  elapsedMs?: number | null;
   finishedAt: string | null;
   error: string | null;
   hasResult: boolean;

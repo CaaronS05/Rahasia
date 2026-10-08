@@ -5,6 +5,83 @@ import { chromium, type Browser, type Page } from "playwright-core";
 export const FABRIQ_API_BASE = "https://apinew.fabriq.trade";
 const CDP_URL = "http://127.0.0.1:9222";
 const MAX_RETRIES = 3;
+const MAX_CDP_RETRIES = 2;
+const CDP_INIT_TIMEOUT_MS = 15_000;
+
+export type CdpErrorCode =
+    | "CDP_UNREACHABLE"
+    | "CDP_PROTOCOL_TIMEOUT"
+    | "CDP_SESSION_DISCONNECTED"
+    | "FABRIQ_TAB_MISSING"
+    | "AUTH_SESSION_ERROR"
+    | "CLOUDFLARE_WAITING"
+    | "FABRIQ_API_ERROR"
+    | "RATE_LIMITED";
+
+export function stripAnsi(str: string): string {
+    if (typeof str !== "string") return String(str ?? "");
+    return str.replace(/\u001b\[[0-9;]*[a-zA-Z]/g, "");
+}
+
+export class FabriqCdpError extends Error {
+    code: CdpErrorCode;
+    stageNumber: number;
+    stageName: string;
+    retriesAttempted: number;
+    elapsedMs: number;
+    recommendedAction: string;
+    underlyingError: string;
+
+    constructor(options: {
+        code: CdpErrorCode;
+        stageNumber: number;
+        stageName: string;
+        message: string;
+        retriesAttempted?: number;
+        elapsedMs?: number;
+        recommendedAction: string;
+        underlyingError?: unknown;
+    }) {
+        const cleanMsg = stripAnsi(options.message);
+        super(cleanMsg);
+        this.name = "FabriqCdpError";
+        this.code = options.code;
+        this.stageNumber = options.stageNumber;
+        this.stageName = options.stageName;
+        this.retriesAttempted = options.retriesAttempted ?? 0;
+        this.elapsedMs = options.elapsedMs ?? 0;
+        this.recommendedAction = options.recommendedAction;
+        this.underlyingError = stripAnsi(
+            options.underlyingError instanceof Error
+                ? options.underlyingError.message
+                : String(options.underlyingError || cleanMsg)
+        );
+    }
+
+    formatUserMessage(): string {
+        return (
+            `[${this.code}] Stage ${this.stageNumber} (${this.stageName}) failed. ` +
+            `Error: ${this.underlyingError}. ` +
+            `Retries: ${this.retriesAttempted}. Elapsed: ${(this.elapsedMs / 1000).toFixed(1)}s. ` +
+            `Action: ${this.recommendedAction}`
+        );
+    }
+}
+
+export function logStage(
+    stageNumber: number,
+    stageName: string,
+    message: string,
+    log?: (msg: string) => void
+) {
+    const ts = new Date().toISOString();
+    const formatted = `[${ts}] [STAGE ${stageNumber}/10: ${stageName}] ${message}`;
+    if (log) {
+        log(formatted);
+    } else {
+        console.log(formatted);
+    }
+}
 
 function sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -37,73 +114,297 @@ function decodeJwtExpiry(tokenStr: string): number {
     }
 }
 
-async function getFabriqPage(log?: (msg: string) => void): Promise<Page> {
-    if (fabriqPage && !fabriqPage.isClosed()) {
+async function probeCdpHttpEndpoint(): Promise<{ webSocketDebuggerUrl?: string }> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 2500);
+    try {
+        const res = await fetch(`${CDP_URL}/json/version`, {
+            signal: controller.signal,
+        });
+        if (!res.ok) {
+            throw new Error(`HTTP ${res.status} ${res.statusText}`);
+        }
+        const data = await res.json();
+        return data as { webSocketDebuggerUrl?: string };
+    } finally {
+        clearTimeout(timeout);
+    }
+}
+
+async function probeWebSocketUrl(wsUrl: string): Promise<void> {
+    if (!wsUrl) return;
+    return new Promise((resolve, reject) => {
+        let done = false;
+        let ws: any = null;
+        const timer = setTimeout(() => {
+            if (done) return;
+            done = true;
+            try { ws?.close(); } catch {}
+            reject(new Error("WebSocket handshake timed out (2.5s)"));
+        }, 2500);
+
+        try {
+            ws = new WebSocket(wsUrl);
+            ws.onopen = () => {
+                if (done) return;
+                done = true;
+                clearTimeout(timer);
+                try { ws.close(); } catch {}
+                resolve();
+            };
+            ws.onerror = (err: any) => {
+                if (done) return;
+                done = true;
+                clearTimeout(timer);
+                reject(err instanceof Error ? err : new Error("WebSocket connection error"));
+            };
+        } catch (err: any) {
+            clearTimeout(timer);
+            reject(err);
+        }
+    });
+}
+
+export async function getFabriqPage(log?: (msg: string) => void): Promise<Page> {
+    const t0 = Date.now();
+
+    // Reuse existing page if healthy
+    if (cdpBrowser && cdpBrowser.isConnected() && fabriqPage && !fabriqPage.isClosed()) {
         return fabriqPage;
     }
 
-    if (!cdpBrowser) {
-        log?.("[BOOT] Connecting to Brave via CDP (http://127.0.0.1:9222)...");
-        cdpBrowser = await chromium.connectOverCDP(CDP_URL, {
-            timeout: 120_000,
+    // If browser disconnected, clean up stale references
+    if (cdpBrowser && !cdpBrowser.isConnected()) {
+        try { await cdpBrowser.close(); } catch {}
+        cdpBrowser = null;
+        fabriqPage = null;
+    }
+
+    let wsUrl: string | undefined;
+
+    // STAGE 1: CDP HTTP endpoint availability
+    logStage(1, "CDP_ENDPOINT", `Checking CDP HTTP endpoint at ${CDP_URL}/json/version`, log);
+    try {
+        const versionInfo = await probeCdpHttpEndpoint();
+        wsUrl = versionInfo.webSocketDebuggerUrl;
+        logStage(1, "CDP_ENDPOINT", "CDP HTTP endpoint responded successfully", log);
+    } catch (err: any) {
+        throw new FabriqCdpError({
+            code: "CDP_UNREACHABLE",
+            stageNumber: 1,
+            stageName: "CDP HTTP endpoint availability",
+            message: `Brave remote debugging endpoint is unreachable on port 9222: ${err?.message || err}`,
+            elapsedMs: Date.now() - t0,
+            recommendedAction: "Start Brave browser with '--remote-debugging-port=9222' enabled.",
+            underlyingError: err,
         });
     }
 
-    const context = cdpBrowser.contexts()[0];
-    if (!context) {
-        throw new Error(
-            "No Brave context found. Start Brave with remote debugging enabled."
-        );
+    // STAGE 2: Browser WebSocket connection
+    if (wsUrl) {
+        logStage(2, "BROWSER_WS", "Verifying browser WebSocket connection...", log);
+        try {
+            await probeWebSocketUrl(wsUrl);
+            logStage(2, "BROWSER_WS", "Browser WebSocket connection verified", log);
+        } catch (err: any) {
+            logStage(2, "BROWSER_WS", `WebSocket probe non-fatal warning: ${err?.message || err}. Proceeding with CDP attach...`, log);
+        }
     }
 
-    const page =
-        context.pages().find((p) => p.url().includes("fabriq.trade")) ?? null;
+    // STAGE 3: CDP protocol initialization (Bounded with retries)
+    logStage(3, "CDP_PROTOCOL", `Initializing CDP protocol session (timeout: ${CDP_INIT_TIMEOUT_MS / 1000}s, max retries: ${MAX_CDP_RETRIES})...`, log);
+    let connectionAttempt = 0;
+    let lastCdpError: any = null;
+
+    while (connectionAttempt <= MAX_CDP_RETRIES) {
+        connectionAttempt++;
+        try {
+            cdpBrowser = await chromium.connectOverCDP(CDP_URL, {
+                timeout: CDP_INIT_TIMEOUT_MS,
+            });
+            logStage(3, "CDP_PROTOCOL", `CDP protocol initialized successfully (attempt ${connectionAttempt})`, log);
+            break;
+        } catch (err: any) {
+            lastCdpError = err;
+            const isTimeout = String(err?.message || "").includes("Timeout");
+            logStage(
+                3,
+                "CDP_PROTOCOL",
+                `CDP connection attempt ${connectionAttempt}/${MAX_CDP_RETRIES + 1} failed: ${err?.message || err}`,
+                log
+            );
+
+            // Safe cleanup of partial connection
+            if (cdpBrowser) {
+                try { await cdpBrowser.close(); } catch {}
+                cdpBrowser = null;
+            }
+
+            if (connectionAttempt <= MAX_CDP_RETRIES) {
+                await sleep(1500);
+            } else {
+                throw new FabriqCdpError({
+                    code: isTimeout ? "CDP_PROTOCOL_TIMEOUT" : "CDP_SESSION_DISCONNECTED",
+                    stageNumber: 3,
+                    stageName: "CDP protocol initialization",
+                    message: `CDP protocol initialization failed after ${connectionAttempt} attempts: ${lastCdpError?.message || lastCdpError}`,
+                    retriesAttempted: connectionAttempt - 1,
+                    elapsedMs: Date.now() - t0,
+                    recommendedAction: isTimeout
+                        ? "Brave CDP protocol stalled. Close any hung Cloudflare challenge tabs, DevTools inspector tabs, or background tabs in Brave."
+                        : "Ensure Brave remains open and accessible.",
+                    underlyingError: lastCdpError,
+                });
+            }
+        }
+    }
+
+    if (!cdpBrowser) {
+        throw new FabriqCdpError({
+            code: "CDP_SESSION_DISCONNECTED",
+            stageNumber: 3,
+            stageName: "CDP protocol initialization",
+            message: "CDP browser instance was not established.",
+            elapsedMs: Date.now() - t0,
+            recommendedAction: "Check Brave browser status.",
+        });
+    }
+
+    // STAGE 4: Browser context discovery
+    logStage(4, "BROWSER_CONTEXT", "Discovering browser contexts...", log);
+    const contexts = cdpBrowser.contexts();
+    const context = contexts[0];
+    if (!context) {
+        throw new FabriqCdpError({
+            code: "CDP_SESSION_DISCONNECTED",
+            stageNumber: 4,
+            stageName: "Browser context discovery",
+            message: "No active Brave context found. Brave has no open window.",
+            elapsedMs: Date.now() - t0,
+            recommendedAction: "Ensure at least one Brave window is open.",
+        });
+    }
+    logStage(4, "BROWSER_CONTEXT", `Discovered browser context with ${context.pages().length} open pages`, log);
+
+    // STAGE 5: Fabriq tab discovery
+    logStage(5, "FABRIQ_TAB", "Locating open Fabriq tab (fabriq.trade)...", log);
+    let page = context.pages().find((p) => p.url().includes("fabriq.trade")) ?? null;
 
     if (!page) {
-        throw new Error(
-            "Fabriq tab not found. Open https://fabriq.trade in Brave first."
-        );
+        // Give up to 1.5s for tab URL state to settle if newly opened
+        await sleep(1500);
+        page = context.pages().find((p) => p.url().includes("fabriq.trade")) ?? null;
+    }
+
+    if (!page) {
+        throw new FabriqCdpError({
+            code: "FABRIQ_TAB_MISSING",
+            stageNumber: 5,
+            stageName: "Fabriq tab discovery",
+            message: "No tab with URL matching 'fabriq.trade' was found in Brave.",
+            elapsedMs: Date.now() - t0,
+            recommendedAction: "Open https://fabriq.trade in Brave and keep the tab open.",
+        });
     }
 
     fabriqPage = page;
-    log?.(`[BOOT] Fabriq page: ${page.url()}`);
+    logStage(5, "FABRIQ_TAB", `Fabriq page located: ${page.url()}`, log);
     return fabriqPage;
 }
 
 async function refreshTokenFromBrowser(log?: (msg: string) => void): Promise<string> {
+    const t0 = Date.now();
     const page = await getFabriqPage(log);
 
-    while (true) {
-        const result = await page.evaluate(async () => {
-            const response = await fetch("/auth/verify", {
-                credentials: "include",
-                cache: "no-store",
-            });
+    // STAGE 6: /auth/verify request
+    logStage(6, "AUTH_VERIFY", "Sending /auth/verify request in Fabriq tab...", log);
 
-            return {
-                status: response.status,
-                text: await response.text(),
-            };
-        });
+    while (true) {
+        if (page.isClosed()) {
+            fabriqPage = null;
+            throw new FabriqCdpError({
+                code: "CDP_SESSION_DISCONNECTED",
+                stageNumber: 6,
+                stageName: "/auth/verify request",
+                message: "Fabriq tab was closed during authentication.",
+                elapsedMs: Date.now() - t0,
+                recommendedAction: "Re-open https://fabriq.trade in Brave and keep it open.",
+            });
+        }
+
+        let result: { status: number; text: string };
+        try {
+            result = await page.evaluate(async () => {
+                const response = await fetch("/auth/verify", {
+                    credentials: "include",
+                    cache: "no-store",
+                });
+                return {
+                    status: response.status,
+                    text: await response.text(),
+                };
+            });
+        } catch (evalErr: any) {
+            fabriqPage = null;
+            throw new FabriqCdpError({
+                code: "AUTH_SESSION_ERROR",
+                stageNumber: 6,
+                stageName: "/auth/verify request",
+                message: `Failed to evaluate /auth/verify in Fabriq tab: ${evalErr?.message || evalErr}`,
+                elapsedMs: Date.now() - t0,
+                recommendedAction: "Check Fabriq tab state in Brave.",
+                underlyingError: evalErr,
+            });
+        }
 
         if (result.status === 403) {
-            (log || console.log)(
-                "[AUTH WAIT] /auth/verify blocked by Cloudflare (403) — retrying in 5s"
+            logStage(
+                6,
+                "AUTH_VERIFY",
+                "[CLOUDFLARE_WAITING] /auth/verify blocked by Cloudflare (403) — waiting 5s and retrying...",
+                log
             );
             await sleep(5000);
             continue;
         }
 
         if (result.status !== 200) {
-            throw new Error(
-                `/auth/verify failed: ${result.status} ${result.text.slice(0, 200)}`
-            );
+            throw new FabriqCdpError({
+                code: "AUTH_SESSION_ERROR",
+                stageNumber: 6,
+                stageName: "/auth/verify request",
+                message: `/auth/verify returned HTTP ${result.status}: ${result.text.slice(0, 150)}`,
+                elapsedMs: Date.now() - t0,
+                recommendedAction: "Refresh https://fabriq.trade in Brave and ensure you are logged in.",
+            });
         }
 
-        const json = JSON.parse(result.text);
+        // STAGE 7: JWT authentication
+        logStage(7, "JWT_AUTH", "Extracting and validating session JWT from /auth/verify response...", log);
+        let json: any;
+        try {
+            json = JSON.parse(result.text);
+        } catch (parseErr: any) {
+            throw new FabriqCdpError({
+                code: "AUTH_SESSION_ERROR",
+                stageNumber: 7,
+                stageName: "JWT authentication",
+                message: "Failed to parse JSON response from /auth/verify",
+                elapsedMs: Date.now() - t0,
+                recommendedAction: "Log into Fabriq in Brave.",
+                underlyingError: parseErr,
+            });
+        }
 
         if (!json.token) {
-            throw new Error("JWT missing from /auth/verify");
+            throw new FabriqCdpError({
+                code: "AUTH_SESSION_ERROR",
+                stageNumber: 7,
+                stageName: "JWT authentication",
+                message: "JWT missing from /auth/verify response.",
+                elapsedMs: Date.now() - t0,
+                recommendedAction: "Log into https://fabriq.trade in Brave to generate a session token.",
+            });
         }
 
         token = String(json.token);
@@ -114,12 +415,12 @@ async function refreshTokenFromBrowser(log?: (msg: string) => void): Promise<str
             Math.floor((tokenExpiresAt - Date.now()) / 1000)
         );
 
-        log?.(`[AUTH] JWT refreshed (${secondsLeft}s)`);
+        logStage(7, "JWT_AUTH", `JWT validated successfully (expires in ${secondsLeft}s)`, log);
         return token;
     }
 }
 
-async function getToken(
+export async function getToken(
     forceRefresh = false,
     log?: (msg: string) => void
 ): Promise<string> {
@@ -135,6 +436,7 @@ async function getToken(
 
     return tokenRefreshPromise;
 }
+
 
 export async function closeFabriqConnection(): Promise<void> {
     if (cdpBrowser) {
@@ -329,6 +631,8 @@ export async function fabriqFetch<T>(
     const url = `${FABRIQ_API_BASE}${endpoint}${queryString}`;
     const log = options?.onLog;
 
+    logStage(8, "FABRIQ_API", `Fetching endpoint ${endpoint} (attempt ${attempt}/${MAX_RETRIES})...`, log);
+
     try {
         const jwt = await getToken(false, log);
 
@@ -344,7 +648,14 @@ export async function fabriqFetch<T>(
         // --------------------------------
         if (response.status === 401) {
             if (attempt >= MAX_RETRIES) {
-                throw new Error("401 Unauthorized after retries");
+                throw new FabriqCdpError({
+                    code: "AUTH_SESSION_ERROR",
+                    stageNumber: 8,
+                    stageName: "Fabriq history API request",
+                    message: "401 Unauthorized after JWT refresh retries.",
+                    retriesAttempted: attempt,
+                    recommendedAction: "Refresh session in Brave by visiting https://fabriq.trade.",
+                });
             }
 
             log?.("[AUTH] 401 → refreshing JWT");
@@ -357,16 +668,21 @@ export async function fabriqFetch<T>(
         // Cloudflare / forbidden (403)
         // --------------------------------
         if (response.status === 403) {
-            throw new Error(
-                "403 Forbidden. Check the existing Fabriq browser session."
-            );
+            throw new FabriqCdpError({
+                code: "FABRIQ_API_ERROR",
+                stageNumber: 8,
+                stageName: "Fabriq history API request",
+                message: "403 Forbidden on direct Fabriq API. Session is invalid or blocked.",
+                retriesAttempted: attempt - 1,
+                recommendedAction: "Verify your Fabriq session permissions at https://fabriq.trade in Brave.",
+            });
         }
 
         // --------------------------------
         // Data not ready (404)
         // --------------------------------
         if (response.status === 404) {
-            log?.("[FABRIQ] 404 data not ready; waiting 5s and retrying...");
+            logStage(8, "FABRIQ_API", "[FABRIQ] 404 data not ready; waiting 5s and retrying...", log);
             await sleep(5000);
             return fabriqFetch<T>(endpoint, params, options, 1);
         }
@@ -375,14 +691,21 @@ export async function fabriqFetch<T>(
         // Rate limit (429)
         // --------------------------------
         if (response.status === 429) {
-            if (attempt >= MAX_RETRIES) {
-                throw new Error("429 Too Many Requests");
-            }
-
             const retryAfter =
                 Number(response.headers.get("retry-after")) || 5;
 
-            log?.(`[RATE LIMIT] waiting ${retryAfter}s`);
+            if (attempt >= MAX_RETRIES) {
+                throw new FabriqCdpError({
+                    code: "RATE_LIMITED",
+                    stageNumber: 8,
+                    stageName: "Fabriq history API request",
+                    message: `429 Too Many Requests after ${attempt} retries.`,
+                    retriesAttempted: attempt,
+                    recommendedAction: `Wait ${retryAfter} seconds before requesting Fabriq API again.`,
+                });
+            }
+
+            logStage(8, "FABRIQ_API", `[RATE_LIMITED] Waiting ${retryAfter}s (attempt ${attempt}/${MAX_RETRIES})...`, log);
             await sleep(retryAfter * 1000);
 
             return fabriqFetch<T>(endpoint, params, options, attempt + 1);
@@ -393,11 +716,18 @@ export async function fabriqFetch<T>(
         // --------------------------------
         if (response.status >= 500) {
             if (attempt >= MAX_RETRIES) {
-                throw new Error(`Server error ${response.status}`);
+                throw new FabriqCdpError({
+                    code: "FABRIQ_API_ERROR",
+                    stageNumber: 8,
+                    stageName: "Fabriq history API request",
+                    message: `Server error ${response.status} from Fabriq API`,
+                    retriesAttempted: attempt,
+                    recommendedAction: "Fabriq backend service is temporarily encountering errors. Try again shortly.",
+                });
             }
 
             const delay = attempt * 2000;
-            log?.(`[RETRY] server ${response.status}, waiting ${delay}ms`);
+            logStage(8, "FABRIQ_API", `[RETRY] Server ${response.status}, waiting ${delay}ms...`, log);
             await sleep(delay);
 
             return fabriqFetch<T>(endpoint, params, options, attempt + 1);
@@ -410,6 +740,9 @@ export async function fabriqFetch<T>(
 
         return (await response.json()) as T;
     } catch (error: any) {
+        if (error instanceof FabriqCdpError) {
+            throw error;
+        }
         const msg = String(error?.message || "");
         if (
             msg.includes("403 Forbidden") ||

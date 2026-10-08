@@ -9,6 +9,7 @@ import {
   Search,
   ShieldCheck,
   Star,
+  Terminal,
   TrendingUp,
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
@@ -26,6 +27,33 @@ import {
   CumulativePnlChart,
   DailyPnlChart,
 } from "../components/portfolio/PnlCharts";
+function formatHumanErrorSummary(err: string): string {
+  if (!err) return "Analysis failed";
+  if (err.includes("CDP_UNREACHABLE") || err.includes("unreachable on port 9222")) {
+    return "Unable to connect to Brave CDP on port 9222.";
+  }
+  if (err.includes("CDP_PROTOCOL_TIMEOUT") || err.includes("Timeout 120000ms") || err.includes("connectOverCDP")) {
+    return "Unable to initialize Brave CDP session.";
+  }
+  if (err.includes("FABRIQ_TAB_MISSING")) {
+    return "Fabriq tab not found. Open https://fabriq.trade in Brave.";
+  }
+  if (err.includes("AUTH_SESSION_ERROR")) {
+    return "Fabriq session error. Refresh your session at https://fabriq.trade in Brave.";
+  }
+  if (err.includes("RATE_LIMITED")) {
+    return "Fabriq API rate limit encountered.";
+  }
+  if (err.includes("FABRIQ_API_ERROR")) {
+    return "Fabriq API service error.";
+  }
+  if (err.includes("INELIGIBLE_WALLET")) {
+    return "Wallet has no qualifying DLMM positions for analysis.";
+  }
+  const firstLine = err.split("\n")[0].trim();
+  return firstLine.length > 120 ? `${firstLine.slice(0, 117)}...` : firstLine;
+}
+
 
 type WalletWithFabriq = Wallet & {
   fabriq?: {
@@ -172,6 +200,23 @@ export function PortfolioPage({
   const [singleResult, setSingleResult] = useState<SingleWalletIntelligenceResult | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
+  const [analysisElapsedSeconds, setAnalysisElapsedSeconds] = useState(0);
+
+  useEffect(() => {
+    let timer: number | null = null;
+    if (isAnalyzing) {
+      const start = Date.now();
+      timer = window.setInterval(() => {
+        setAnalysisElapsedSeconds(Math.max(1, Math.floor((Date.now() - start) / 1000)));
+      }, 1000);
+    } else {
+      setAnalysisElapsedSeconds(0);
+    }
+    return () => {
+      if (timer) clearInterval(timer);
+    };
+  }, [isAnalyzing]);
+
 
   useEffect(() => {
     let isMounted = true;
@@ -586,16 +631,55 @@ export function PortfolioPage({
                 </div>
 
                 {isAnalyzing ? (
-                  <div className="single-intel-status-box info">
-                    <Loader2 size={13} className="spin" />
-                    <span>Analyzing closed positions & risk metrics for this wallet...</span>
+                  <div className="single-intel-status-box info" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "10px" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                      <Loader2 size={13} className="spin" />
+                      <div>
+                        <div style={{ fontWeight: 600, fontSize: "11.5px" }}>
+                          Stage: {singleStatus?.stage ? singleStatus.stage.toUpperCase() : "ANALYZING"}
+                          {analysisElapsedSeconds > 0 ? ` (${analysisElapsedSeconds}s)` : ""}
+                        </div>
+                        <div style={{ fontSize: "11px", color: "rgba(255,255,255,0.7)", marginTop: "2px" }}>
+                          {singleStatus?.stageDetails || "Analyzing closed positions & risk metrics for this wallet..."}
+                        </div>
+                      </div>
+                    </div>
+                    {singleStatus?.runId ? (
+                      <a
+                        href={`/activity-logs?wallet=${encodeURIComponent(currentWallet?.owner || "")}&runId=${encodeURIComponent(singleStatus.runId)}`}
+                        className="single-intel-btn"
+                        style={{ textDecoration: "none", fontSize: "11px", padding: "4px 8px", flexShrink: 0 }}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        <Terminal size={11} /> View Logs
+                      </a>
+                    ) : null}
                   </div>
                 ) : null}
 
                 {analysisError ? (
-                  <div className="single-intel-status-box error">
-                    <AlertCircle size={13} />
-                    <span>{analysisError}</span>
+                  <div className="single-intel-status-box error" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "10px" }}>
+                    <div style={{ display: "flex", alignItems: "flex-start", gap: "8px", flex: 1 }}>
+                      <AlertCircle size={14} style={{ flexShrink: 0, marginTop: "2px" }} />
+                      <div>
+                        <div style={{ fontWeight: 600, fontSize: "11.5px" }}>
+                          {formatHumanErrorSummary(analysisError)}
+                        </div>
+                        <div style={{ fontSize: "11px", color: "rgba(255,255,255,0.75)", marginTop: "2px" }}>
+                          Check browser connection or inspect logs for details.
+                        </div>
+                      </div>
+                    </div>
+                    <a
+                      href={`/activity-logs?wallet=${encodeURIComponent(currentWallet?.owner || "")}${singleStatus?.runId ? `&runId=${encodeURIComponent(singleStatus.runId)}` : ""}`}
+                      className="single-intel-btn"
+                      style={{ textDecoration: "none", fontSize: "11px", padding: "4px 8px", flexShrink: 0 }}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      <Terminal size={11} /> View Logs
+                    </a>
                   </div>
                 ) : null}
 
@@ -742,15 +826,9 @@ export function PortfolioPage({
                       padding: "20px 18px",
                       color: "#9a968f",
                       fontSize: "12px",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "space-between",
                     }}
                   >
-                    <span>No V1 intelligence calculated for this wallet yet.</span>
-                    <button className="single-intel-btn primary" onClick={handleRunAnalysis}>
-                      <Play size={12} /> Run Analysis Now
-                    </button>
+                    <span>No V1 intelligence calculated for this wallet yet. Click "Run Wallet Intelligence" above to evaluate.</span>
                   </div>
                 ) : null}
               </article>

@@ -19,6 +19,7 @@ import { loadTrackedWallets, saveTrackedWallets } from "./lib/trackedWallets";
 import { DataPage, resolveDataTab, type DataTab } from "./pages/DataPage";
 import { PortfolioPage } from "./pages/PortfolioPage";
 import { TrackPage } from "./pages/TrackPage";
+import { ActivityLogsPage } from "./pages/ActivityLogsPage";
 import type { Wallet } from "./types";
 import {
   walletAllTimePnl,
@@ -29,7 +30,7 @@ import {
 } from "./lib/walletMetrics";
 
 type Timeframe = "7d" | "30d" | "all";
-type Page = "explore" | "track" | "portfolio" | "data";
+type Page = "explore" | "track" | "portfolio" | "data" | "activity-logs";
 
 function formatUpdatedAt(
   value: string | null,
@@ -79,6 +80,10 @@ function routeFromLocation(): { page: Page; address?: string; dataTab?: DataTab 
   if (window.location.pathname === "/track") {
     return { page: "track" };
   }
+  if (window.location.pathname === "/activity-logs" || window.location.pathname === "/logs") {
+    return { page: "activity-logs" };
+  }
+
 
   if (window.location.pathname === "/pool-scanner") {
     return { page: "data", dataTab: "pool-scanner" };
@@ -395,7 +400,9 @@ export default function App() {
                 ? "/track"
                 : page === "data"
                   ? "/data"
-                  : "/",
+                  : page === "activity-logs"
+                    ? "/activity-logs"
+                    : "/",
           )
         }
       />
@@ -489,6 +496,8 @@ export default function App() {
             onToggleTrack={toggleTrackedWallet}
             onOpenWallet={openWallet}
           />
+        ) : route.page === "activity-logs" ? (
+          <ActivityLogsPage />
         ) : (
           <div className="explorer-page">
             <div className="page-heading explorer-heading">
