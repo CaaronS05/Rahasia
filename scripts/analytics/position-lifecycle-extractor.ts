@@ -474,13 +474,14 @@ export function reconstructPositionLifecycle(
                     initialEntryUsd = addUsd;
                     initialEntryStatus = "VERIFIED_ASSOCIATED_ADD";
                     usedAddEventIndices.add(associatedAddIdx);
-                } else if (openUsd === 0 || addUsd === 0) {
+                } else if (addUsd === 0) {
                     initialEntryUsd = 0;
                     initialEntryStatus = "VERIFIED_ASSOCIATED_ADD";
                     usedAddEventIndices.add(associatedAddIdx);
                 } else {
+                    initialEntryUsd = null;
                     initialEntryStatus = "UNAVAILABLE";
-                    warnings.push("Opening event has no associated liquidity amount");
+                    warnings.push("Opening event has associated liquidity addition but amount is unknown");
                 }
             } else if (openUsd === 0) {
                 initialEntryUsd = 0;
@@ -510,6 +511,7 @@ export function reconstructPositionLifecycle(
     let additionalLiquidityUsd: number | null = null;
     let cumulativeAddUsd = 0;
     let addEventsCount = 0;
+    let hasUnknownAddAmount = false;
 
     normalizedEvents.forEach((e, idx) => {
         if (e.category === "add" || e.rawType === "ADD_LIQUIDITY") {
@@ -519,16 +521,19 @@ export function reconstructPositionLifecycle(
             addEventsCount++;
             if (e.totalInUsd !== null) {
                 cumulativeAddUsd += e.totalInUsd;
+            } else {
+                hasUnknownAddAmount = true;
             }
         }
     });
 
-    if (initialEntryStatus === "VERIFIED_OPEN_EVENT" || initialEntryStatus === "VERIFIED_ASSOCIATED_ADD") {
+    if (hasUnknownAddAmount) {
+        additionalLiquidityUsd = null;
+    } else if (initialEntryStatus === "VERIFIED_OPEN_EVENT" || initialEntryStatus === "VERIFIED_ASSOCIATED_ADD") {
         additionalLiquidityUsd = Number(cumulativeAddUsd.toFixed(6));
     } else if (addEventsCount > 0) {
         additionalLiquidityUsd = Number(cumulativeAddUsd.toFixed(6));
     }
-
     // 4. Totals (deposits, withdrawals, fees)
     let totalDepositsUsd: number | null = null;
     if (initialEntryUsd !== null && additionalLiquidityUsd !== null) {
@@ -601,10 +606,15 @@ export function reconstructPositionLifecycle(
     const pnlUsd = pos.total_pnl_usd != null ? Number(pos.total_pnl_usd) : null;
     const pnlPct = pos.total_pnl_pct_usd != null ? Number(pos.total_pnl_pct_usd) : null;
 
-    let winLoss: "WIN" | "LOSS" | "BREAKEVEN" = "BREAKEVEN";
-    if (pnlUsd !== null) {
-        if (pnlUsd > 0.0001) winLoss = "WIN";
-        else if (pnlUsd < -0.0001) winLoss = "LOSS";
+    let winLoss: "WIN" | "LOSS" | "BREAKEVEN" | "UNKNOWN";
+    if (pnlUsd === null) {
+        winLoss = "UNKNOWN";
+    } else if (pnlUsd > 0.0001) {
+        winLoss = "WIN";
+    } else if (pnlUsd < -0.0001) {
+        winLoss = "LOSS";
+    } else {
+        winLoss = "BREAKEVEN";
     }
 
     // 8. Data quality statuses
@@ -616,7 +626,9 @@ export function reconstructPositionLifecycle(
     let positionCompleteness: PositionCompletenessStatus = "COMPLETE";
     if (!openingEventObserved) positionCompleteness = "MISSING_OPEN_EVENT";
     else if (!closingEventObserved) positionCompleteness = "MISSING_CLOSE_EVENT";
-    else if (initialEntryUsd === null || totalDepositsUsd === null) positionCompleteness = "INCOMPLETE_AMOUNTS";
+    else if (initialEntryUsd === null || totalDepositsUsd === null || (addEventsCount > 0 && additionalLiquidityUsd === null)) {
+        positionCompleteness = "INCOMPLETE_AMOUNTS";
+    }
 
     // 9. Metadata enrichment
     const meta = metadataCache?.get(pos.pool_id);
@@ -686,6 +698,8 @@ export function buildPositionAnalyticsDataset(options: {
     dlmmPoolsMatched: number;
     metadataCache?: Map<string, PoolMetadataLookupItem>;
     diagnostics?: Partial<ExtractionDiagnostics>;
+    isExtractionComplete?: boolean;
+    confirmedComplete?: boolean;
 }): PositionAnalyticsDataset {
     const {
         wallet,
@@ -755,9 +769,27 @@ export function buildPositionAnalyticsDataset(options: {
     const initialEntryCoveragePct = normalizedPositions.length > 0
         ? Number(((initialEntriesVerified / normalizedPositions.length) * 100).toFixed(2))
         : 100;
+    const finalDiagnostics: ExtractionDiagnostics = {
+        executionMs: diagnostics.executionMs ?? 0,
+        poolPagesFetched: diagnostics.poolPagesFetched ?? 0,
+        positionBatchesFetched: diagnostics.positionBatchesFetched ?? 0,
+        transactionBatchesFetched: diagnostics.transactionBatchesFetched ?? 0,
+        requestRetries: diagnostics.requestRetries ?? 0,
+        skippedRecords: [...diagSkipped, ...(diagnostics.skippedRecords ?? [])],
+    };
 
-    const sourceCoverageStatus = dlmmPoolsMatched === 0
+    const hasExtractionFailure = (finalDiagnostics.skippedRecords ?? []).some(
+        (r) => r.reason === "EXTRACTION_FAILED" || r.reason === "BATCH_FAILED" || r.reason === "FETCH_ERROR"
+    );
+    const confirmedComplete =
+        options.isExtractionComplete !== false &&
+        options.confirmedComplete !== false &&
+        !hasExtractionFailure;
+
+    const sourceCoverageStatus: SourceCoverageStatus = dlmmPoolsMatched === 0
         ? "UNAVAILABLE"
+        : !confirmedComplete
+        ? "PARTIAL"
         : samplingMeta.isSampled
         ? "BOUNDED_HISTORY"
         : "COMPLETE";
@@ -790,14 +822,6 @@ export function buildPositionAnalyticsDataset(options: {
         warnings,
     };
 
-    const finalDiagnostics: ExtractionDiagnostics = {
-        executionMs: diagnostics.executionMs ?? 0,
-        poolPagesFetched: diagnostics.poolPagesFetched ?? 0,
-        positionBatchesFetched: diagnostics.positionBatchesFetched ?? 0,
-        transactionBatchesFetched: diagnostics.transactionBatchesFetched ?? 0,
-        requestRetries: diagnostics.requestRetries ?? 0,
-        skippedRecords: [...diagSkipped, ...(diagnostics.skippedRecords ?? [])],
-    };
 
     return {
         schemaVersion: "v1",

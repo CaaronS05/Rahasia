@@ -20,6 +20,12 @@ import {
     loadPositionAnalyticsDataset,
     getDatasetFilePath,
 } from "../../scripts/analytics/position-analytics-storage.ts";
+import {
+    discoverWalletDlmmPools,
+    DEFAULT_MAX_404_RETRIES,
+    DEFAULT_DELAY_404_MS,
+} from "../../scripts/analytics/fabriq-analytics-client.ts";
+import { setFabriqTokenForTesting } from "../../scripts/discovery/core/fabriq-position-history.ts";
 import type { PositionAnalyticsDataset } from "../../scripts/analytics/position-analytics-types.ts";
 import {
     analyzeSingleWallet,
@@ -594,5 +600,181 @@ describe("Position Analytics Step 1 Test Suite", () => {
         assert.ok(typeof isValidSolanaAddress === "function");
         assert.ok(typeof compareV1Positions === "function");
         assert.ok(typeof loadReferenceCohort === "function");
+    });
+
+    // 26. Regression 1: Bounded 404 retries in Fabriq Analytics client
+    it("26. Bounded 404 retries: halts after bounded retries and preserves defaults", async () => {
+        assert.equal(typeof DEFAULT_MAX_404_RETRIES, "number");
+        assert.ok(DEFAULT_MAX_404_RETRIES > 0);
+        assert.equal(typeof DEFAULT_DELAY_404_MS, "number");
+        assert.ok(DEFAULT_DELAY_404_MS > 0);
+
+        setFabriqTokenForTesting("test-token-jwt");
+        const originalFetch = globalThis.fetch;
+        try {
+            let callCount = 0;
+            globalThis.fetch = (async () => {
+                callCount++;
+                return new Response("Not Found", { status: 404 });
+            }) as typeof fetch;
+
+            await assert.rejects(
+                () =>
+                    discoverWalletDlmmPools("11111111111111111111111111111111", {
+                        max404Retries: 2,
+                        delay404Ms: 1,
+                        onLog: () => {},
+                    }),
+                (err: any) => {
+                    assert.equal(err.code, "DATA_NOT_FOUND");
+                    return true;
+                }
+            );
+
+            // 1 initial + 2 retries = 3 calls
+            assert.equal(callCount, 3);
+        } finally {
+            globalThis.fetch = originalFetch;
+            setFabriqTokenForTesting(null);
+        }
+    });
+
+    // 27. Regression 2: Unknown ADD_LIQUIDITY amounts
+    it("27. Unknown ADD_LIQUIDITY amounts: uses null and marks INCOMPLETE_AMOUNTS, preserving verified entry", () => {
+        const pos1 = createMockPosition("pos-unknown-add", "pool-1", 5);
+        const openTime = pos1.opened_at as string;
+        const events1: RawEventInput[] = [
+            {
+                rawId: "ev-open",
+                rawType: "POSITION_OPEN",
+                positionId: "pos-unknown-add",
+                poolId: "pool-1",
+                createdAt: openTime,
+                signature: "sig-1",
+                totalInUsd: 0,
+            },
+            {
+                rawId: "ev-add",
+                rawType: "ADD_LIQUIDITY",
+                positionId: "pos-unknown-add",
+                poolId: "pool-1",
+                createdAt: openTime,
+                signature: "sig-1",
+                totalInUsd: null,
+                tokenXAmountUsd: null,
+                tokenYAmountUsd: null,
+            },
+            {
+                rawId: "ev-close",
+                rawType: "POSITION_CLOSE",
+                positionId: "pos-unknown-add",
+                poolId: "pool-1",
+                createdAt: pos1.latest_close_ts as string,
+                signature: "sig-close",
+            },
+        ];
+
+        const norm1 = reconstructPositionLifecycle("wallet-1", pos1, events1);
+        assert.equal(norm1.initialEntryUsd, null);
+        assert.equal(norm1.dataQuality.initialEntryStatus, "UNAVAILABLE");
+        assert.equal(norm1.dataQuality.positionCompleteness, "INCOMPLETE_AMOUNTS");
+
+        const pos2 = createMockPosition("pos-topup-unknown", "pool-1", 5);
+        const events2: RawEventInput[] = [
+            {
+                rawId: "ev-open2",
+                rawType: "POSITION_OPEN",
+                positionId: "pos-topup-unknown",
+                poolId: "pool-1",
+                createdAt: openTime,
+                signature: "sig-open",
+                totalInUsd: 500.0,
+            },
+            {
+                rawId: "ev-topup2",
+                rawType: "ADD_LIQUIDITY",
+                positionId: "pos-topup-unknown",
+                poolId: "pool-1",
+                createdAt: new Date(new Date(openTime).getTime() + 10000).toISOString(),
+                signature: "sig-topup",
+                totalInUsd: null,
+            },
+            {
+                rawId: "ev-close2",
+                rawType: "POSITION_CLOSE",
+                positionId: "pos-topup-unknown",
+                poolId: "pool-1",
+                createdAt: pos2.latest_close_ts as string,
+                signature: "sig-close2",
+            },
+        ];
+
+        const norm2 = reconstructPositionLifecycle("wallet-1", pos2, events2);
+        assert.equal(norm2.initialEntryUsd, 500.0);
+        assert.equal(norm2.dataQuality.initialEntryStatus, "VERIFIED_OPEN_EVENT");
+        assert.equal(norm2.additionalLiquidityUsd, null);
+        assert.equal(norm2.dataQuality.positionCompleteness, "INCOMPLETE_AMOUNTS");
+    });
+
+    // 28. Regression 3: Missing PnL vs genuine zero PnL
+    it("28. PnL classification: distinguishes UNKNOWN from genuine zero PnL BREAKEVEN", () => {
+        const posMissing = createMockPosition("pos-pnl-missing", "pool-1", 5, {
+            total_pnl_usd: null,
+            total_pnl_pct_usd: null,
+        });
+        const normMissing = reconstructPositionLifecycle("wallet-1", posMissing, []);
+        assert.equal(normMissing.pnlUsd, null);
+        assert.equal(normMissing.winLoss, "UNKNOWN");
+
+        const posZero = createMockPosition("pos-pnl-zero", "pool-1", 5, {
+            total_pnl_usd: 0,
+            total_pnl_pct_usd: 0,
+        });
+        const normZero = reconstructPositionLifecycle("wallet-1", posZero, []);
+        assert.equal(normZero.pnlUsd, 0);
+        assert.equal(normZero.winLoss, "BREAKEVEN");
+    });
+
+    // 29. Regression 4: sourceCoverage COMPLETE requires confirmed extraction completeness
+    it("29. Source coverage completeness: marks PARTIAL when extraction unconfirmed or has failures", () => {
+        const p1 = createMockPosition("pos-cov", "pool-1", 5);
+
+        const datasetUnconfirmed = buildPositionAnalyticsDataset({
+            wallet: "wallet-cov",
+            period: "30D",
+            snapshotTimestampMs: NOW_MS,
+            rawPositions: [p1],
+            rawEvents: [],
+            fabriqPoolsDiscovered: 1,
+            dlmmPoolsMatched: 1,
+            isExtractionComplete: false,
+        });
+        assert.equal(datasetUnconfirmed.sourceCoverage.status, "PARTIAL");
+
+        const datasetError = buildPositionAnalyticsDataset({
+            wallet: "wallet-cov",
+            period: "30D",
+            snapshotTimestampMs: NOW_MS,
+            rawPositions: [p1],
+            rawEvents: [],
+            fabriqPoolsDiscovered: 1,
+            dlmmPoolsMatched: 1,
+            diagnostics: {
+                skippedRecords: [{ poolAddress: "pool-1", reason: "EXTRACTION_FAILED" }],
+            },
+        });
+        assert.equal(datasetError.sourceCoverage.status, "PARTIAL");
+
+        const datasetComplete = buildPositionAnalyticsDataset({
+            wallet: "wallet-cov",
+            period: "30D",
+            snapshotTimestampMs: NOW_MS,
+            rawPositions: [p1],
+            rawEvents: [],
+            fabriqPoolsDiscovered: 1,
+            dlmmPoolsMatched: 1,
+            isExtractionComplete: true,
+        });
+        assert.equal(datasetComplete.sourceCoverage.status, "COMPLETE");
     });
 });

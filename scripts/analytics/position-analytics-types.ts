@@ -78,7 +78,7 @@ export interface NormalizedPositionRecord {
 
     pnlUsd: number | null;
     pnlPct: number | null;
-    winLoss: "WIN" | "LOSS" | "BREAKEVEN";
+    winLoss: "WIN" | "LOSS" | "BREAKEVEN" | "UNKNOWN";
 
     lifecycle: PositionLifecycleMeta;
 

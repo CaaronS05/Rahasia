@@ -34,8 +34,13 @@ export interface FabriqFetchTransactionsResult {
     batchesFetched: number;
 }
 
+export const DEFAULT_MAX_404_RETRIES = Number(process.env.FABRIQ_MAX_404_RETRIES ?? "3");
+export const DEFAULT_DELAY_404_MS = Number(process.env.FABRIQ_404_DELAY_MS ?? "5000");
+
 export interface ClientLoggingOptions {
     onLog?: (msg: string) => void;
+    max404Retries?: number;
+    delay404Ms?: number;
 }
 
 /**
@@ -72,7 +77,11 @@ export async function discoverWalletDlmmPools(
         params.set("feesScope", "pool");
 
         log(`[FABRIQ-DISC] Fetching pool page ${page}...`);
-        const fetchOpts: FabriqFetchOptions = { onLog: log };
+        const fetchOpts: FabriqFetchOptions = {
+            onLog: log,
+            max404Retries: options?.max404Retries ?? DEFAULT_MAX_404_RETRIES,
+            delay404Ms: options?.delay404Ms ?? DEFAULT_DELAY_404_MS,
+        };
         const resJson = await fabriqFetch<unknown>(
             `/history/${wallet}/pnl-by-pool`,
             params,
@@ -180,7 +189,11 @@ export async function fetchWalletPositionsForPools(
 
         log(`[FABRIQ-POS] Fetching positions batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(poolIds.length / batchSize)} (${batch.length} pools)...`);
 
-        const fetchOpts: FabriqFetchOptions = { onLog: log };
+        const fetchOpts: FabriqFetchOptions = {
+            onLog: log,
+            max404Retries: options?.max404Retries ?? DEFAULT_MAX_404_RETRIES,
+            delay404Ms: options?.delay404Ms ?? DEFAULT_DELAY_404_MS,
+        };
         const posRes = await fabriqFetch<unknown>(
             `/history/${wallet}/positions-by-pool`,
             params,
@@ -280,7 +293,11 @@ export async function fetchTransactionsForPositions(
 
         log(`[FABRIQ-TX] Fetching transactions batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(positionIds.length / batchSize)} (${batch.length} positions)...`);
 
-        const fetchOpts: FabriqFetchOptions = { onLog: log };
+        const fetchOpts: FabriqFetchOptions = {
+            onLog: log,
+            max404Retries: options?.max404Retries ?? DEFAULT_MAX_404_RETRIES,
+            delay404Ms: options?.delay404Ms ?? DEFAULT_DELAY_404_MS,
+        };
         const txRes = await fabriqFetch<unknown>(
             `/history/transactions`,
             params,
