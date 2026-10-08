@@ -181,6 +181,32 @@ async function main() {
     "PERSISTING"
   );
 
+  // Stage 5: SYNCING
+  console.log(`[REFRESH_POOL] STAGE syncing`);
+  await runSubprocess(
+    process.execPath,
+    [
+      "--experimental-strip-types",
+      "scripts/pipeline/sync-pool-wallets.ts",
+      "--token",
+      tokenMint,
+      "--pool",
+      poolAddress,
+    ],
+    "SYNCING"
+  );
+
+  // Stage 6: PUBLISHING
+  console.log(`[REFRESH_POOL] STAGE publishing`);
+  await runSubprocess(
+    process.execPath,
+    [
+      "--experimental-strip-types",
+      "scripts/pipeline/publish-wallets.ts",
+    ],
+    "PUBLISHING"
+  );
+
   console.log(`[REFRESH_POOL] COMPLETE pool="${poolAddress}"`);
   console.log("========================================");
   console.log("EXACT POOL REFRESH COMPLETE");

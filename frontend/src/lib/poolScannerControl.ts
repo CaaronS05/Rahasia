@@ -64,6 +64,27 @@ export interface PoolScannerState {
   tradeHistoryFailedWallets?: number;
   tradeHistoryTotalTrades?: number;
 }
+export interface PoolRefreshState {
+  poolAddress: string | null;
+  status: "idle" | "running" | "completed" | "failed";
+  stage: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  error: string | null;
+}
+
+export async function getPoolRefreshStatus(): Promise<PoolRefreshState | null> {
+  try {
+    const response = await fetch(`${POOL_SCANNER_API_BASE}/api/pool-refresh/status`, {
+      cache: "no-store",
+    });
+    if (!response.ok) return null;
+    return response.json();
+  } catch {
+    return null;
+  }
+}
+
 
 export interface PoolDiscoveryItem {
   poolAddress: string;

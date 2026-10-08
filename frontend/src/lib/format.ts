@@ -19,13 +19,15 @@ export const pct = (value: number, digits = 1) =>
 export const sol = (value: number, digits = 2) =>
   `${value >= 0 ? "+" : ""}${fmt(value, digits)} SOL`;
 
-export const duration = (hours: number) => {
+export const duration = (hours: number | null | undefined) => {
+  if (hours === null || hours === undefined || !Number.isFinite(hours)) return "—";
   if (hours < 1) return `${Math.max(1, Math.round(hours * 60))}m`;
   if (hours < 24) return `${fmt(hours, hours < 10 ? 1 : 0)}h`;
   return `${fmt(hours / 24, 1)}d`;
 };
 
-export const walletAge = (firstActivity: string) => {
+export const walletAge = (firstActivity: string | null | undefined) => {
+  if (!firstActivity) return "—";
   const first = new Date(firstActivity).getTime();
 
   if (!Number.isFinite(first)) return "—";
@@ -59,8 +61,11 @@ export const walletAge = (firstActivity: string) => {
   return `${years.toFixed(1)}y`;
 };
 
-export const timeAgo = (iso: string) => {
-  const diffMs = Date.now() - new Date(iso).getTime();
+export const timeAgo = (iso: string | null | undefined) => {
+  if (!iso) return "—";
+  const first = new Date(iso).getTime();
+  if (!Number.isFinite(first)) return "—";
+  const diffMs = Date.now() - first;
   const minutes = Math.max(0, Math.floor(diffMs / 60000));
   if (minutes < 60) return `${minutes}m ago`;
   const hours = Math.floor(minutes / 60);

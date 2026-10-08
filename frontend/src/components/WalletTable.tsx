@@ -526,9 +526,18 @@ export function WalletTable({
 
                   {visible.positions ? (
                     <td className="numeric">
-                      <strong>{wallet.total_lp}</strong>
+                      <strong>
+                        {wallet.total_lp !== null && wallet.total_lp !== undefined
+                          ? wallet.total_lp
+                          : (wallet.fabriq?.stats?.totalPositions ?? "—")}
+                      </strong>
                       <small>
-                        {wallet.total_lp_7d} in 7D · {wallet.total_pool} pools
+                        {wallet.total_lp_7d !== null && wallet.total_lp_7d !== undefined
+                          ? `${wallet.total_lp_7d} in 7D · `
+                          : ""}
+                        {wallet.total_pool !== null && wallet.total_pool !== undefined
+                          ? `${wallet.total_pool} pools`
+                          : (wallet.source === "pool-scanner" ? "Pool Discovery" : "—")}
                       </small>
                     </td>
                   ) : null}
@@ -544,15 +553,29 @@ export function WalletTable({
                   {visible.ev ? (
                     <td
                       className={
-                        wallet.expected_value_native >= 0 ? "positive" : "negative"
+                        wallet.expected_value_native !== null &&
+                        wallet.expected_value_native !== undefined &&
+                        Number.isFinite(wallet.expected_value_native)
+                          ? wallet.expected_value_native >= 0 ? "positive" : "negative"
+                          : "numeric"
                       }
                     >
-                      {signed(wallet.expected_value_native)}
+                      {wallet.expected_value_native !== null &&
+                      wallet.expected_value_native !== undefined &&
+                      Number.isFinite(wallet.expected_value_native)
+                        ? signed(wallet.expected_value_native)
+                        : "—"}
                     </td>
                   ) : null}
 
                   {visible.invested ? (
-                    <td className="numeric">{fmt(wallet.avg_inflow_native, 2)}</td>
+                    <td className="numeric">
+                      {wallet.avg_inflow_native !== null &&
+                      wallet.avg_inflow_native !== undefined &&
+                      Number.isFinite(wallet.avg_inflow_native)
+                        ? fmt(wallet.avg_inflow_native, 2)
+                        : "—"}
+                    </td>
                   ) : null}
 
                   {visible.monthly ? (
@@ -566,7 +589,13 @@ export function WalletTable({
                   ) : null}
 
                   {visible.fees ? (
-                    <td className="numeric">{fmt(wallet.total_fee_native, 2)}</td>
+                    <td className="numeric">
+                      {wallet.total_fee_native !== null &&
+                      wallet.total_fee_native !== undefined &&
+                      Number.isFinite(wallet.total_fee_native)
+                        ? fmt(wallet.total_fee_native, 2)
+                        : "—"}
+                    </td>
                   ) : null}
 
                   {visible.last ? (

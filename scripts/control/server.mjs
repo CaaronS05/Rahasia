@@ -2811,9 +2811,6 @@ function startCanonicalPersistence(tokenCa, isChained = false) {
         poolScannerState.exitCode = code;
 
         if (code === 0) {
-            poolScannerState.status = "completed";
-            poolScannerState.stage = "persisted";
-            poolScannerState.error = null;
             scannedPoolsCache = null;
             scannedPoolsMtimeMs = null;
             poolMembershipCache = null;
@@ -2823,6 +2820,7 @@ function startCanonicalPersistence(tokenCa, isChained = false) {
             addPoolScannerLog(
                 "[CONTROL] Canonical Persistence finished successfully. Scanned pools published to Pool Insight."
             );
+            startGlobalWalletSync(tokenCa);
         } else {
             poolScannerState.status = "error";
             poolScannerState.stage = "persistence_error";
@@ -2832,6 +2830,207 @@ function startCanonicalPersistence(tokenCa, isChained = false) {
             addPoolScannerLog(
                 `[CONTROL] ${poolScannerState.error}`
             );
+        }
+    });
+}
+function startGlobalWalletSync(tokenCa) {
+    poolScannerState.stage = "syncing";
+    addPoolScannerLog(
+        `[CONTROL] Starting Global Wallet Registry sync for token: ${tokenCa}`
+    );
+
+    poolScannerChild = spawn(
+        process.execPath,
+        [
+            "--experimental-strip-types",
+            "scripts/pipeline/sync-pool-wallets.ts",
+            "--token",
+            tokenCa,
+        ],
+        {
+            cwd: ROOT,
+            env: {
+                ...process.env,
+            },
+            detached: process.platform !== "win32",
+            stdio: ["ignore", "pipe", "pipe"],
+        }
+    );
+
+    let stdoutBuffer = "";
+    let stderrBuffer = "";
+
+    function consumeBuffer(buffer, chunk, onLine) {
+        buffer += String(chunk);
+        const lines = buffer.split("\n");
+        const remainder = lines.pop() ?? "";
+        for (const line of lines) {
+            const trimmed = line.trimEnd();
+            if (trimmed) {
+                onLine(trimmed);
+            }
+        }
+        return remainder;
+    }
+
+    poolScannerChild.stdout.on("data", (chunk) => {
+        stdoutBuffer = consumeBuffer(stdoutBuffer, chunk, (line) => {
+            addPoolScannerLog(line);
+        });
+    });
+
+    poolScannerChild.stderr.on("data", (chunk) => {
+        stderrBuffer = consumeBuffer(stderrBuffer, chunk, (line) => {
+            addPoolScannerLog(line);
+        });
+    });
+
+    poolScannerChild.on("error", (error) => {
+        const wasUserStopped =
+            poolScannerUserStopped || poolScannerState.status === "stopped";
+        poolScannerChild = null;
+        if (wasUserStopped) return;
+        poolScannerState.status = "error";
+        poolScannerState.stage = "sync_error";
+        poolScannerState.error =
+            error instanceof Error ? error.message : String(error);
+        poolScannerState.finishedAt = new Date().toISOString();
+        addPoolScannerLog(
+            `[CONTROL] Global Wallet Registry sync process error: ${poolScannerState.error}`
+        );
+    });
+
+    poolScannerChild.on("exit", (code, signal) => {
+        if (stdoutBuffer.trim()) {
+            const trimmed = stdoutBuffer.trimEnd();
+            addPoolScannerLog(trimmed);
+            stdoutBuffer = "";
+        }
+        if (stderrBuffer.trim()) {
+            const trimmed = stderrBuffer.trimEnd();
+            addPoolScannerLog(trimmed);
+            stderrBuffer = "";
+        }
+
+        const wasUserStopped =
+            poolScannerUserStopped || poolScannerState.status === "stopped";
+        poolScannerChild = null;
+        if (wasUserStopped) return;
+
+        if (code === 0) {
+            addPoolScannerLog(
+                "[CONTROL] Global Wallet Registry sync finished successfully."
+            );
+            startGlobalWalletPublish(tokenCa);
+        } else {
+            poolScannerState.status = "error";
+            poolScannerState.stage = "sync_error";
+            poolScannerState.error =
+                `Global Wallet Registry sync failed with exit code ${code}${signal ? ` (signal ${signal})` : ""}`;
+            poolScannerState.finishedAt = new Date().toISOString();
+            addPoolScannerLog(`[CONTROL] ${poolScannerState.error}`);
+        }
+    });
+}
+
+function startGlobalWalletPublish(tokenCa) {
+    poolScannerState.stage = "publishing";
+    addPoolScannerLog(
+        "[CONTROL] Publishing unified wallet population to Wallet Explorer..."
+    );
+
+    poolScannerChild = spawn(
+        process.execPath,
+        [
+            "--experimental-strip-types",
+            "scripts/pipeline/publish-wallets.ts",
+        ],
+        {
+            cwd: ROOT,
+            env: {
+                ...process.env,
+            },
+            detached: process.platform !== "win32",
+            stdio: ["ignore", "pipe", "pipe"],
+        }
+    );
+
+    let stdoutBuffer = "";
+    let stderrBuffer = "";
+
+    function consumeBuffer(buffer, chunk, onLine) {
+        buffer += String(chunk);
+        const lines = buffer.split("\n");
+        const remainder = lines.pop() ?? "";
+        for (const line of lines) {
+            const trimmed = line.trimEnd();
+            if (trimmed) {
+                onLine(trimmed);
+            }
+        }
+        return remainder;
+    }
+
+    poolScannerChild.stdout.on("data", (chunk) => {
+        stdoutBuffer = consumeBuffer(stdoutBuffer, chunk, (line) => {
+            addPoolScannerLog(line);
+        });
+    });
+
+    poolScannerChild.stderr.on("data", (chunk) => {
+        stderrBuffer = consumeBuffer(stderrBuffer, chunk, (line) => {
+            addPoolScannerLog(line);
+        });
+    });
+
+    poolScannerChild.on("error", (error) => {
+        const wasUserStopped =
+            poolScannerUserStopped || poolScannerState.status === "stopped";
+        poolScannerChild = null;
+        if (wasUserStopped) return;
+        poolScannerState.status = "error";
+        poolScannerState.stage = "publish_error";
+        poolScannerState.error =
+            error instanceof Error ? error.message : String(error);
+        poolScannerState.finishedAt = new Date().toISOString();
+        addPoolScannerLog(
+            `[CONTROL] Publishing process error: ${poolScannerState.error}`
+        );
+    });
+
+    poolScannerChild.on("exit", (code, signal) => {
+        if (stdoutBuffer.trim()) {
+            const trimmed = stdoutBuffer.trimEnd();
+            addPoolScannerLog(trimmed);
+            stdoutBuffer = "";
+        }
+        if (stderrBuffer.trim()) {
+            const trimmed = stderrBuffer.trimEnd();
+            addPoolScannerLog(trimmed);
+            stderrBuffer = "";
+        }
+
+        const wasUserStopped =
+            poolScannerUserStopped || poolScannerState.status === "stopped";
+        poolScannerChild = null;
+        if (wasUserStopped) return;
+
+        poolScannerState.finishedAt = new Date().toISOString();
+        poolScannerState.exitCode = code;
+
+        if (code === 0) {
+            poolScannerState.status = "completed";
+            poolScannerState.stage = "completed";
+            poolScannerState.error = null;
+            addPoolScannerLog(
+                "[CONTROL] Pipeline complete! Discovered pool wallets synced to Global Registry and published to Wallet Explorer."
+            );
+        } else {
+            poolScannerState.status = "error";
+            poolScannerState.stage = "publish_error";
+            poolScannerState.error =
+                `Wallet Explorer publishing failed with exit code ${code}${signal ? ` (signal ${signal})` : ""}`;
+            addPoolScannerLog(`[CONTROL] ${poolScannerState.error}`);
         }
     });
 }
@@ -3678,6 +3877,10 @@ function startPoolRefresh(poolAddress, options = {}) {
             poolRefreshState.stage = "trade_history";
         } else if (line.includes("[REFRESH_POOL] STAGE persisting")) {
             poolRefreshState.stage = "persisting";
+        } else if (line.includes("[REFRESH_POOL] STAGE syncing")) {
+            poolRefreshState.stage = "syncing";
+        } else if (line.includes("[REFRESH_POOL] STAGE publishing")) {
+            poolRefreshState.stage = "publishing";
         } else if (line.includes("[REFRESH_POOL] COMPLETE")) {
             poolRefreshState.stage = "completed";
             poolRefreshState.status = "completed";
@@ -4433,6 +4636,15 @@ const server = http.createServer(async (request, response) => {
     // ------------------------------------------------------
     // GET /api/pool-insight/pools/:poolAddress/refresh/status
     // ------------------------------------------------------
+
+    // ------------------------------------------------------
+    // GET /api/pool-refresh/status
+    // ------------------------------------------------------
+    if (request.method === "GET" && url.pathname === "/api/pool-refresh/status") {
+        const queryPool = url.searchParams.get("pool")?.trim() || null;
+        json(request, response, 200, poolRefreshPublicState(queryPool));
+        return;
+    }
 
     if (request.method === "GET") {
         const matchRefreshStatus = url.pathname.match(

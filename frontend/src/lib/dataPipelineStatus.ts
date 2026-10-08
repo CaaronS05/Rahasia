@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getFabriqStatus, type FabriqState } from "./fabriqControl";
 import { getLpAgentStatus, type LpAgentState } from "./lpAgentControl";
-import { getPoolScannerStatus, type PoolScannerState } from "./poolScannerControl";
+import { getPoolScannerStatus, getPoolRefreshStatus, type PoolScannerState, type PoolRefreshState } from "./poolScannerControl";
 import { getWalletIntelligenceStatus, type WalletIntelligenceState } from "./walletIntelligenceControl";
 
 interface PipelineSnapshot {
   fabriq: FabriqState | null;
   lpagent: LpAgentState | null;
   poolScanner: PoolScannerState | null;
+  poolRefresh: PoolRefreshState | null;
   intelligence: WalletIntelligenceState | null;
 }
 
@@ -29,7 +30,7 @@ export function useDataPipelineStatus(onDatasetRefreshed: () => void): DataPipel
     inFlight.current = true;
     try {
       const results = await Promise.allSettled([
-        getFabriqStatus(), getLpAgentStatus(), getPoolScannerStatus(), getWalletIntelligenceStatus(),
+        getFabriqStatus(), getLpAgentStatus(), getPoolScannerStatus(), getWalletIntelligenceStatus(), getPoolRefreshStatus(),
       ]);
       if (!mounted.current) return;
       const next: PipelineSnapshot = {
@@ -37,6 +38,7 @@ export function useDataPipelineStatus(onDatasetRefreshed: () => void): DataPipel
         lpagent: results[1].status === "fulfilled" ? results[1].value : null,
         poolScanner: results[2].status === "fulfilled" ? results[2].value : null,
         intelligence: results[3].status === "fulfilled" ? results[3].value : null,
+        poolRefresh: results[4].status === "fulfilled" ? results[4].value : null,
       };
       let completed = false;
       for (const [key, value] of Object.entries(next)) {

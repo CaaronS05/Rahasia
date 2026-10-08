@@ -46,60 +46,61 @@ export type Wallet = {
   owner: string;
   chain: string;
   protocol: string;
+  source?: "lpagent" | "pool-scanner";
 
-  total_inflow: number;
-  avg_inflow: number;
-  total_outflow: number;
-  total_fee: number;
-  total_reward: number;
-  total_pnl: number;
+  total_inflow?: number | null;
+  avg_inflow?: number | null;
+  total_outflow?: number | null;
+  total_fee?: number | null;
+  total_reward?: number | null;
+  total_pnl?: number | null;
 
-  total_inflow_native: number;
-  avg_inflow_native: number;
-  total_outflow_native: number;
-  total_fee_native: number;
-  total_reward_native: number;
-  total_pnl_native: number;
+  total_inflow_native?: number | null;
+  avg_inflow_native?: number | null;
+  total_outflow_native?: number | null;
+  total_fee_native?: number | null;
+  total_reward_native?: number | null;
+  total_pnl_native?: number | null;
 
-  avg_age_hour: number;
-  total_lp: number;
-  win_lp: number;
-  win_lp_native: number;
-  closed_lp: number;
-  opening_lp: number;
-  total_pool: number;
-  win_rate: number;
-  win_rate_native: number;
-  expected_value: number;
-  expected_value_native: number;
-  fee_percent: number;
-  fee_percent_native: number;
-  apr: number;
-  roi: number;
-  roi_avg_inflow: number;
-  roi_avg_inflow_native: number;
+  avg_age_hour?: number | null;
+  total_lp?: number | null;
+  win_lp?: number | null;
+  win_lp_native?: number | null;
+  closed_lp?: number | null;
+  opening_lp?: number | null;
+  total_pool?: number | null;
+  win_rate?: number | null;
+  win_rate_native?: number | null;
+  expected_value?: number | null;
+  expected_value_native?: number | null;
+  fee_percent?: number | null;
+  fee_percent_native?: number | null;
+  apr?: number | null;
+  roi?: number | null;
+  roi_avg_inflow?: number | null;
+  roi_avg_inflow_native?: number | null;
 
-  first_activity: string;
-  last_activity: string;
+  first_activity?: string | null;
+  last_activity?: string | null;
 
-  avg_pos_profit: number;
-  avg_pos_profit_native: number;
-  avg_monthly_profit_percent: number;
-  avg_monthly_pnl: number;
-  avg_monthly_inflow: number;
-  avg_monthly_profit_percent_native: number;
-  avg_monthly_pnl_native: number;
-  avg_monthly_inflow_native: number;
+  avg_pos_profit?: number | null;
+  avg_pos_profit_native?: number | null;
+  avg_monthly_profit_percent?: number | null;
+  avg_monthly_pnl?: number | null;
+  avg_monthly_inflow?: number | null;
+  avg_monthly_profit_percent_native?: number | null;
+  avg_monthly_pnl_native?: number | null;
+  avg_monthly_inflow_native?: number | null;
 
-  updated_at: string;
-  pnl_chart: PnlPoint[];
+  updated_at?: string;
+  pnl_chart?: PnlPoint[];
 
-  total_pnl_7d: number;
-  total_pnl_native_7d: number;
-  total_pnl_30d: number;
-  total_pnl_native_30d: number;
-  total_lp_7d: number;
-  total_lp_30d: number;
+  total_pnl_7d?: number | null;
+  total_pnl_native_7d?: number | null;
+  total_pnl_30d?: number | null;
+  total_pnl_native_30d?: number | null;
+  total_lp_7d?: number | null;
+  total_lp_30d?: number | null;
 
   fabriq?: {
     fetchedAt?: string;
