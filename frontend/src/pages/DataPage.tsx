@@ -1,16 +1,14 @@
+import { useEffect } from "react";
 import { ArrowRight, Database, Layers3, ScanSearch } from "lucide-react";
 import { WalletDataControlPanel } from "../components/data/WalletDataControlPanel";
 import { WalletIntelligencePanel, dataTimestamp } from "../components/data/WalletIntelligencePanel";
 import type { DataPipelineStatus } from "../lib/dataPipelineStatus";
 import { PoolScannerPage } from "./PoolScannerPage";
-import { PoolInsightPage } from "./PoolInsightPage";
 import "../data-page.css";
-
 const TABS = [
   { key: "overview", label: "Overview" },
   { key: "wallet-data", label: "Wallet Data" },
   { key: "pool-scanner", label: "Pool Scanner" },
-  { key: "pool-insight", label: "Pool Insight" },
   { key: "wallet-intelligence", label: "Wallet Intelligence" },
 ] as const;
 export type DataTab = typeof TABS[number]["key"];
@@ -31,6 +29,12 @@ export function DataPage({ tab, onTabChange, walletCount, lastUpdated, intellige
   pipelines: DataPipelineStatus;
   onDatasetRefreshed: () => void;
 }) {
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("tab") === "pool-insight") {
+      window.location.replace("/pools");
+    }
+  }, []);
+
   const walletRunning = Boolean(pipelines.fabriq?.running || pipelines.lpagent?.running);
   const walletState = walletRunning
     ? (pipelines.lpagent?.running ? pipelines.lpagent : pipelines.fabriq)
@@ -64,7 +68,6 @@ export function DataPage({ tab, onTabChange, walletCount, lastUpdated, intellige
     </section>}
     <div hidden={tab !== "wallet-data"}><WalletDataControlPanel walletCount={walletCount} lastUpdated={lastUpdated} startDisabled={walletBlocked} onDatasetRefreshed={onDatasetRefreshed} /></div>
     <div hidden={tab !== "pool-scanner"}><PoolScannerPage embedded startDisabled={poolBlocked} onDatasetRefreshed={onDatasetRefreshed} /></div>
-    <div hidden={tab !== "pool-insight"}><PoolInsightPage /></div>
     <div hidden={tab !== "wallet-intelligence"}><WalletIntelligencePanel state={pipelines.intelligence} startDisabled={intelligenceBlocked} onStateChanged={pipelines.refresh} /></div>
   </div>;
 }

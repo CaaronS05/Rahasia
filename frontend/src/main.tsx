@@ -5,7 +5,7 @@ import { PoolExplorerPage } from "./pages/PoolExplorerPage";
 import "./styles.css";
 import "./pool-explorer.css";
 
-const isPoolExplorerRoute = /^\/pools\/?$/.test(window.location.pathname);
+const isPoolExplorerRoute = /^\/pools(\/.*)?$/.test(window.location.pathname);
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

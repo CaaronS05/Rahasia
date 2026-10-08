@@ -36,6 +36,31 @@ import "../pool-insight.css";
 
 type Subnav = "explorer" | "intelligence";
 
+function parseNavFromUrl(): { tab: Subnav; poolAddress: string | null } {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const pool = params.get("pool")?.trim() || null;
+    const tabParam = params.get("tab")?.trim().toLowerCase();
+
+    if (pool) {
+      return {
+        tab: tabParam === "explorer" ? "explorer" : "intelligence",
+        poolAddress: pool,
+      };
+    }
+
+    if (tabParam === "intelligence") {
+      return {
+        tab: "intelligence",
+        poolAddress: null,
+      };
+    }
+  } catch {
+    // fallback if window is undefined or url error
+  }
+
+  return { tab: "explorer", poolAddress: null };
+}
 function formatTimestamp(iso: string | null | undefined): string {
   if (!iso || !Number.isFinite(Date.parse(iso))) return "—";
   return new Intl.DateTimeFormat("en-GB", {
@@ -126,8 +151,56 @@ function CopyButton({ text, label = "Copy address" }: { text: string; label?: st
 }
 
 export function PoolInsightPage() {
-  const [subnav, setSubnav] = useState<Subnav>("explorer");
-  const [selectedPoolAddress, setSelectedPoolAddress] = useState<string | null>(null);
+  const [subnav, setSubnav] = useState<Subnav>(() => parseNavFromUrl().tab);
+  const [selectedPoolAddress, setSelectedPoolAddress] = useState<string | null>(
+    () => parseNavFromUrl().poolAddress
+  );
+
+  const updateNav = useCallback(
+    (newTab: Subnav, newPool: string | null = selectedPoolAddress) => {
+      setSubnav(newTab);
+      setSelectedPoolAddress(newPool);
+
+      try {
+        const params = new URLSearchParams(window.location.search);
+        if (newTab === "intelligence") {
+          params.set("tab", "intelligence");
+          if (newPool) {
+            params.set("pool", newPool);
+          } else {
+            params.delete("pool");
+          }
+        } else {
+          params.delete("tab");
+          if (newPool) {
+            params.set("pool", newPool);
+          } else {
+            params.delete("pool");
+          }
+        }
+
+        const search = params.toString();
+        const newUrl = `${window.location.pathname}${search ? `?${search}` : ""}`;
+        if (newUrl !== `${window.location.pathname}${window.location.search}`) {
+          window.history.pushState(null, "", newUrl);
+        }
+      } catch {
+        // Safe fallback
+      }
+    },
+    [selectedPoolAddress]
+  );
+
+  useEffect(() => {
+    const handlePopState = () => {
+      const parsed = parseNavFromUrl();
+      setSubnav(parsed.tab);
+      setSelectedPoolAddress(parsed.poolAddress);
+    };
+
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, []);
 
   // View 1: Pools list state
   const [pools, setPools] = useState<ScannedPoolItem[]>([]);
@@ -490,20 +563,20 @@ export function PoolInsightPage() {
     <div className="pool-insight-page">
       <header className="pool-insight-header">
         <div>
-          <h2>Pool Insight</h2>
+          <h2>Pool Explorer</h2>
           <p>Analyze scanned DLMM pools and LP activity.</p>
         </div>
-        <nav className="pool-insight-subnav" aria-label="Pool Insight navigation">
+        <nav className="pool-insight-subnav" aria-label="Pool Explorer navigation">
           <button
             className={subnav === "explorer" ? "active" : ""}
-            onClick={() => setSubnav("explorer")}
+            onClick={() => updateNav("explorer")}
             type="button"
           >
             Pool Explorer
           </button>
           <button
             className={subnav === "intelligence" ? "active" : ""}
-            onClick={() => setSubnav("intelligence")}
+            onClick={() => updateNav("intelligence")}
             type="button"
           >
             Pool Intelligence
@@ -525,10 +598,10 @@ export function PoolInsightPage() {
             </p>
             <button
               className="secondary-button"
-              onClick={() => setSubnav("explorer")}
+              onClick={() => updateNav("explorer", null)}
               type="button"
             >
-              <ArrowLeft size={13} /> Go to Pool Explorer
+              <ArrowLeft size={13} /> Back to Pool Explorer
             </button>
           </section>
         ) : (
@@ -537,10 +610,7 @@ export function PoolInsightPage() {
             <div className="pool-detail-nav">
               <button
                 className="secondary-button"
-                onClick={() => {
-                  setSubnav("explorer");
-                  setSelectedPoolAddress(null);
-                }}
+                onClick={() => updateNav("explorer", null)}
                 type="button"
               >
                 <ArrowLeft size={13} /> Back to Pool Explorer
@@ -1129,10 +1199,7 @@ export function PoolInsightPage() {
                     <tr
                       key={pool.poolAddress}
                       className="clickable-row"
-                      onClick={() => {
-                        setSelectedPoolAddress(pool.poolAddress);
-                        setSubnav("intelligence");
-                      }}
+                      onClick={() => updateNav("intelligence", pool.poolAddress)}
                       title={`Open ${pool.pair} intelligence`}
                     >
                       <td>

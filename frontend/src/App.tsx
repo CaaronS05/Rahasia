@@ -85,7 +85,17 @@ function routeFromLocation(): { page: Page; address?: string; dataTab?: DataTab 
   }
 
   if (window.location.pathname === "/data") {
-    return { page: "data", dataTab: resolveDataTab(new URLSearchParams(window.location.search).get("tab")) };
+    const tabParam = new URLSearchParams(window.location.search).get("tab");
+    if (tabParam === "pool-insight") {
+      window.location.replace("/pools");
+      return { page: "data", dataTab: "overview" };
+    }
+    return { page: "data", dataTab: resolveDataTab(tabParam) };
+  }
+
+  if (window.location.pathname.startsWith("/pools")) {
+    window.location.replace(window.location.pathname + window.location.search);
+    return { page: "explore" };
   }
 
   return { page: "explore" };
