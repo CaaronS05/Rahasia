@@ -12,7 +12,9 @@
     "merge:fabriq": "node --experimental-strip-types scripts/pipeline/merge-fabriq.ts",
     "publish:wallets": "node --experimental-strip-types scripts/pipeline/publish-wallets.ts",
     "pipeline": "node scripts/pipeline/run-pipeline.mjs",
-    "waldisc:test-one-pool": "node --experimental-strip-types --env-file=.env scripts/discovery/waldisc-1-test-one-pool.ts"
+    "waldisc:test-one-pool": "node --experimental-strip-types --env-file=.env scripts/discovery/waldisc-1-test-one-pool.ts",
+    "test": "node --experimental-strip-types --test tests/analytics/position-analytics.test.ts",
+    "test:analytics": "node --experimental-strip-types --test tests/analytics/position-analytics.test.ts"
   },
   "engines": {
     "node": ">=22.6.0"

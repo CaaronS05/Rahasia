@@ -70,6 +70,13 @@ export interface SingleWalletAnalysisResult {
   coveragePct?: number;
   isSampled?: boolean;
   selectionMethod?: "LATEST_CLOSED_1000";
+  calendarStatus?: "complete" | "partial" | "unavailable";
+  calendarDiagnostics?: {
+    totalMonths: number;
+    successfulMonths: number;
+    failedMonths: number;
+    errors: string[];
+  };
   referenceCohort: {
     version: "v1";
     generatedAt: string;
@@ -445,6 +452,13 @@ async function fetchSingleWalletFabriqData(
   valid: boolean;
   reason: string | null;
   duplicatesRemoved: number;
+  calendarStatus: "complete" | "partial" | "unavailable";
+  calendarDiagnostics: {
+    totalMonths: number;
+    successfulMonths: number;
+    failedMonths: number;
+    errors: string[];
+  };
 }> {
   const cutoffMs = Date.now() - historyDays * 24 * 60 * 60 * 1000;
 
@@ -644,6 +658,10 @@ async function fetchSingleWalletFabriqData(
   }
 
   const dailyMap = new Map<string, DailyRecordItem>();
+  let successfulMonths = 0;
+  let failedMonths = 0;
+  const calendarErrors: string[] = [];
+
   for (const ym of calMonths) {
     try {
       const calParams = new URLSearchParams();
@@ -658,7 +676,10 @@ async function fetchSingleWalletFabriqData(
         delay404Ms: 2000,
       });
 
+      const calData = (calRes as Record<string, unknown>)?.data ?? calRes;
+
       if (calData && typeof calData === "object") {
+        successfulMonths++;
         for (const [dateStr, dayObj] of Object.entries(calData as Record<string, unknown>)) {
           if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) continue;
           if (dateStr >= cutoffDateStr && dateStr <= nowStr && dayObj && typeof dayObj === "object") {
@@ -674,11 +695,30 @@ async function fetchSingleWalletFabriqData(
             }
           }
         }
+      } else {
+        failedMonths++;
+        calendarErrors.push(`[${ym}] Invalid response structure`);
       }
-    } catch {
-      // Month calendar optional
+    } catch (calErr: any) {
+      failedMonths++;
+      const errMsg = calErr?.message ? String(calErr.message) : String(calErr);
+      calendarErrors.push(`[${ym}] ${errMsg}`);
+      logStage(6, "FETCH_CALENDAR", `[WARN] Failed to fetch calendar for ${ym}: ${errMsg}`);
     }
   }
+
+  const calendarStatus: "complete" | "partial" | "unavailable" =
+    calMonths.length === 0 || successfulMonths === calMonths.length
+      ? "complete"
+      : successfulMonths > 0
+      ? "partial"
+      : "unavailable";
+  const calendarDiagnostics = {
+    totalMonths: calMonths.length,
+    successfulMonths,
+    failedMonths,
+    errors: calendarErrors,
+  };
 
   const daily = Array.from(dailyMap.values()).sort((a, b) => a.date.localeCompare(b.date));
 
@@ -688,6 +728,8 @@ async function fetchSingleWalletFabriqData(
     valid: true,
     reason: null,
     duplicatesRemoved,
+    calendarStatus,
+    calendarDiagnostics,
   };
 }
 
@@ -825,8 +867,21 @@ export async function analyzeSingleWallet(
 
   // 2. Fetch data (reuse checkpoint if available, or fetch fresh)
   let positions: ClosedPositionItem[] = [];
-  let daily: DailyRecordItem[] = [];
-
+  let daily: DailyRecordItem[];
+  let fetched: {
+    positions: ClosedPositionItem[];
+    daily: DailyRecordItem[];
+    valid: boolean;
+    reason: string | null;
+    duplicatesRemoved: number;
+    calendarStatus: "complete" | "partial" | "unavailable";
+    calendarDiagnostics: {
+      totalMonths: number;
+      successfulMonths: number;
+      failedMonths: number;
+      errors: string[];
+    };
+  } | null = null;
   const cpFilePath = path.join(CHECKPOINT_DIR, `${normalizedWallet}.json`);
   let loadedFromCheckpoint = false;
 
@@ -858,7 +913,7 @@ export async function analyzeSingleWallet(
   }
 
   if (!loadedFromCheckpoint) {
-    const fetched = await fetchSingleWalletFabriqData(normalizedWallet);
+    fetched = await fetchSingleWalletFabriqData(normalizedWallet);
     if (!fetched.valid) {
       throw new Error(`INELIGIBLE_WALLET: ${fetched.reason ?? "Wallet has no qualifying DLMM positions"}`);
     }
@@ -877,7 +932,6 @@ export async function analyzeSingleWallet(
     `Selected: ${samplingMeta.analyzedPositions} | Excluded older: ${samplingMeta.excludedPositions} | ` +
     `Coverage: ${samplingMeta.coveragePct}% (${samplingMeta.isSampled ? "SAMPLED LATEST 1000" : "COMPLETE"})`
   );
-
   // 3. Compute Raw Descriptive Metrics using ONLY selected positions
   const closedPositionCount = selectedPositions.length;
   const uniqueDlmmPools = new Set(selectedPositions.map((p) => p.pool).filter(Boolean)).size;
@@ -997,6 +1051,8 @@ export async function analyzeSingleWallet(
     coveragePct: samplingMeta.coveragePct,
     isSampled: samplingMeta.isSampled,
     selectionMethod: samplingMeta.selectionMethod,
+    calendarStatus: fetched?.calendarStatus,
+    calendarDiagnostics: fetched?.calendarDiagnostics,
     referenceCohort: {
       version: "v1",
       generatedAt: cohort.meta.generatedAt,
