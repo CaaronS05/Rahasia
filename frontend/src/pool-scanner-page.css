@@ -745,7 +745,7 @@
 /* STAGES GRID */
 .pool-scanner-stages-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 12px;
 }
 
@@ -1238,9 +1238,15 @@
   }
 }
 
-@media (max-width: 900px) {
+@media (max-width: 1100px) {
   .pool-scanner-stages-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 700px) {
+  .pool-scanner-stages-grid {
+    grid-template-columns: repeat(1, minmax(0, 1fr));
   }
 }
 
@@ -1700,6 +1706,58 @@
 .trade-history-test-wallet-input::placeholder {
   color: var(--muted);
   font-size: 11px;
+}
+
+/* CANONICAL PERSISTENCE CARD */
+.persist-card {
+  border-color: rgba(168, 85, 247, 0.35);
+  background: linear-gradient(180deg, rgba(26, 16, 39, 0.95), rgba(20, 13, 30, 0.95));
+}
+
+.persist-btn {
+  background: linear-gradient(180deg, #9333ea 0%, #7e22ce 100%);
+  border-color: rgba(168, 85, 247, 0.4);
+  color: #faf5ff;
+}
+
+.persist-btn:hover:not(:disabled) {
+  background: linear-gradient(180deg, #7e22ce 0%, #6b21a8 100%);
+  border-color: rgba(168, 85, 247, 0.7);
+  box-shadow: 0 0 16px rgba(168, 85, 247, 0.3);
+}
+
+.text-purple {
+  color: #c084fc;
+}
+
+.persist-actions-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  margin-top: 10px;
+}
+
+.persist-action-desc {
+  font-size: 11px;
+  color: var(--muted);
+  margin: 0;
+  line-height: 1.4;
+}
+
+.persist-error-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  color: #fca5a5;
+  font-size: 11px;
+  margin-top: 10px;
 }
 
 

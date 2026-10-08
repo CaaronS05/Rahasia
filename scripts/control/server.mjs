@@ -211,6 +211,94 @@ function checkPoolScannerResumable(tokenCa) {
     }
 }
 
+function checkPoolsPersisted(tokenCa, selectedPools) {
+    if (!tokenCa) return false;
+    try {
+        const scannedData = loadScannedPools();
+        const pools = Array.isArray(scannedData?.pools) ? scannedData.pools : [];
+        if (!selectedPools || selectedPools.length === 0) {
+            return pools.some((p) => p.tokenMint === tokenCa);
+        }
+        return selectedPools.every((sp) => {
+            const addr = typeof sp === "string" ? sp : sp.poolAddress;
+            return pools.some((p) => p.poolAddress === addr && p.tokenMint === tokenCa);
+        });
+    } catch {
+        return false;
+    }
+}
+
+function readSelectedScanState(tokenCa) {
+    if (!tokenCa) return null;
+    const selectedScanDir = path.join(
+        ROOT,
+        "data",
+        "discovery",
+        "pool-scanner",
+        tokenCa,
+        "selected-scan"
+    );
+    if (!fs.existsSync(selectedScanDir)) return null;
+
+    try {
+        const selectionPath = path.join(selectedScanDir, "selection.json");
+        const scanStatePath = path.join(selectedScanDir, "scan-state.json");
+        const poolWalletsPath = path.join(selectedScanDir, "pool-wallets.json");
+        const fabriqStatePath = path.join(selectedScanDir, "fabriq-state.json");
+        const tradeHistoryStatePath = path.join(selectedScanDir, "trade-history-state.json");
+
+        const selection = fs.existsSync(selectionPath)
+            ? JSON.parse(fs.readFileSync(selectionPath, "utf8"))
+            : null;
+        const scanState = fs.existsSync(scanStatePath)
+            ? JSON.parse(fs.readFileSync(scanStatePath, "utf8"))
+            : null;
+        const poolWallets = fs.existsSync(poolWalletsPath)
+            ? JSON.parse(fs.readFileSync(poolWalletsPath, "utf8"))
+            : null;
+        const fabriqState = fs.existsSync(fabriqStatePath)
+            ? JSON.parse(fs.readFileSync(fabriqStatePath, "utf8"))
+            : null;
+        const tradeHistoryState = fs.existsSync(tradeHistoryStatePath)
+            ? JSON.parse(fs.readFileSync(tradeHistoryStatePath, "utf8"))
+            : null;
+
+        const selectedPools = selection?.pools || [];
+        const isPersisted = checkPoolsPersisted(tokenCa, selectedPools);
+
+        let uniqueWallets = 0;
+        if (poolWallets?.pools) {
+            const walletSet = new Set();
+            for (const p of poolWallets.pools) {
+                for (const w of p.wallets || []) {
+                    if (w.wallet) walletSet.add(w.wallet);
+                }
+            }
+            uniqueWallets = walletSet.size;
+        }
+
+        return {
+            selectedPools: selectedPools.map((p) => p.poolAddress),
+            selectedPoolCount: selectedPools.length,
+            completedPoolCount: scanState?.completedPoolCount ?? selectedPools.length,
+            uniqueWallets: uniqueWallets || fabriqState?.totalWallets || tradeHistoryState?.totalWallets || 0,
+            fabriqTotal: fabriqState?.totalWallets ?? 0,
+            fabriqCompleted: fabriqState?.status === "completed" ? (fabriqState.totalWallets ?? 0) : 0,
+            fabriqSuccess: fabriqState?.status === "completed" ? (fabriqState.totalWallets ?? 0) : 0,
+            tradeHistoryTotalWallets: tradeHistoryState?.totalWallets ?? 0,
+            tradeHistoryCompletedWallets: tradeHistoryState?.completedWallets ?? 0,
+            tradeHistoryFailedWallets: tradeHistoryState?.failedWallets ?? 0,
+            tradeHistoryTotalTrades: tradeHistoryState?.totalTrades ?? 0,
+            tradeHistoryStatus: tradeHistoryState?.status ?? null,
+            fabriqStatus: fabriqState?.status ?? null,
+            scanStateStatus: scanState?.status ?? null,
+            isPersisted,
+        };
+    } catch {
+        return null;
+    }
+}
+
 function poolScannerPublicState(queryToken = null) {
     // Keep the UI lock active until a stopped process tree has actually exited.
     const isRunning = Boolean(poolScannerChild) || poolScannerState.status === "running";
@@ -218,17 +306,84 @@ function poolScannerPublicState(queryToken = null) {
     const targetToken = queryToken || poolScannerState.tokenCa;
     const pState = readPoolScannerPipelineState(targetToken);
     const isResumable = !isRunning && checkPoolScannerResumable(targetToken);
+    const selectedScan = readSelectedScanState(targetToken);
+
+    const isPersisted = checkPoolsPersisted(
+        targetToken,
+        poolScannerState.selectedPools?.length ? poolScannerState.selectedPools : selectedScan?.selectedPools
+    );
+
+    // If a job is actively running in memory, preserve in-memory tracking
+    if (isRunning || (poolScannerState.status !== "idle" && (!queryToken || queryToken === poolScannerState.tokenCa))) {
+        return {
+            ...poolScannerState,
+            running: isRunning,
+            resumable: isResumable,
+            resumableTokenCa: isResumable ? targetToken : null,
+            isPersisted,
+            stage1Complete: pState?.stage1Complete ?? false,
+            stage2Complete: pState?.stage2Complete ?? false,
+            pipelineComplete: pState?.pipelineComplete ?? false,
+        };
+    }
+
+    // When idle and targetToken has selected-scan artifacts, return accurate snapshot
+    if (selectedScan) {
+        let derivedStage = "idle";
+        let derivedStatus = "idle";
+
+        if (isPersisted) {
+            derivedStage = "persisted";
+            derivedStatus = "completed";
+        } else if (selectedScan.tradeHistoryStatus === "completed") {
+            derivedStage = "trade_history_completed";
+            derivedStatus = "completed";
+        } else if (selectedScan.fabriqStatus === "completed") {
+            derivedStage = "fabriq_completed";
+            derivedStatus = "completed";
+        } else if (selectedScan.scanStateStatus === "completed") {
+            derivedStage = "extract_completed";
+            derivedStatus = "completed";
+        }
+
+        return {
+            ...poolScannerState,
+            status: derivedStatus,
+            stage: derivedStage,
+            tokenCa: targetToken,
+            selectedPools: selectedScan.selectedPools,
+            selectedPoolCount: selectedScan.selectedPoolCount,
+            completedPoolCount: selectedScan.completedPoolCount,
+            uniqueWallets: selectedScan.uniqueWallets,
+            fabriqTotal: selectedScan.fabriqTotal,
+            fabriqCompleted: selectedScan.fabriqCompleted,
+            fabriqSuccess: selectedScan.fabriqSuccess,
+            tradeHistoryTotalWallets: selectedScan.tradeHistoryTotalWallets,
+            tradeHistoryCompletedWallets: selectedScan.tradeHistoryCompletedWallets,
+            tradeHistoryFailedWallets: selectedScan.tradeHistoryFailedWallets,
+            tradeHistoryTotalTrades: selectedScan.tradeHistoryTotalTrades,
+            isPersisted,
+            running: false,
+            resumable: isResumable,
+            resumableTokenCa: isResumable ? targetToken : null,
+            stage1Complete: pState?.stage1Complete ?? false,
+            stage2Complete: pState?.stage2Complete ?? false,
+            pipelineComplete: pState?.pipelineComplete ?? false,
+        };
+    }
 
     return {
         ...poolScannerState,
         running: isRunning,
         resumable: isResumable,
         resumableTokenCa: isResumable ? targetToken : null,
+        isPersisted: false,
         stage1Complete: pState?.stage1Complete ?? false,
         stage2Complete: pState?.stage2Complete ?? false,
         pipelineComplete: pState?.pipelineComplete ?? false,
     };
 }
+
 
 function lpAgentPublicState() {
     const isRunning =
@@ -1793,6 +1948,12 @@ function parsePoolScannerLine(line) {
         poolScannerState.stage = "trade_history_completed";
         return;
     }
+
+    if (line.includes("STEP 3D-A PERSISTENCE COMPLETE")) {
+        poolScannerState.status = "completed";
+        poolScannerState.stage = "persisted";
+        return;
+    }
 }
 
 let poolScannerUserStopped = false;
@@ -2444,18 +2605,230 @@ function startPoolTradeHistory(tokenCa, workers = 2, wallet = null, limit = null
         poolScannerState.exitCode = code;
 
         if (code === 0) {
-            poolScannerState.status = "completed";
-            poolScannerState.stage = "trade_history_completed";
-            poolScannerState.error = null;
-            addPoolScannerLog(
-                "[CONTROL] Pool Trade History extraction finished successfully."
-            );
+            if (wallet || limit) {
+                poolScannerState.status = "completed";
+                poolScannerState.stage = "trade_history_completed";
+                poolScannerState.error = null;
+                addPoolScannerLog(
+                    "[CONTROL] Test trade history extraction finished successfully (partial run). Full run required to persist to Pool Insight."
+                );
+            } else {
+                addPoolScannerLog(
+                    "[CONTROL] Pool Trade History extraction finished successfully. Starting canonical persistence..."
+                );
+                try {
+                    validateTradeHistoryArtifacts(tokenCa);
+                    startCanonicalPersistence(tokenCa, true);
+                } catch (persistErr) {
+                    poolScannerState.status = "error";
+                    poolScannerState.stage = "persistence_error";
+                    poolScannerState.error =
+                        persistErr instanceof Error ? persistErr.message : String(persistErr);
+                    addPoolScannerLog(
+                        `[CONTROL] Failed to start canonical persistence: ${poolScannerState.error}`
+                    );
+                }
+            }
         } else {
             poolScannerState.status = "error";
             poolScannerState.stage = "error";
             poolScannerState.error =
                 poolScannerState.error ??
                 `Pool Trade History extraction failed with exit code ${code}${signal ? ` (signal ${signal})` : ""}`;
+            addPoolScannerLog(
+                `[CONTROL] ${poolScannerState.error}`
+            );
+        }
+    });
+}
+
+function validateTradeHistoryArtifacts(tokenCa) {
+    const selectedScanDir = path.join(
+        ROOT,
+        "data",
+        "discovery",
+        "pool-scanner",
+        tokenCa,
+        "selected-scan"
+    );
+    const selectionPath = path.join(selectedScanDir, "selection.json");
+    const scanStatePath = path.join(selectedScanDir, "scan-state.json");
+    const poolWalletsPath = path.join(selectedScanDir, "pool-wallets.json");
+    const poolTradeHistoryPath = path.join(selectedScanDir, "pool-trade-history.json");
+
+    if (!fs.existsSync(selectionPath)) {
+        throw new Error("Missing selection.json in selected-scan directory");
+    }
+    if (!fs.existsSync(scanStatePath)) {
+        throw new Error("Missing scan-state.json in selected-scan directory");
+    }
+    if (!fs.existsSync(poolWalletsPath)) {
+        throw new Error("Missing pool-wallets.json in selected-scan directory");
+    }
+    if (!fs.existsSync(poolTradeHistoryPath)) {
+        throw new Error("Missing pool-trade-history.json in selected-scan directory");
+    }
+
+    const tradeHistory = JSON.parse(fs.readFileSync(poolTradeHistoryPath, "utf8"));
+    if (tradeHistory.runScope !== "full" || tradeHistory.isFullDataset !== true) {
+        throw new Error("pool-trade-history.json is not a full dataset. Run full trade history extraction before persisting.");
+    }
+    if (tradeHistory.membershipWalletCount !== tradeHistory.processedWalletCount) {
+        throw new Error(`Incomplete trade history: processed ${tradeHistory.processedWalletCount} of ${tradeHistory.membershipWalletCount} wallets.`);
+    }
+    return true;
+}
+
+function startCanonicalPersistence(tokenCa, isChained = false) {
+    if (!isChained) {
+        assertDataPipelineAvailable();
+    } else {
+        if (Boolean(currentChild || lpAgentChild || walletIntelligenceChild || poolRefreshChild)) {
+            const error = new Error("Another data pipeline is currently running");
+            error.statusCode = 409;
+            throw error;
+        }
+    }
+
+    poolScannerUserStopped = false;
+    poolScannerState = {
+        ...poolScannerState,
+        status: "running",
+        stage: "persisting",
+        tokenCa,
+        startedAt: poolScannerState.startedAt || new Date().toISOString(),
+        finishedAt: null,
+        exitCode: null,
+        error: null,
+    };
+
+    addPoolScannerLog(
+        `[CONTROL] Starting Canonical Persistence for token: ${tokenCa}`
+    );
+
+    const args = [
+        "--experimental-strip-types",
+        "scripts/pipeline/persist-pool-scanner.ts",
+        "--token",
+        tokenCa,
+    ];
+
+    poolScannerChild = spawn(
+        process.execPath,
+        args,
+        {
+            cwd: ROOT,
+            env: {
+                ...process.env,
+            },
+            detached: process.platform !== "win32",
+            stdio: ["ignore", "pipe", "pipe"],
+        }
+    );
+
+    let stdoutBuffer = "";
+    let stderrBuffer = "";
+
+    function consumeBuffer(buffer, chunk, onLine) {
+        buffer += String(chunk);
+        const lines = buffer.split("\n");
+        const remainder = lines.pop() ?? "";
+        for (const line of lines) {
+            const trimmed = line.trimEnd();
+            if (trimmed) {
+                onLine(trimmed);
+            }
+        }
+        return remainder;
+    }
+
+    poolScannerChild.stdout.on("data", (chunk) => {
+        stdoutBuffer = consumeBuffer(stdoutBuffer, chunk, (line) => {
+            addPoolScannerLog(line);
+            parsePoolScannerLine(line);
+        });
+    });
+
+    poolScannerChild.stderr.on("data", (chunk) => {
+        stderrBuffer = consumeBuffer(stderrBuffer, chunk, (line) => {
+            addPoolScannerLog(line);
+            parsePoolScannerLine(line);
+        });
+    });
+
+    poolScannerChild.on("error", (error) => {
+        const wasUserStopped =
+            poolScannerUserStopped || poolScannerState.status === "stopped";
+        poolScannerChild = null;
+
+        if (wasUserStopped) {
+            poolScannerState.status = "stopped";
+            poolScannerState.stage = "stopped";
+            poolScannerState.error = null;
+            return;
+        }
+
+        poolScannerState.status = "error";
+        poolScannerState.stage = "persistence_error";
+        poolScannerState.error =
+            error instanceof Error ? error.message : String(error);
+        poolScannerState.finishedAt = new Date().toISOString();
+        addPoolScannerLog(
+            `[CONTROL] Canonical Persistence process error: ${poolScannerState.error}`
+        );
+    });
+
+    poolScannerChild.on("exit", (code, signal) => {
+        if (stdoutBuffer.trim()) {
+            const trimmed = stdoutBuffer.trimEnd();
+            addPoolScannerLog(trimmed);
+            parsePoolScannerLine(trimmed);
+            stdoutBuffer = "";
+        }
+        if (stderrBuffer.trim()) {
+            const trimmed = stderrBuffer.trimEnd();
+            addPoolScannerLog(trimmed);
+            parsePoolScannerLine(trimmed);
+            stderrBuffer = "";
+        }
+
+        const wasUserStopped =
+            poolScannerUserStopped || poolScannerState.status === "stopped";
+        poolScannerChild = null;
+
+        if (wasUserStopped) {
+            poolScannerState.status = "stopped";
+            poolScannerState.stage = "stopped";
+            poolScannerState.error = null;
+            if (!poolScannerState.finishedAt) {
+                poolScannerState.finishedAt = new Date().toISOString();
+            }
+            addPoolScannerLog("[CONTROL] Canonical Persistence stopped.");
+            return;
+        }
+
+        poolScannerState.finishedAt = new Date().toISOString();
+        poolScannerState.exitCode = code;
+
+        if (code === 0) {
+            poolScannerState.status = "completed";
+            poolScannerState.stage = "persisted";
+            poolScannerState.error = null;
+            scannedPoolsCache = null;
+            scannedPoolsMtimeMs = null;
+            poolMembershipCache = null;
+            poolMembershipMtimeMs = null;
+            poolTradesCache = null;
+            poolTradesMtimeMs = null;
+            addPoolScannerLog(
+                "[CONTROL] Canonical Persistence finished successfully. Scanned pools published to Pool Insight."
+            );
+        } else {
+            poolScannerState.status = "error";
+            poolScannerState.stage = "persistence_error";
+            poolScannerState.error =
+                poolScannerState.error ??
+                `Canonical Persistence failed with exit code ${code}${signal ? ` (signal ${signal})` : ""}`;
             addPoolScannerLog(
                 `[CONTROL] ${poolScannerState.error}`
             );
@@ -4972,6 +5345,102 @@ const server = http.createServer(async (request, response) => {
 
         try {
             startPoolTradeHistory(tokenCa, workers, wallet, limit);
+            json(
+                request,
+                response,
+                200,
+                poolScannerPublicState(),
+            );
+        } catch (error) {
+            json(
+                request,
+                response,
+                500,
+                {
+                    error:
+                        error instanceof Error
+                            ? error.message
+                            : String(error),
+                },
+            );
+        }
+
+        return;
+    }
+
+    // ------------------------------------------------------
+    // POST /api/pool-scanner/persist
+    // ------------------------------------------------------
+
+    if (
+        request.method === "POST" &&
+        url.pathname === "/api/pool-scanner/persist"
+    ) {
+        if (dataPipelineBusy()) {
+            json(
+                request,
+                response,
+                409,
+                {
+                    error:
+                        "Another update process is already running",
+                    poolScanner:
+                        poolScannerPublicState(),
+                    fabriq:
+                        publicState(),
+                    lpagent:
+                        lpAgentPublicState(),
+                },
+            );
+            return;
+        }
+
+        let body = {};
+        try {
+            body = await readJson(request);
+        } catch {
+            json(
+                request,
+                response,
+                400,
+                {
+                    error: "Invalid JSON body",
+                },
+            );
+            return;
+        }
+
+        const rawToken = body?.tokenCa;
+        if (typeof rawToken !== "string" || !rawToken.trim()) {
+            json(
+                request,
+                response,
+                400,
+                {
+                    error: "tokenCa must be a non-empty string",
+                },
+            );
+            return;
+        }
+
+        const tokenCa = rawToken.trim();
+
+        try {
+            validateTradeHistoryArtifacts(tokenCa);
+        } catch (valErr) {
+            json(
+                request,
+                response,
+                400,
+                {
+                    error: valErr instanceof Error ? valErr.message : String(valErr),
+                },
+            );
+            return;
+        }
+
+        try {
+            startCanonicalPersistence(tokenCa, false);
             json(
                 request,
                 response,

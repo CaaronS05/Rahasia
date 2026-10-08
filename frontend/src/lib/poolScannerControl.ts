@@ -16,12 +16,14 @@ export type PoolScannerStage =
   | "fabriq_completed"
   | "trade_history"
   | "trade_history_completed"
+  | "persisting"
+  | "persisted"
+  | "persistence_error"
   | "master_upsert"
   | "publish"
   | "completed"
   | "error"
   | "stopped";
-
 export interface CurrentPoolInfo {
   pair: string;
   binStep: number | null;
@@ -45,6 +47,7 @@ export interface PoolScannerState {
   stage1Complete?: boolean;
   stage2Complete?: boolean;
   pipelineComplete?: boolean;
+  isPersisted?: boolean;
   selectedPools?: string[];
   selectedPoolCount?: number;
   completedPoolCount?: number;
@@ -244,6 +247,26 @@ export async function buildPoolTradeHistory(
   if (!response.ok) {
     throw new Error(
       payload?.error || `Build Pool Trade History failed with status ${response.status}`
+    );
+  }
+  return payload;
+}
+
+export async function persistPoolScanner(tokenCa: string): Promise<PoolScannerState> {
+  const response = await fetch(`${POOL_SCANNER_API_BASE}/api/pool-scanner/persist`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      tokenCa: tokenCa.trim(),
+    }),
+  });
+
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(
+      payload?.error || `Canonical Persistence failed with status ${response.status}`
     );
   }
   return payload;

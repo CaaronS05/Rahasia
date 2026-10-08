@@ -23,6 +23,7 @@ import {
   discoverTokenPools,
   enrichSelectedWallets,
   getPoolScannerStatus,
+  persistPoolScanner,
   scanSelectedPools,
   startPoolScanner,
   stopPoolScanner,
@@ -54,14 +55,17 @@ interface StageItem {
 const STAGE_LABELS: Record<string, string> = {
   idle: "Idle",
   discovery: "01 — Discover Pools",
-  extract: "Extract Selected Pools",
+  extract: "02 — Extract Selected Pools",
   extract_completed: "Extract Completed",
-  fabriq: "02 — Enrich Wallets (Fabriq)",
+  fabriq: "03 — Enrich Wallets (Fabriq)",
   fabriq_completed: "Fabriq Enrichment Completed",
-  trade_history: "Pool Trade History",
+  trade_history: "04 — Pool Trade History",
   trade_history_completed: "Trade History Completed",
-  master_upsert: "03 — Master Upsert",
-  publish: "04 — Publish Dataset",
+  persisting: "05 — Canonical Persistence",
+  persisted: "Canonical Persistence Completed",
+  persistence_error: "Canonical Persistence Failed",
+  master_upsert: "Master Upsert",
+  publish: "Publish Dataset",
   completed: "Completed",
   stopped: "Stopped",
   error: "Error",
@@ -86,137 +90,132 @@ function computePipelineProgress(
   stage: PoolScannerStage | undefined,
   status: PoolScannerStatus | undefined,
   logs: string[],
-  lastActiveStepRef: React.MutableRefObject<number>
+  lastActiveStepRef: React.MutableRefObject<number>,
+  isPersisted?: boolean
 ): { stages: StageItem[]; progressPercent: number } {
+  const STAGES_DEF: Array<{ num: string; name: string; description: string }> = [
+    {
+      num: "01",
+      name: "Discover Pools",
+      description: "Meteora Data API · TOKEN/SOL",
+    },
+    {
+      num: "02",
+      name: "Extract LP Wallets",
+      description: "Selected pools · Top LPers",
+    },
+    {
+      num: "03",
+      name: "Enrich Wallets",
+      description: "Top LPers · Fabriq analytics",
+    },
+    {
+      num: "04",
+      name: "Pool Trade History",
+      description: "Full pool closed positions",
+    },
+    {
+      num: "05",
+      name: "Canonical Persistence",
+      description: "Publish to Pool Insight",
+    },
+  ];
+
   if (!status || status === "idle") {
     return {
       progressPercent: 0,
-      stages: [
-        {
-          num: "01",
-          name: "Discover Pools",
-          description: "Meteora Data API · TOKEN/SOL",
-          status: "pending",
-        },
-        {
-          num: "02",
-          name: "Enrich Wallets",
-          description: "Top LPers · Fabriq analytics",
-          status: "pending",
-        },
-        {
-          num: "03",
-          name: "Master Upsert",
-          description: "Merge into master dataset",
-          status: "pending",
-        },
-        {
-          num: "04",
-          name: "Publish Dataset",
-          description: "Export frontend dataset",
-          status: "pending",
-        },
-      ],
+      stages: STAGES_DEF.map((s) => ({ ...s, status: "pending" as StepStatus })),
     };
   }
 
+  const isFullyPersisted = stage === "persisted" || isPersisted === true;
+
   let activeStep = 1;
-  if (stage === "discovery" || stage === "extract" || stage === "extract_completed") activeStep = 1;
-  else if (stage === "fabriq" || stage === "fabriq_completed") activeStep = 2;
-  else if (stage === "master_upsert") activeStep = 3;
-  else if (stage === "publish") activeStep = 4;
-  else if (stage === "completed" || status === "completed") {
-    activeStep = 5;
+  if (stage === "discovery") activeStep = 1;
+  else if (stage === "extract" || stage === "extract_completed") activeStep = 2;
+  else if (stage === "fabriq" || stage === "fabriq_completed") activeStep = 3;
+  else if (stage === "trade_history" || stage === "trade_history_completed") activeStep = 4;
+  else if (stage === "persisting" || stage === "persistence_error") activeStep = 5;
+  else if (isFullyPersisted) activeStep = 6;
+  else if (status === "completed" || stage === "completed") {
+    activeStep = isFullyPersisted ? 6 : 5;
   } else {
     activeStep = lastActiveStepRef.current || 1;
-    for (let i = logs.length - 1; i >= 0; i--) {
-      const line = logs[i];
-      if (line.includes("[STAGE 4/4]")) {
-        activeStep = 4;
-        break;
-      }
-      if (line.includes("[STAGE 3/4]")) {
-        activeStep = 3;
-        break;
-      }
-      if (line.includes("[STAGE 2/4]") || line.includes("[RESUME]")) {
-        activeStep = 2;
-        break;
-      }
-      if (line.includes("[STAGE 1/4]")) {
-        activeStep = 1;
-        break;
-      }
-    }
   }
 
-  if (activeStep >= 1 && activeStep <= 4) {
+  if (activeStep >= 1 && activeStep <= 5) {
     lastActiveStepRef.current = activeStep;
   }
 
-  const stepPercentMap: Record<number, number> = {
-    1: 25,
-    2: 50,
-    3: 75,
-    4: 90,
-    5: 100,
-  };
+  let progressPercent = 0;
+  if (isFullyPersisted) {
+    progressPercent = 100;
+  } else if (stage === "persisting") {
+    progressPercent = 90;
+  } else if (stage === "trade_history_completed") {
+    progressPercent = 80;
+  } else if (stage === "trade_history") {
+    progressPercent = 70;
+  } else if (stage === "fabriq_completed") {
+    progressPercent = 60;
+  } else if (stage === "fabriq") {
+    progressPercent = 50;
+  } else if (stage === "extract_completed") {
+    progressPercent = 40;
+  } else if (stage === "extract") {
+    progressPercent = 30;
+  } else if (stage === "discovery") {
+    progressPercent = 15;
+  } else if (status === "completed") {
+    progressPercent = isFullyPersisted ? 100 : 80;
+  }
 
-  const progressPercent = stepPercentMap[activeStep] ?? 0;
-  const isCompleted = status === "completed" || stage === "completed";
   const isStopped = status === "stopped" || stage === "stopped";
-  const isError = status === "error" || stage === "error";
+  const isError = status === "error" || stage === "error" || stage === "persistence_error";
 
   function getStepStatus(stepNum: number): StepStatus {
-    if (isCompleted) {
+    if (isFullyPersisted) {
       return "completed";
     }
 
-    if (isStopped) {
-      if (stepNum < activeStep) return "completed";
-      if (stepNum === activeStep) return "stopped";
+    if (stepNum < activeStep) {
+      return "completed";
+    }
+
+    if (stepNum === activeStep) {
+      if (isStopped) return "stopped";
+      if (isError) return "error";
+
+      if (
+        stage === "extract_completed" ||
+        stage === "fabriq_completed" ||
+        stage === "trade_history_completed"
+      ) {
+        return "completed";
+      }
+
+      if (
+        stage === "discovery" ||
+        stage === "extract" ||
+        stage === "fabriq" ||
+        stage === "trade_history" ||
+        stage === "persisting"
+      ) {
+        return status === "running" ? "running" : "pending";
+      }
+
       return "pending";
     }
 
-    if (isError) {
-      if (stepNum < activeStep) return "completed";
-      if (stepNum === activeStep) return "error";
-      return "pending";
-    }
-
-    if (stepNum < activeStep) return "completed";
-    if (stepNum === activeStep) return "running";
     return "pending";
   }
 
   return {
-    progressPercent: isCompleted ? 100 : progressPercent,
-    stages: [
-      {
-        num: "01",
-        name: "Discover Pools",
-        description: "Meteora Data API · TOKEN/SOL",
-        status: getStepStatus(1),
-      },
-      {
-        num: "02",
-        name: "Enrich Wallets",
-        description: "Top LPers · Fabriq analytics",
-        status: getStepStatus(2),
-      },
-      {
-        num: "03",
-        name: "Master Upsert",
-        description: "Merge into master dataset",
-        status: getStepStatus(3),
-      },
-      {
-        num: "04",
-        name: "Publish Dataset",
-        description: "Export frontend dataset",
-        status: getStepStatus(4),
-      },
-    ],
+    progressPercent,
+    stages: STAGES_DEF.map((s, idx) => ({
+      ...s,
+      status: getStepStatus(idx + 1),
+    })),
   };
 }
 
@@ -500,6 +499,22 @@ export function PoolScannerPage({ onDatasetRefreshed, embedded = false, startDis
     }
   }
 
+  async function handlePersistPoolScanner() {
+    const targetToken = cleanedToken || state?.tokenCa;
+    if (!targetToken || isRunning || submitting || startDisabled) return;
+    setSubmitting(true);
+    setApiError(null);
+
+    try {
+      const s = await persistPoolScanner(targetToken);
+      setState(s);
+    } catch (err) {
+      setApiError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
     if (!tokenLooksValid || !workersValid || isRunning || submitting || startDisabled) {
@@ -563,9 +578,10 @@ export function PoolScannerPage({ onDatasetRefreshed, embedded = false, startDis
         state?.stage,
         state?.status,
         state?.logs || [],
-        lastActiveStepRef
+        lastActiveStepRef,
+        state?.isPersisted
       ),
-    [state?.stage, state?.status, state?.logs]
+    [state?.stage, state?.status, state?.logs, state?.isPersisted]
   );
 
   let heroBadgeText = "Scanner ready";
@@ -573,9 +589,15 @@ export function PoolScannerPage({ onDatasetRefreshed, embedded = false, startDis
   if (isRunning) {
     heroBadgeText = "Scanner running";
     heroBadgeClass = "pool-scanner-hero-badge running";
-  } else if (isCompleted) {
-    heroBadgeText = "Scan completed";
+  } else if (state?.stage === "persisted" || (state?.status === "completed" && state?.isPersisted)) {
+    heroBadgeText = "Scan completed & persisted";
     heroBadgeClass = "pool-scanner-hero-badge completed";
+  } else if (state?.stage === "trade_history_completed" || (state?.status === "completed" && !state?.isPersisted)) {
+    heroBadgeText = "Trade history completed";
+    heroBadgeClass = "pool-scanner-hero-badge";
+  } else if (state?.stage === "persistence_error") {
+    heroBadgeText = "Persistence failed";
+    heroBadgeClass = "pool-scanner-hero-badge error";
   } else if (isStopped) {
     heroBadgeText = "Scan stopped";
     heroBadgeClass = "pool-scanner-hero-badge stopped";
@@ -587,16 +609,17 @@ export function PoolScannerPage({ onDatasetRefreshed, embedded = false, startDis
   let statusUi: "Ready" | "Running" | "Completed" | "Stopped" | "Error" = "Ready";
   if (isRunning) {
     statusUi = "Running";
-  } else if (state?.status === "completed") {
+  } else if (state?.stage === "persisted" || (state?.status === "completed" && state?.isPersisted)) {
     statusUi = "Completed";
   } else if (state?.status === "stopped") {
     statusUi = "Stopped";
-  } else if (state?.status === "error" || Boolean(apiError)) {
+  } else if (state?.status === "error" || state?.stage === "persistence_error" || Boolean(apiError)) {
     statusUi = "Error";
+  } else if (state?.stage === "trade_history_completed" || state?.status === "completed") {
+    statusUi = "Completed";
   } else {
     statusUi = "Ready";
   }
-
   const activeTokenCa = state?.tokenCa || (isRunning ? cleanedToken : null);
 
   return (
@@ -1238,6 +1261,85 @@ export function PoolScannerPage({ onDatasetRefreshed, embedded = false, startDis
           </div>
         ) : null}
 
+        {/* Step 3D-A: Canonical Persistence Card */}
+        {(state?.stage === "persisting" ||
+          state?.stage === "persisted" ||
+          state?.isPersisted ||
+          state?.stage === "persistence_error" ||
+          state?.stage === "trade_history_completed" ||
+          (Boolean(state?.tradeHistoryTotalTrades) && !isRunning)) ? (
+          <div className="pool-scanner-extract-card persist-card">
+            <div className="extract-card-header">
+              <div className="extract-card-title">
+                {state?.stage === "persisting" && isRunning ? (
+                  <>
+                    <Loader2 size={16} className="spin text-green" />
+                    <span>Canonical Persistence</span>
+                  </>
+                ) : (state?.stage === "persisted" || state?.isPersisted) ? (
+                  <>
+                    <CheckCircle2 size={16} className="text-green" />
+                    <span>Canonical Persistence Completed</span>
+                  </>
+                ) : state?.stage === "persistence_error" ? (
+                  <>
+                    <XCircle size={16} className="text-red" />
+                    <span>Canonical Persistence Failed</span>
+                  </>
+                ) : (
+                  <>
+                    <Database size={16} className="text-purple" />
+                    <span>Step 3D-A · Canonical Persistence</span>
+                  </>
+                )}
+              </div>
+              <div className="extract-card-stats">
+                {state?.stage === "persisting" ? (
+                  <span className="extract-stat-item">
+                    Publishing {state?.selectedPoolCount || 1} pool(s) to Pool Insight...
+                  </span>
+                ) : (state?.stage === "persisted" || state?.isPersisted) ? (
+                  <span className="extract-stat-item text-green">
+                    ✓ Available in Pool Insight → Pool Explorer
+                  </span>
+                ) : state?.stage === "persistence_error" ? (
+                  <span className="extract-stat-item text-red">
+                    Persistence error — retry required
+                  </span>
+                ) : (
+                  <span className="extract-stat-item">
+                    Ready to publish {state?.selectedPoolCount || 1} pool(s) ({state?.tradeHistoryTotalTrades || 0} trades)
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {state?.error && (state?.stage === "persistence_error" || state?.stage === "error") ? (
+              <div className="persist-error-banner">
+                <AlertCircle size={14} className="text-red" />
+                <span>{state.error}</span>
+              </div>
+            ) : null}
+
+            {(!state?.isPersisted && state?.stage !== "persisted" && !isRunning) ? (
+              <div className="persist-actions-row">
+                <p className="persist-action-desc">
+                  Persist extracted pools, wallet memberships, and trade history into canonical master files so they appear in Pool Insight.
+                </p>
+                <button
+                  type="button"
+                  className="pool-scanner-start pool-discovery-scan-btn persist-btn"
+                  onClick={handlePersistPoolScanner}
+                  disabled={submitting || startDisabled}
+                >
+                  <Database size={15} />
+                  {state?.stage === "persistence_error" ? "Retry Canonical Persistence" : "Persist to Pool Insight"}
+                </button>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
         {/* Primary Stage Progress Display */}
         <div className="pool-scanner-progress-card">
           <div className="pool-scanner-progress-header">
@@ -1248,15 +1350,19 @@ export function PoolScannerPage({ onDatasetRefreshed, embedded = false, startDis
             <div className="progress-header-stage">
               Current stage:{" "}
               <strong>
-                {isCompleted
+                {state?.stage === "persisted" || (state?.status === "completed" && state?.isPersisted)
                   ? "Completed"
+                  : state?.stage === "trade_history_completed"
+                  ? "Trade History Completed"
+                  : state?.stage === "persistence_error"
+                  ? "Persistence Error"
                   : isStopped
                   ? "Stopped"
                   : isError
                   ? "Error"
                   : isRunning
                   ? STAGE_LABELS[state?.stage || ""] || state?.stage || "Running"
-                  : "Ready"}
+                  : STAGE_LABELS[state?.stage || ""] || "Ready"}
               </strong>
             </div>
           </div>
