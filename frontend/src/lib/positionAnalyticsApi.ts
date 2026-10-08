@@ -547,5 +547,5 @@ export async function getPositionAssessment(
   if (res.status === 404) return null;
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || `Failed to fetch assessment (${res.status})`);
-  return data as MonitoringAssessmentResult;
+  return (data.assessment || data) as MonitoringAssessmentResult;
 }

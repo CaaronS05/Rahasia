@@ -104,6 +104,7 @@ function shortAddress(addr: string | null | undefined): string {
 }
 
 export function PositionAnalytics({ walletAddress }: Props) {
+  const [loading, setLoading] = useState(true);
   const [period, setPeriod] = useState<AnalyticsPeriod>("30D");
   const [status, setStatus] = useState<PositionAnalyticsStatus | null>(null);
   const [metrics, setMetrics] = useState<PositionMetricsResult | null>(null);
@@ -622,7 +623,7 @@ export function PositionAnalytics({ walletAddress }: Props) {
                         {assessment.verdict === "WATCH_WITH_CAUTION" && <AlertTriangle size={14} />}
                         {assessment.verdict === "NOT_RECOMMENDED" && <AlertTriangle size={14} />}
                         {assessment.verdict === "INSUFFICIENT_DATA" && <Info size={14} />}
-                        {assessment.verdict.replace(/_/g, " ")}
+                        {assessment.verdict ? assessment.verdict.replace(/_/g, " ") : "—"}
                       </span>
                     </div>
                     <div className="pa-card-sub" style={{ marginTop: "8px" }}>
@@ -1668,8 +1669,8 @@ export function PositionAnalytics({ walletAddress }: Props) {
                               </td>
                               <td>{formatDuration(pos.holdDurationSeconds)}</td>
                               <td>
-                                <span className={`pa-badge ${pos.winLoss.toLowerCase()}`}>
-                                  {pos.winLoss}
+                                <span className={`pa-badge ${(pos.winLoss || "UNKNOWN").toLowerCase()}`}>
+                                  {pos.winLoss || "—"}
                                 </span>
                               </td>
                             </tr>
