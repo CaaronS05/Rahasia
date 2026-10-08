@@ -8,6 +8,7 @@ import {
   RotateCw,
   Search,
   ShieldCheck,
+  Square,
   Star,
   Terminal,
   TrendingUp,
@@ -17,6 +18,7 @@ import type { Wallet } from "../types";
 import {
   getSingleWalletStatus,
   startSingleWalletAnalysis,
+  stopSingleWalletAnalysis,
   getSingleWalletResult,
   type SingleWalletIntelligenceStatus,
   type SingleWalletIntelligenceResult,
@@ -49,6 +51,9 @@ function formatHumanErrorSummary(err: string): string {
   }
   if (err.includes("INELIGIBLE_WALLET")) {
     return "Wallet has no qualifying DLMM positions for analysis.";
+  }
+  if (err.includes("DATA_NOT_FOUND") || err.includes("404 Not Found") || err.includes("HTTP 404")) {
+    return "Fabriq historical data unavailable or unready for this wallet (HTTP 404).";
   }
   const firstLine = err.split("\n")[0].trim();
   return firstLine.length > 120 ? `${firstLine.slice(0, 117)}...` : firstLine;
@@ -199,6 +204,8 @@ export function PortfolioPage({
   const [singleStatus, setSingleStatus] = useState<SingleWalletIntelligenceStatus | null>(null);
   const [singleResult, setSingleResult] = useState<SingleWalletIntelligenceResult | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isStopping, setIsStopping] = useState(false);
+  const [actionPending, setActionPending] = useState(false);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [analysisElapsedSeconds, setAnalysisElapsedSeconds] = useState(0);
 
@@ -225,30 +232,45 @@ export function PortfolioPage({
     setSingleStatus(null);
     setSingleResult(null);
     setIsAnalyzing(false);
+    setIsStopping(false);
+    setActionPending(false);
     setAnalysisError(null);
-
     const owner = currentWallet?.owner;
     if (!owner) return;
 
     async function checkStatusAndResult() {
       try {
         const status = await getSingleWalletStatus(owner);
-        if (!isMounted) return;
+        if (!isMounted || currentWallet?.owner !== owner) return;
         setSingleStatus(status);
 
         if (status.status === "running") {
           setIsAnalyzing(true);
+          setIsStopping(false);
+          pollTimer = setTimeout(checkStatusAndResult, 1500);
+          return;
+        }
+
+        if (status.status === "stopping") {
+          setIsAnalyzing(false);
+          setIsStopping(true);
           pollTimer = setTimeout(checkStatusAndResult, 1500);
           return;
         }
 
         setIsAnalyzing(false);
+        setIsStopping(false);
+
+        if (status.status === "error" && status.error) {
+          setAnalysisError(status.error);
+        }
 
         if (status.hasResult) {
           const result = await getSingleWalletResult(owner);
-          if (!isMounted) return;
+          if (!isMounted || currentWallet?.owner !== owner) return;
           setSingleResult(result);
         }
+        if (!isMounted) return;
       } catch {
         if (!isMounted) return;
       }
@@ -264,36 +286,89 @@ export function PortfolioPage({
 
   const handleRunAnalysis = async () => {
     const owner = currentWallet?.owner;
-    if (!owner || isAnalyzing) return;
+    if (!owner || isAnalyzing || isStopping || actionPending) return;
 
+    setActionPending(true);
     setIsAnalyzing(true);
+    setIsStopping(false);
     setAnalysisError(null);
 
     try {
       await startSingleWalletAnalysis(owner, true);
+      if (currentWallet?.owner !== owner) return;
       const poll = async () => {
+        if (currentWallet?.owner !== owner) return;
         try {
           const st = await getSingleWalletStatus(owner);
+          if (currentWallet?.owner !== owner) return;
           setSingleStatus(st);
           if (st.status === "completed") {
             const res = await getSingleWalletResult(owner);
+            if (currentWallet?.owner !== owner) return;
             setSingleResult(res);
             setIsAnalyzing(false);
+            setIsStopping(false);
           } else if (st.status === "error") {
             setAnalysisError(st.error || "Analysis failed");
             setIsAnalyzing(false);
+            setIsStopping(false);
+          } else if (st.status === "stopped") {
+            setIsAnalyzing(false);
+            setIsStopping(false);
+          } else if (st.status === "stopping") {
+            setIsAnalyzing(false);
+            setIsStopping(true);
+            setTimeout(poll, 1500);
           } else {
             setTimeout(poll, 1500);
           }
         } catch (err: unknown) {
+          if (currentWallet?.owner !== owner) return;
           setAnalysisError(err instanceof Error ? err.message : String(err));
           setIsAnalyzing(false);
+          setIsStopping(false);
         }
       };
       setTimeout(poll, 1000);
     } catch (err: unknown) {
-      setAnalysisError(err instanceof Error ? err.message : String(err));
-      setIsAnalyzing(false);
+      if (currentWallet?.owner === owner) {
+        setAnalysisError(err instanceof Error ? err.message : String(err));
+        setIsAnalyzing(false);
+        setIsStopping(false);
+      }
+    } finally {
+      setActionPending(false);
+    }
+  };
+
+  const handleStopAnalysis = async () => {
+    const owner = currentWallet?.owner;
+    if (!owner || isStopping || actionPending) return;
+
+    setActionPending(true);
+    setIsStopping(true);
+    setIsAnalyzing(false);
+
+    try {
+      const st = await stopSingleWalletAnalysis(owner);
+      if (currentWallet?.owner === owner) {
+        setSingleStatus(st);
+        if (st.status === "stopped") {
+          setIsStopping(false);
+        }
+      }
+    } catch (err: unknown) {
+      if (currentWallet?.owner === owner) {
+        const st = await getSingleWalletStatus(owner).catch(() => null);
+        if (st && currentWallet?.owner === owner) {
+          setSingleStatus(st);
+          if (st.status !== "stopping") {
+            setIsStopping(false);
+          }
+        }
+      }
+    } finally {
+      setActionPending(false);
     }
   };
 
@@ -605,32 +680,72 @@ export function PortfolioPage({
                     <span>ⓘ</span>
                   </div>
 
-                  <button
-                    className="single-intel-btn"
-                    onClick={handleRunAnalysis}
-                    disabled={isAnalyzing}
-                    title={isAnalyzing ? "Analysis in progress" : (activeIntelligence ? "Re-run Wallet Intelligence for this wallet" : "Run Wallet Intelligence for this wallet")}
-                  >
-                    {isAnalyzing ? (
-                      <>
+                  {isStopping ? (
+                    <button
+                      className="single-intel-btn"
+                      disabled
+                      title="Stopping analysis..."
+                    >
+                      <Loader2 size={12} className="spin" />
+                      <span>Stopping...</span>
+                    </button>
+                  ) : isAnalyzing ? (
+                    <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                      <button
+                        className="single-intel-btn"
+                        disabled
+                        style={{ cursor: "default" }}
+                        title="Analysis in progress"
+                      >
                         <Loader2 size={12} className="spin" />
                         <span>Analyzing Wallet...</span>
-                      </>
-                    ) : activeIntelligence ? (
-                      <>
-                        <RotateCw size={12} />
-                        <span>Re-analyze Wallet</span>
-                      </>
-                    ) : (
-                      <>
-                        <Play size={12} />
-                        <span>Run Wallet Intelligence</span>
-                      </>
-                    )}
-                  </button>
+                      </button>
+                      <button
+                        className="single-intel-btn danger"
+                        onClick={handleStopAnalysis}
+                        disabled={actionPending}
+                        title="Stop wallet intelligence analysis"
+                      >
+                        <Square size={11} fill="currentColor" />
+                        <span>Stop Analysis</span>
+                      </button>
+                    </div>
+                  ) : activeIntelligence ? (
+                    <button
+                      className="single-intel-btn"
+                      onClick={handleRunAnalysis}
+                      disabled={actionPending}
+                      title="Re-run Wallet Intelligence for this wallet"
+                    >
+                      <RotateCw size={12} />
+                      <span>Re-analyze Wallet</span>
+                    </button>
+                  ) : (
+                    <button
+                      className="single-intel-btn"
+                      onClick={handleRunAnalysis}
+                      disabled={actionPending}
+                      title="Run Wallet Intelligence for this wallet"
+                    >
+                      <Play size={12} />
+                      <span>Run Wallet Intelligence</span>
+                    </button>
+                  )}
                 </div>
 
-                {isAnalyzing ? (
+                {isStopping ? (
+                  <div className="single-intel-status-box warning" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "10px" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                      <Loader2 size={13} className="spin" />
+                      <div>
+                        <div style={{ fontWeight: 600, fontSize: "11.5px" }}>STOPPING ANALYSIS</div>
+                        <div style={{ fontSize: "11px", color: "rgba(255,255,255,0.7)", marginTop: "2px" }}>
+                          Stopping analysis gracefully and releasing process locks...
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ) : isAnalyzing ? (
                   <div className="single-intel-status-box info" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "10px" }}>
                     <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                       <Loader2 size={13} className="spin" />
@@ -644,21 +759,64 @@ export function PortfolioPage({
                         </div>
                       </div>
                     </div>
-                    {singleStatus?.runId ? (
-                      <a
-                        href={`/activity-logs?wallet=${encodeURIComponent(currentWallet?.owner || "")}&runId=${encodeURIComponent(singleStatus.runId)}`}
-                        className="single-intel-btn"
-                        style={{ textDecoration: "none", fontSize: "11px", padding: "4px 8px", flexShrink: 0 }}
-                        target="_blank"
-                        rel="noreferrer"
+                    <div style={{ display: "flex", alignItems: "center", gap: "6px", flexShrink: 0 }}>
+                      <button
+                        className="single-intel-btn danger"
+                        onClick={handleStopAnalysis}
+                        disabled={actionPending}
+                        style={{ fontSize: "11px", padding: "4px 8px" }}
+                        title="Stop wallet intelligence analysis"
                       >
-                        <Terminal size={11} /> View Logs
-                      </a>
-                    ) : null}
+                        <Square size={11} fill="currentColor" /> Stop Analysis
+                      </button>
+                      {singleStatus?.runId ? (
+                        <a
+                          href={`/activity-logs?wallet=${encodeURIComponent(currentWallet?.owner || "")}&runId=${encodeURIComponent(singleStatus.runId)}`}
+                          className="single-intel-btn"
+                          style={{ textDecoration: "none", fontSize: "11px", padding: "4px 8px" }}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          <Terminal size={11} /> View Logs
+                        </a>
+                      ) : null}
+                    </div>
                   </div>
-                ) : null}
-
-                {analysisError ? (
+                ) : singleStatus?.status === "stopped" ? (
+                  <div className="single-intel-status-box neutral" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "10px" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                      <Square size={13} />
+                      <div>
+                        <div style={{ fontWeight: 600, fontSize: "11.5px" }}>Analysis stopped by user.</div>
+                        <div style={{ fontSize: "11px", color: "rgba(255,255,255,0.7)", marginTop: "2px" }}>
+                          Process terminated. Previous results and artifacts preserved. Click "Run Wallet Intelligence" to re-evaluate.
+                        </div>
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: "6px", flexShrink: 0 }}>
+                      <button
+                        className="single-intel-btn"
+                        onClick={handleRunAnalysis}
+                        disabled={actionPending}
+                        style={{ fontSize: "11px", padding: "4px 8px" }}
+                        title="Run Wallet Intelligence for this wallet"
+                      >
+                        <Play size={11} /> Run Wallet Intelligence
+                      </button>
+                      {singleStatus?.runId ? (
+                        <a
+                          href={`/activity-logs?wallet=${encodeURIComponent(currentWallet?.owner || "")}&runId=${encodeURIComponent(singleStatus.runId)}`}
+                          className="single-intel-btn"
+                          style={{ textDecoration: "none", fontSize: "11px", padding: "4px 8px" }}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          <Terminal size={11} /> View Logs
+                        </a>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : analysisError ? (
                   <div className="single-intel-status-box error" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "10px" }}>
                     <div style={{ display: "flex", alignItems: "flex-start", gap: "8px", flex: 1 }}>
                       <AlertCircle size={14} style={{ flexShrink: 0, marginTop: "2px" }} />
@@ -671,15 +829,26 @@ export function PortfolioPage({
                         </div>
                       </div>
                     </div>
-                    <a
-                      href={`/activity-logs?wallet=${encodeURIComponent(currentWallet?.owner || "")}${singleStatus?.runId ? `&runId=${encodeURIComponent(singleStatus.runId)}` : ""}`}
-                      className="single-intel-btn"
-                      style={{ textDecoration: "none", fontSize: "11px", padding: "4px 8px", flexShrink: 0 }}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      <Terminal size={11} /> View Logs
-                    </a>
+                    <div style={{ display: "flex", alignItems: "center", gap: "6px", flexShrink: 0 }}>
+                      <button
+                        className="single-intel-btn"
+                        onClick={handleRunAnalysis}
+                        disabled={actionPending}
+                        style={{ fontSize: "11px", padding: "4px 8px" }}
+                        title="Retry Wallet Intelligence for this wallet"
+                      >
+                        <RotateCw size={11} /> Retry Analysis
+                      </button>
+                      <a
+                        href={`/activity-logs?wallet=${encodeURIComponent(currentWallet?.owner || "")}${singleStatus?.runId ? `&runId=${encodeURIComponent(singleStatus.runId)}` : ""}`}
+                        className="single-intel-btn"
+                        style={{ textDecoration: "none", fontSize: "11px", padding: "4px 8px" }}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        <Terminal size={11} /> View Logs
+                      </a>
+                    </div>
                   </div>
                 ) : null}
 

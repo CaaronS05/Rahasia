@@ -11,6 +11,21 @@ import {
 } from "../discovery/core/fabriq-position-history.ts";
 import { computeDailyRisk, computePositionRisk } from "./build-wallet-risk-metrics.ts";
 
+const MAX_404_RETRIES = Number(process.env.FABRIQ_MAX_404_RETRIES ?? "3");
+const DELAY_404_MS = Number(process.env.FABRIQ_404_DELAY_MS ?? "5000");
+
+let isShuttingDown = false;
+function handleTerminationSignal(signal: string) {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+  console.log(`\n[CONTROL] Process received ${signal}. Terminating single-wallet analysis...`);
+  void closeFabriqConnection().finally(() => {
+    process.exit(143);
+  });
+}
+process.on("SIGTERM", () => handleTerminationSignal("SIGTERM"));
+process.on("SIGINT", () => handleTerminationSignal("SIGINT"));
+
 // ======================================================
 // DOMAIN INTERFACES
 // ======================================================
@@ -355,39 +370,33 @@ async function fetchSingleWalletFabriqData(
 }> {
   const cutoffMs = Date.now() - historyDays * 24 * 60 * 60 * 1000;
 
-  // 1. Fetch DLMM pools
+  // 1. Fetch DLMM pools via GET /history/<WALLET>/pnl-by-pool
   let page = 1;
-  let poolsRetries = 0;
   const allDlmmPoolIds = new Set<string>();
 
   while (true) {
     const params = new URLSearchParams();
     params.set("page", String(page));
-    params.set("pageSize", "100");
-    params.set("sources", "wallet");
+    params.set("limit", "100");
+    params.set("sortBy", "latest_close_ts");
+    params.set("sortOrder", "desc");
+    params.set("pnlCurrency", "USD");
+    params.set("timezone", "Asia/Jakarta");
+    params.append("sources", "wallet");
     params.append("sources", "hawkfi");
+    params.set("pnlScope", "pool");
+    params.set("lastCloseScope", "pool");
+    params.set("durationScope", "pool");
+    params.set("depositsScope", "pool");
+    params.set("withdrawalsScope", "pool");
+    params.set("feesScope", "pool");
 
-    let poolsResJson: unknown;
-    try {
-      poolsResJson = await fabriqFetch(`/history/${wallet}/pools`, params);
-      poolsRetries = 0;
-    } catch (err: unknown) {
-      const msg = String(err instanceof Error ? err.message : err);
-      if (msg.includes("404")) {
-        poolsRetries++;
-        if (poolsRetries > 2) {
-          return {
-            positions: [],
-            daily: [],
-            valid: false,
-            reason: "404_NO_POSITION_DATA",
-          };
-        }
-        await sleep(2000);
-        continue;
-      }
-      throw err;
-    }
+    logStage(4, "FETCH_POOLS", `Fetching pool history page ${page} for ${wallet}...`);
+    const poolsResJson = await fabriqFetch(`/history/${wallet}/pnl-by-pool`, params, {
+      onLog: (m) => logStage(4, "FETCH_POOLS", m),
+      max404Retries: MAX_404_RETRIES,
+      delay404Ms: DELAY_404_MS,
+    });
 
     const dataNode = extractObjectField(poolsResJson, "data") ?? poolsResJson;
     const itemsNode = extractObjectField(dataNode, "items");
@@ -449,18 +458,12 @@ async function fetchSingleWalletFabriqData(
     posParams.set("withdrawalsScope", "pool");
     posParams.set("feesScope", "pool");
 
-    let posResJson: unknown;
-    try {
-      posResJson = await fabriqFetch(`/history/${wallet}/positions-by-pool`, posParams);
-    } catch (err: unknown) {
-      const msg = String(err instanceof Error ? err.message : err);
-      if (msg.includes("404")) {
-        await sleep(4000);
-        posResJson = await fabriqFetch(`/history/${wallet}/positions-by-pool`, posParams).catch(() => ({}));
-      } else {
-        throw err;
-      }
-    }
+    logStage(5, "FETCH_POSITIONS", `Fetching positions batch ${Math.floor(i / poolBatchSize) + 1} (${batch.length} pools)...`);
+    const posResJson = await fabriqFetch(`/history/${wallet}/positions-by-pool`, posParams, {
+      onLog: (m) => logStage(5, "FETCH_POSITIONS", m),
+      max404Retries: MAX_404_RETRIES,
+      delay404Ms: DELAY_404_MS,
+    });
 
     const resData = extractObjectField(posResJson, "data") ?? posResJson;
 
@@ -566,8 +569,17 @@ async function fetchSingleWalletFabriqData(
   const dailyMap = new Map<string, DailyRecordItem>();
   for (const ym of calMonths) {
     try {
-      const calRes: unknown = await fabriqFetch(`/history/${wallet}/calendar?month=${ym}`);
-      const calData = extractObjectField(calRes, "data") ?? calRes;
+      const calParams = new URLSearchParams();
+      calParams.set("month", ym);
+      calParams.set("timezone", "Asia/Jakarta");
+      calParams.append("sources", "wallet");
+      calParams.append("sources", "hawkfi");
+
+      const calRes: unknown = await fabriqFetch(`/portfolio/calendar/${wallet}`, calParams, {
+        onLog: (m) => logStage(6, "FETCH_CALENDAR", m),
+        max404Retries: 1,
+        delay404Ms: 2000,
+      });
 
       if (calData && typeof calData === "object") {
         for (const [dateStr, dayObj] of Object.entries(calData as Record<string, unknown>)) {

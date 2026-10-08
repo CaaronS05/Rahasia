@@ -2975,6 +2975,16 @@ button {
 .single-intel-btn.primary:hover:not(:disabled) {
   background: #b45309;
 }
+.single-intel-btn.danger {
+  background: rgba(239, 68, 68, 0.15);
+  border-color: rgba(239, 68, 68, 0.4);
+  color: #fca5a5;
+}
+.single-intel-btn.danger:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.3);
+  border-color: #ef4444;
+  color: #fff;
+}
 .single-intel-status-box {
   margin: 10px 14px;
   padding: 8px 12px;
@@ -2998,4 +3008,9 @@ button {
   background: rgba(245, 158, 11, 0.1);
   border: 1px solid rgba(245, 158, 11, 0.25);
   color: #fcd34d;
+}
+.single-intel-status-box.neutral {
+  background: rgba(156, 163, 175, 0.1);
+  border: 1px solid rgba(156, 163, 175, 0.25);
+  color: #d1d5db;
 }

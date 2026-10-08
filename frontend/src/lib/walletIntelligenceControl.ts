@@ -33,7 +33,7 @@ export interface WalletIntelligenceState {
 
 export interface SingleWalletIntelligenceStatus {
   wallet: string;
-  status: "idle" | "running" | "completed" | "error" | "reference_required";
+  status: "idle" | "running" | "stopping" | "stopped" | "completed" | "error" | "reference_required";
   stage: string;
   stageDetails?: string | null;
   runId?: string | null;
@@ -129,6 +129,18 @@ export async function startSingleWalletAnalysis(
   if (!response.ok) throw new Error(payload.error || `Failed to start wallet analysis (${response.status})`);
   return payload;
 }
+export async function stopSingleWalletAnalysis(
+  address: string
+): Promise<SingleWalletIntelligenceStatus> {
+  const response = await fetch(`${API_BASE}/api/wallet-intelligence/single/${encodeURIComponent(address)}/stop`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+  });
+  const payload = await response.json();
+  if (!response.ok) throw new Error(payload.error || `Failed to stop wallet analysis (${response.status})`);
+  return payload;
+}
+
 
 export async function getSingleWalletResult(
   address: string

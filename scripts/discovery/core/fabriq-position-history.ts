@@ -92,6 +92,11 @@ let fabriqPage: Page | null = null;
 let token: string | null = null;
 let tokenExpiresAt = 0;
 let tokenRefreshPromise: Promise<string> | null = null;
+export function setFabriqTokenForTesting(testToken: string | null, expiresAtMs = Date.now() + 3600_000): void {
+    token = testToken;
+    tokenExpiresAt = expiresAtMs;
+}
+
 
 function decodeJwtExpiry(tokenStr: string): number {
     try {
@@ -621,11 +626,19 @@ export function loadCanonicalLegacyDlmmPoolAddresses(
     return addresses;
 }
 
+export interface FabriqFetchOptions {
+    onLog?: (msg: string) => void;
+    max404Retries?: number;
+    delay404Ms?: number;
+    startTimeMs?: number;
+}
+
 export async function fabriqFetch<T>(
     endpoint: string,
     params?: URLSearchParams,
-    options?: { onLog?: (msg: string) => void },
-    attempt = 1
+    options?: FabriqFetchOptions,
+    attempt = 1,
+    attempt404 = 0
 ): Promise<T> {
     const queryString = params?.toString() ? `?${params.toString()}` : "";
     const url = `${FABRIQ_API_BASE}${endpoint}${queryString}`;
@@ -682,9 +695,40 @@ export async function fabriqFetch<T>(
         // Data not ready (404)
         // --------------------------------
         if (response.status === 404) {
-            logStage(8, "FABRIQ_API", "[FABRIQ] 404 data not ready; waiting 5s and retrying...", log);
-            await sleep(5000);
-            return fabriqFetch<T>(endpoint, params, options, 1);
+            const max404 = options?.max404Retries;
+            const delay = options?.delay404Ms ?? 5000;
+            const startTime = options?.startTimeMs ?? Date.now();
+            const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(1);
+
+            if (typeof max404 === "number" && attempt404 >= max404) {
+                logStage(
+                    8,
+                    "FABRIQ_API",
+                    `[FABRIQ] 404 Not Found for ${endpoint} after ${attempt404} retries (${elapsedSec}s elapsed). Bounded retry limit reached.`,
+                    log
+                );
+                throw new FabriqCdpError({
+                    code: "DATA_NOT_FOUND",
+                    stageNumber: 8,
+                    stageName: "Fabriq history API request",
+                    message: `HTTP 404 Not Found from Fabriq API for ${endpoint} after ${attempt404} retries (${elapsedSec}s elapsed).`,
+                    retriesAttempted: attempt404,
+                    elapsedMs: Date.now() - startTime,
+                    recommendedAction: "Wallet has no indexed history on Fabriq or endpoint is unavailable.",
+                });
+            }
+
+            const nextAttempt404 = attempt404 + 1;
+            const limitStr = typeof max404 === "number" ? ` (attempt ${nextAttempt404}/${max404}, elapsed ${elapsedSec}s)` : "";
+            logStage(8, "FABRIQ_API", `[FABRIQ] 404 data not ready for ${endpoint}${limitStr}; waiting ${Math.round(delay / 1000)}s and retrying...`, log);
+            await sleep(delay);
+            return fabriqFetch<T>(
+                endpoint,
+                params,
+                { ...options, startTimeMs: startTime },
+                typeof max404 === "number" ? attempt : 1,
+                nextAttempt404
+            );
         }
 
         // --------------------------------

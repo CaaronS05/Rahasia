@@ -4286,11 +4286,12 @@ function getSingleWalletStatus(address) {
     const hasResult = fs.existsSync(getSingleWalletResultPath(norm));
 
     if (isActive) {
+        const isStopping = recorded?.status === "stopping" || Boolean(activeSingleWalletChild?.isStopping);
         return {
             wallet: norm,
-            status: "running",
-            stage: recorded?.stage || "analyzing",
-            stageDetails: recorded?.stageDetails || "Analyzing wallet...",
+            status: isStopping ? "stopping" : "running",
+            stage: recorded?.stage || (isStopping ? "stopping" : "analyzing"),
+            stageDetails: recorded?.stageDetails || (isStopping ? "Stopping single-wallet intelligence analysis..." : "Analyzing wallet..."),
             runId: recorded?.runId || null,
             startedAt: activeSingleWalletChild.startedAt,
             elapsedMs: Date.now() - new Date(activeSingleWalletChild.startedAt).getTime(),
@@ -4490,6 +4491,7 @@ function startSingleWalletAnalysis(address, force = false) {
     });
 
     child.on("exit", (code, signal) => {
+        const wasStopping = Boolean(activeSingleWalletChild?.isStopping || singleWalletStates.get(norm)?.status === "stopping");
         if (activeSingleWalletChild?.child === child) {
             activeSingleWalletChild = null;
         }
@@ -4521,7 +4523,31 @@ function startSingleWalletAnalysis(address, force = false) {
         }
 
         const finishedAt = new Date().toISOString();
-        if (code === 0) {
+        if (wasStopping) {
+            activityLogger.log({
+                runId,
+                source: "single_wallet",
+                wallet: norm,
+                stage: "stopped",
+                level: "INFO",
+                message: "Single-wallet intelligence analysis stopped by user.",
+            });
+            activityLogger.finishRun(runId, {
+                status: "stopped",
+                stage: "stopped",
+                exitCode: code,
+                signal: signal || "SIGTERM",
+            });
+            singleWalletStates.set(norm, {
+                status: "stopped",
+                stage: "stopped",
+                stageDetails: "Analysis stopped by user.",
+                runId,
+                startedAt,
+                finishedAt,
+                error: null,
+            });
+        } else if (code === 0) {
             activityLogger.finishRun(runId, {
                 status: "completed",
                 stage: "completed",
@@ -4559,6 +4585,75 @@ function startSingleWalletAnalysis(address, force = false) {
 
     return getSingleWalletStatus(norm);
 }
+function stopSingleWalletAnalysis(address) {
+    const norm = address.trim();
+    if (!isValidSolanaAddress(norm)) {
+        const err = new Error("Invalid Solana address");
+        err.statusCode = 400;
+        throw err;
+    }
+
+    if (!activeSingleWalletChild || activeSingleWalletChild.address !== norm) {
+        const recorded = singleWalletStates.get(norm);
+        if (recorded?.status === "stopping") {
+            return getSingleWalletStatus(norm);
+        }
+        const err = new Error(
+            activeSingleWalletChild
+                ? `Cannot stop: active analysis belongs to wallet ${activeSingleWalletChild.address}`
+                : "No active analysis running for this wallet"
+        );
+        err.statusCode = 409;
+        throw err;
+    }
+
+    const active = activeSingleWalletChild;
+    active.isStopping = true;
+
+    const rec = singleWalletStates.get(norm);
+    if (rec) {
+        rec.status = "stopping";
+        rec.stage = "stopping";
+        rec.stageDetails = "Stopping single-wallet intelligence analysis...";
+    }
+
+    activityLogger.log({
+        runId: active.runId,
+        source: "single_wallet",
+        wallet: norm,
+        stage: "stopping",
+        level: "INFO",
+        message: `Stopping single-wallet analysis for ${norm} by user request...`,
+    });
+
+    const child = active.child;
+    const pid = child.pid;
+    const killTree = (signal) => {
+        if (pid && process.platform !== "win32") {
+            try { process.kill(-pid, signal); return; } catch { /* Fall back to child */ }
+        }
+        try { child.kill(signal); } catch { /* Already exited */ }
+    };
+
+    killTree("SIGTERM");
+    const timer = setTimeout(() => {
+        if (activeSingleWalletChild?.child === child) {
+            activityLogger.log({
+                runId: active.runId,
+                source: "single_wallet",
+                wallet: norm,
+                stage: "stopping",
+                level: "WARN",
+                message: `Graceful stop timed out for ${norm} (3s). Force-killing with SIGKILL...`,
+            });
+            killTree("SIGKILL");
+        }
+    }, 3000);
+    timer.unref();
+
+    return getSingleWalletStatus(norm);
+}
+
 
 const server = http.createServer(async (request, response) => {
     if (request.method === "OPTIONS") {
@@ -4605,6 +4700,21 @@ const server = http.createServer(async (request, response) => {
         }
         return;
     }
+    const singleStopMatch = url.pathname.match(/^\/api\/wallet-intelligence\/single\/([^/]+)\/stop\/?$/);
+    if (request.method === "POST" && singleStopMatch) {
+        const address = safeDecodeURIComponent(singleStopMatch[1]);
+        try {
+            const res = stopSingleWalletAnalysis(address);
+            json(request, response, 202, res);
+        } catch (err) {
+            json(request, response, err.statusCode || 500, {
+                error: err.message,
+                ...getSingleWalletStatus(address),
+            });
+        }
+        return;
+    }
+
 
     const singleStatusMatch = url.pathname.match(/^\/api\/wallet-intelligence\/single\/([^/]+)\/status\/?$/);
     if (request.method === "GET" && singleStatusMatch) {
