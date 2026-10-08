@@ -3,7 +3,10 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
-
+import {
+    publishPositionAnalyticsPair,
+    getBundleFilePath,
+} from "../../scripts/analytics/position-analytics-storage.ts";
 const TEST_PORT = 8991;
 const BASE_URL = `http://127.0.0.1:${TEST_PORT}`;
 const TEST_WALLET = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU";
@@ -14,6 +17,7 @@ const POSITIONS_TEST_DIR = path.join(ROOT, "data/analytics/positions", TEST_WALL
 const METRICS_TEST_DIR = path.join(ROOT, "data/analytics/metrics", TEST_WALLET);
 const MULTI_POSITIONS_DIR = path.join(ROOT, "data/analytics/positions", TEST_WALLET_MULTI);
 const MULTI_METRICS_DIR = path.join(ROOT, "data/analytics/metrics", TEST_WALLET_MULTI);
+const MULTI_BUNDLE_PATH = getBundleFilePath(TEST_WALLET_MULTI, "30D", path.join(ROOT, "data/analytics/bundles"));
 let serverProcess: ChildProcess | null = null;
 
 function waitForServerReady(proc: ChildProcess): Promise<void> {
@@ -41,7 +45,10 @@ describe("Position Analytics Backend Control API", () => {
         // Setup mock test data
         fs.mkdirSync(POSITIONS_TEST_DIR, { recursive: true });
         fs.mkdirSync(METRICS_TEST_DIR, { recursive: true });
-
+        try {
+            fs.rmSync(path.join(ROOT, "data/analytics/bundles", TEST_WALLET), { recursive: true, force: true });
+            fs.rmSync(path.join(ROOT, "data/analytics/bundles", TEST_WALLET_MULTI), { recursive: true, force: true });
+        } catch {}
         const mockPositions30D = {
             schemaVersion: "v1",
             wallet: TEST_WALLET,
@@ -478,8 +485,10 @@ describe("Position Analytics Backend Control API", () => {
         try {
             fs.rmSync(path.join(ROOT, "data/analytics/positions", TEST_WALLET), { recursive: true, force: true });
             fs.rmSync(path.join(ROOT, "data/analytics/metrics", TEST_WALLET), { recursive: true, force: true });
+            fs.rmSync(path.join(ROOT, "data/analytics/bundles", TEST_WALLET), { recursive: true, force: true });
             fs.rmSync(MULTI_POSITIONS_DIR, { recursive: true, force: true });
             fs.rmSync(MULTI_METRICS_DIR, { recursive: true, force: true });
+            fs.rmSync(path.join(ROOT, "data/analytics/bundles", TEST_WALLET_MULTI), { recursive: true, force: true });
         } catch {
             // Ignore cleanup errors
         }
@@ -714,10 +723,7 @@ describe("Position Analytics Backend Control API", () => {
         assert.equal(apiPos.fetchedAt, apiMet.sourceDatasetFetchedAt);
     });
 
-    it("12. Atomic Promotion: Promotes both staged positions and metrics simultaneously in lockstep", async () => {
-        const canonicalPosPath = path.join(MULTI_POSITIONS_DIR, "30D.json");
-        const canonicalMetPath = path.join(MULTI_METRICS_DIR, "30D.json");
-
+    it("12. Atomic Promotion: Executes real single-commit publication and handles failure before commit", async () => {
         const stagingDir = path.join(ROOT, "data/analytics/.staging", `test-promote-${Date.now()}`);
         const stagingPosDir = path.join(stagingDir, "positions", TEST_WALLET_MULTI);
         const stagingMetDir = path.join(stagingDir, "metrics", TEST_WALLET_MULTI);
@@ -726,13 +732,13 @@ describe("Position Analytics Backend Control API", () => {
 
         try {
             const stagedV2Positions = {
-                schemaVersion: "v1",
+                schemaVersion: "v1" as const,
                 wallet: TEST_WALLET_MULTI,
-                period: "30D",
-                dataSource: "fabriq",
+                period: "30D" as const,
+                dataSource: "fabriq" as const,
                 fetchedAt: "2026-03-25T18:00:00.000Z",
-                timeframe: { requestedPeriod: "30D", effectiveStart: null, effectiveEnd: null },
-                sourceCoverage: { status: "COMPLETE", totalPositionsFound: 1, totalEligiblePositions: 1 },
+                timeframe: { requestedPeriod: "30D" as const, effectiveStart: null, effectiveEnd: null },
+                sourceCoverage: { status: "COMPLETE" as const, totalPositionsFound: 1, totalEligiblePositions: 1 },
                 sampling: { totalEligiblePositions: 1, analyzedPositions: 1, excludedPositions: 0, coveragePct: 100 },
                 dataQuality: { validClosedPositions: 1, initialEntriesVerified: 1, initialEntryCoveragePct: 100 },
                 positions: [
@@ -743,15 +749,15 @@ describe("Position Analytics Backend Control API", () => {
                         pairName: "SOL-USDT",
                         closedAt: "2026-03-24T12:00:00.000Z",
                         pnlUsd: 350,
-                        winLoss: "WIN",
+                        winLoss: "WIN" as const,
                         lifecycleMeta: { openingEventObserved: true, closingEventObserved: true, eventCount: 1 },
                     },
                 ],
             };
             const stagedV2Metrics = {
-                schemaVersion: "v1",
+                schemaVersion: "v1" as const,
                 wallet: TEST_WALLET_MULTI,
-                period: "30D",
+                period: "30D" as const,
                 generatedAt: "2026-03-25T18:00:05.000Z",
                 sourceDatasetFetchedAt: "2026-03-25T18:00:00.000Z",
                 capital: { totalPositionDepositsUsd: 2000 },
@@ -761,11 +767,67 @@ describe("Position Analytics Backend Control API", () => {
             fs.writeFileSync(path.join(stagingPosDir, "30D.json"), JSON.stringify(stagedV2Positions));
             fs.writeFileSync(path.join(stagingMetDir, "30D.json"), JSON.stringify(stagedV2Metrics));
 
-            // Atomic promotion: write both staged files to canonical paths
-            fs.writeFileSync(canonicalPosPath, JSON.stringify(stagedV2Positions, null, 2));
-            fs.writeFileSync(canonicalMetPath, JSON.stringify(stagedV2Metrics, null, 2));
+            // --- Case 1: Injected failure before commit ---
+            // Executes REAL publication implementation with injected pre-commit crash
+            const preCommitErr = /Simulated I\/O failure before atomic rename commit/;
+            assert.throws(() => {
+                publishPositionAnalyticsPair({
+                    wallet: TEST_WALLET_MULTI,
+                    period: "30D",
+                    dataset: stagedV2Positions as any,
+                    metrics: stagedV2Metrics as any,
+                    bundlesBaseDir: path.join(ROOT, "data/analytics/bundles"),
+                    _beforeCommitHook: () => {
+                        throw new Error("Simulated I/O failure before atomic rename commit");
+                    },
+                });
+            }, preCommitErr);
 
-            // Query both endpoints and verify they immediately return the promoted V2 pair in sync
+            // Assert that NO bundle was published
+            assert.equal(fs.existsSync(MULTI_BUNDLE_PATH), false);
+
+            // Query API to verify original V1 dataset+metrics pair remains served in lockstep
+            const resPosPre = await fetch(`${BASE_URL}/api/position-analytics/positions?wallet=${TEST_WALLET_MULTI}&period=30D`);
+            const resMetPre = await fetch(`${BASE_URL}/api/position-analytics/metrics?wallet=${TEST_WALLET_MULTI}&period=30D`);
+            assert.equal(resPosPre.status, 200);
+            assert.equal(resMetPre.status, 200);
+            const posDataPre = await resPosPre.json();
+            const metDataPre = await resMetPre.json();
+            assert.equal(posDataPre.fetchedAt, "2026-03-15T10:00:00.000Z");
+            assert.equal(metDataPre.sourceDatasetFetchedAt, "2026-03-15T10:00:00.000Z");
+            assert.equal(posDataPre.fetchedAt, metDataPre.sourceDatasetFetchedAt);
+
+            // --- Case 2: Invariant mismatch rejection ---
+            // Reject publication when metrics.sourceDatasetFetchedAt !== positions.fetchedAt
+            const mismatchedMetrics = {
+                ...stagedV2Metrics,
+                sourceDatasetFetchedAt: "2026-03-99T99:99:99.000Z",
+            };
+            const invariantErr = /Publication invariant violation/;
+            assert.throws(() => {
+                publishPositionAnalyticsPair({
+                    wallet: TEST_WALLET_MULTI,
+                    period: "30D",
+                    dataset: stagedV2Positions as any,
+                    metrics: mismatchedMetrics as any,
+                    bundlesBaseDir: path.join(ROOT, "data/analytics/bundles"),
+                });
+            }, invariantErr);
+            assert.equal(fs.existsSync(MULTI_BUNDLE_PATH), false);
+
+            // --- Case 3: Successful real single-commit publication ---
+            const publishResult = publishPositionAnalyticsPair({
+                wallet: TEST_WALLET_MULTI,
+                period: "30D",
+                dataset: stagedV2Positions as any,
+                metrics: stagedV2Metrics as any,
+                bundlesBaseDir: path.join(ROOT, "data/analytics/bundles"),
+            });
+
+            assert.equal(fs.existsSync(MULTI_BUNDLE_PATH), true);
+            assert.equal(publishResult.bundlePath, MULTI_BUNDLE_PATH);
+
+            // Query both endpoints and verify they immediately return the promoted V2 pair in lockstep
             const resPos = await fetch(`${BASE_URL}/api/position-analytics/positions?wallet=${TEST_WALLET_MULTI}&period=30D`);
             const resMet = await fetch(`${BASE_URL}/api/position-analytics/metrics?wallet=${TEST_WALLET_MULTI}&period=30D`);
             assert.equal(resPos.status, 200);
@@ -781,6 +843,45 @@ describe("Position Analytics Backend Control API", () => {
             assert.equal(metData.profitability.sampleTotalPnlUsd, 350);
         } finally {
             try { fs.rmSync(stagingDir, { recursive: true, force: true }); } catch {}
+            try { fs.rmSync(MULTI_BUNDLE_PATH, { force: true }); } catch {}
+        }
+    });
+
+    it("13. Mismatched Legacy Snapshot Rejection: Refuses to serve mismatched legacy versions", async () => {
+        const mismatchWallet = "4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R";
+        const misPosDir = path.join(ROOT, "data/analytics/positions", mismatchWallet);
+        const misMetDir = path.join(ROOT, "data/analytics/metrics", mismatchWallet);
+        fs.mkdirSync(misPosDir, { recursive: true });
+        fs.mkdirSync(misMetDir, { recursive: true });
+
+        try {
+            const legacyPos = {
+                schemaVersion: "v1",
+                wallet: mismatchWallet,
+                period: "30D",
+                fetchedAt: "2026-03-01T10:00:00.000Z",
+                positions: [],
+            };
+            const legacyMet = {
+                schemaVersion: "v1",
+                wallet: mismatchWallet,
+                period: "30D",
+                sourceDatasetFetchedAt: "2026-03-02T12:00:00.000Z",
+                capital: {},
+                profitability: {},
+            };
+            fs.writeFileSync(path.join(misPosDir, "30D.json"), JSON.stringify(legacyPos));
+            fs.writeFileSync(path.join(misMetDir, "30D.json"), JSON.stringify(legacyMet));
+
+            const resPos = await fetch(`${BASE_URL}/api/position-analytics/positions?wallet=${mismatchWallet}&period=30D`);
+            const resMet = await fetch(`${BASE_URL}/api/position-analytics/metrics?wallet=${mismatchWallet}&period=30D`);
+            assert.equal(resPos.status, 404);
+            assert.equal(resMet.status, 404);
+        } finally {
+            try {
+                fs.rmSync(misPosDir, { recursive: true, force: true });
+                fs.rmSync(misMetDir, { recursive: true, force: true });
+            } catch {}
         }
     });
 });

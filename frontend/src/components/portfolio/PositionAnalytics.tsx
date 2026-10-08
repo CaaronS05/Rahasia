@@ -150,6 +150,18 @@ export function PositionAnalytics({ walletAddress }: Props) {
       ]);
 
       if (activeWalletRef.current === wallet && activePeriodRef.current === p) {
+        // Prevent frontend rendering of mixed versions if publication occurred between multiple requests
+        if (
+          m &&
+          pos &&
+          m.sourceDatasetFetchedAt &&
+          pos.fetchedAt &&
+          m.sourceDatasetFetchedAt !== pos.fetchedAt
+        ) {
+          loadData(wallet, p, true);
+          return;
+        }
+
         const newVersion = pos?.fetchedAt || st?.lastAnalyzedAt || null;
         if (currentDatasetVersionRef.current !== null && currentDatasetVersionRef.current !== newVersion) {
           setPositionDetails({});

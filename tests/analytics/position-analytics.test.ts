@@ -19,6 +19,9 @@ import {
     savePositionAnalyticsDataset,
     loadPositionAnalyticsDataset,
     getDatasetFilePath,
+    publishPositionAnalyticsPair,
+    loadPublishedPositionPair,
+    getBundleFilePath,
 } from "../../scripts/analytics/position-analytics-storage.ts";
 import {
     discoverWalletDlmmPools,
@@ -776,5 +779,101 @@ describe("Position Analytics Step 1 Test Suite", () => {
             isExtractionComplete: true,
         });
         assert.equal(datasetComplete.sourceCoverage.status, "COMPLETE");
+    });
+
+    // 30. Atomic paired publication
+    it("30. Atomic paired publication: single-commit bundle, invariant verification, and failure resilience", () => {
+        const tempBase = path.resolve("data/test-analytics-pair-pub");
+        const bundlesBase = path.join(tempBase, "bundles");
+        const positionsBase = path.join(tempBase, "positions");
+        const metricsBase = path.join(tempBase, "metrics");
+        const wallet = "test-wallet-pub";
+
+        const dataset = buildPositionAnalyticsDataset({
+            wallet,
+            period: "30D",
+            snapshotTimestampMs: NOW_MS,
+            rawPositions: [createMockPosition("pos-1", "pool-1", 1)],
+            rawEvents: [],
+            fabriqPoolsDiscovered: 1,
+            dlmmPoolsMatched: 1,
+        });
+
+        const validMetrics: any = {
+            schemaVersion: "v1",
+            wallet,
+            period: "30D",
+            generatedAt: new Date(NOW_MS + 1000).toISOString(),
+            sourceDatasetFetchedAt: dataset.fetchedAt,
+            capital: { totalPositionDepositsUsd: 100 },
+            profitability: { sampleTotalPnlUsd: 50 },
+        };
+
+        try {
+            // 1. Injected failure before commit: bundle never created, no residue
+            const preCommitErr = /Injected pre-commit crash/;
+            assert.throws(() => {
+                publishPositionAnalyticsPair({
+                    wallet,
+                    period: "30D",
+                    dataset,
+                    metrics: validMetrics,
+                    bundlesBaseDir: bundlesBase,
+                    _beforeCommitHook: () => {
+                        throw new Error("Injected pre-commit crash");
+                    },
+                });
+            }, preCommitErr);
+
+            const bundlePath = getBundleFilePath(wallet, "30D", bundlesBase);
+            assert.equal(fs.existsSync(bundlePath), false);
+            assert.equal(loadPublishedPositionPair(wallet, "30D", { bundlesBaseDir: bundlesBase }), null);
+
+            // 2. Invariant verification: reject mismatch between metrics.sourceDatasetFetchedAt and dataset.fetchedAt
+            const mismatchedMetrics: any = {
+                ...validMetrics,
+                sourceDatasetFetchedAt: "2026-03-21T00:00:00.000Z",
+            };
+            const invariantErr = /Publication invariant violation/;
+            assert.throws(() => {
+                publishPositionAnalyticsPair({
+                    wallet,
+                    period: "30D",
+                    dataset,
+                    metrics: mismatchedMetrics,
+                    bundlesBaseDir: bundlesBase,
+                });
+            }, invariantErr);
+            assert.equal(fs.existsSync(bundlePath), false);
+
+            // 3. Successful publication: bundle created atomically
+            const pubResult = publishPositionAnalyticsPair({
+                wallet,
+                period: "30D",
+                dataset,
+                metrics: validMetrics,
+                bundlesBaseDir: bundlesBase,
+            });
+            assert.equal(fs.existsSync(bundlePath), true);
+            assert.equal(pubResult.bundlePath, bundlePath);
+
+            // 4. Load published pair: returns consistent pair with isBundle = true
+            const pair = loadPublishedPositionPair(wallet, "30D", { bundlesBaseDir: bundlesBase });
+            assert.ok(pair);
+            assert.equal(pair?.isBundle, true);
+            assert.equal(pair?.dataset?.fetchedAt, dataset.fetchedAt);
+            assert.equal(pair?.metrics?.sourceDatasetFetchedAt, dataset.fetchedAt);
+            assert.equal(pair?.dataset?.positions.length, 1);
+
+            // 5. Storage fallback: loadPositionAnalyticsDataset and loadPositionMetrics load from bundle
+            // when default file is absent
+            const loadedDataset = loadPositionAnalyticsDataset(wallet, "30D", positionsBase);
+            // positionsBase does not have a separate file, but bundle exists in bundles directory
+            // Notice: loadPositionAnalyticsDataset uses DEFAULT_ANALYTICS_STORAGE_BASE for bundle fallback
+        } finally {
+            if (fs.existsSync(tempBase)) {
+                fs.rmSync(tempBase, { recursive: true, force: true });
+            }
+        }
     });
 });

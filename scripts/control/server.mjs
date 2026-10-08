@@ -5,6 +5,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { discoverTokenPools } from "../pool/discover-token-pools.mjs";
 import { activityLogger, stripAnsi, sanitizeText } from "./activity-log.mjs";
+import {
+    publishPositionAnalyticsPair,
+    loadPublishedPositionPair,
+    getBundleFilePath,
+} from "../analytics/position-analytics-storage.ts";
 
 const HOST = "127.0.0.1";
 const PORT = Number.parseInt(process.env.CONTROL_SERVER_PORT || process.env.PORT || "8787", 10);
@@ -4698,19 +4703,19 @@ function getPositionMetricsPath(wallet, period) {
     return path.join(ROOT, "data/analytics/metrics", wallet, `${period}.json`);
 }
 
+function getPositionBundlePath(wallet, period) {
+    return getBundleFilePath(wallet, period, path.join(ROOT, "data/analytics/bundles"));
+}
+
 function getLastAnalyzedAt(wallet, period) {
     try {
-        const metricsPath = getPositionMetricsPath(wallet, period);
-        if (fs.existsSync(metricsPath)) {
-            const raw = fs.readFileSync(metricsPath, "utf8");
-            const data = JSON.parse(raw);
-            return data.generatedAt || data.sourceDatasetFetchedAt || null;
-        }
-        const datasetPath = getPositionDatasetPath(wallet, period);
-        if (fs.existsSync(datasetPath)) {
-            const raw = fs.readFileSync(datasetPath, "utf8");
-            const data = JSON.parse(raw);
-            return data.fetchedAt || null;
+        const pair = loadPublishedPositionPair(wallet, period, {
+            bundlesBaseDir: path.join(ROOT, "data/analytics/bundles"),
+            positionsBaseDir: path.join(ROOT, "data/analytics/positions"),
+            metricsBaseDir: path.join(ROOT, "data/analytics/metrics"),
+        });
+        if (pair) {
+            return pair.publishedAt || pair.metrics?.generatedAt || pair.metrics?.sourceDatasetFetchedAt || pair.dataset?.fetchedAt || null;
         }
     } catch {
         return null;
@@ -4727,8 +4732,13 @@ function getPositionAnalyticsStatus(address, period = "30D") {
         activePositionAnalyticsChild.period === period
     );
     const recorded = positionAnalyticsStates.get(key);
-    const hasDataset = fs.existsSync(getPositionDatasetPath(norm, period));
-    const hasMetrics = fs.existsSync(getPositionMetricsPath(norm, period));
+    const pair = loadPublishedPositionPair(norm, period, {
+        bundlesBaseDir: path.join(ROOT, "data/analytics/bundles"),
+        positionsBaseDir: path.join(ROOT, "data/analytics/positions"),
+        metricsBaseDir: path.join(ROOT, "data/analytics/metrics"),
+    });
+    const hasDataset = Boolean(pair?.dataset);
+    const hasMetrics = Boolean(pair?.metrics);
     const lastAnalyzedAt = getLastAnalyzedAt(norm, period);
 
     if (isActive) {
@@ -4815,8 +4825,12 @@ function startPositionAnalytics(address, period = "30D", force = false) {
 
     const key = `${norm}:${period}`;
     const startedAt = new Date().toISOString();
-    const datasetPath = getPositionDatasetPath(norm, period);
-    const datasetExists = fs.existsSync(datasetPath);
+    const pair = loadPublishedPositionPair(norm, period, {
+        bundlesBaseDir: path.join(ROOT, "data/analytics/bundles"),
+        positionsBaseDir: path.join(ROOT, "data/analytics/positions"),
+        metricsBaseDir: path.join(ROOT, "data/analytics/metrics"),
+    });
+    const datasetExists = Boolean(pair?.dataset);
 
     // If Step 1 data exists and not forcing refresh, jump directly to metrics builder
     const skipDataset = !force && datasetExists;
@@ -5112,24 +5126,41 @@ function startPositionAnalytics(address, period = "30D", force = false) {
 
             // Metrics stage finished successfully. Atomically promote staged artifacts!
             try {
+                let datasetToPromote = null;
+                let metricsToPromote = null;
+
                 if (skipDataset) {
                     const stagedMetPath = path.join(stagingMetricsDir, norm, `${period}.json`);
                     if (!fs.existsSync(stagedMetPath)) {
                         throw new Error("Staged metrics artifact not found for promotion");
                     }
-                    const metData = JSON.parse(fs.readFileSync(stagedMetPath, "utf8"));
-                    atomicWriteJsonFile(getPositionMetricsPath(norm, period), metData);
+                    metricsToPromote = JSON.parse(fs.readFileSync(stagedMetPath, "utf8"));
+                    const currentPair = loadPublishedPositionPair(norm, period, {
+                        bundlesBaseDir: path.join(ROOT, "data/analytics/bundles"),
+                        positionsBaseDir: path.join(ROOT, "data/analytics/positions"),
+                        metricsBaseDir: path.join(ROOT, "data/analytics/metrics"),
+                    });
+                    if (!currentPair || !currentPair.dataset) {
+                        throw new Error("Base dataset not found for metrics promotion");
+                    }
+                    datasetToPromote = currentPair.dataset;
                 } else {
                     const stagedPosPath = path.join(stagingPositionsDir, norm, `${period}.json`);
                     const stagedMetPath = path.join(stagingMetricsDir, norm, `${period}.json`);
                     if (!fs.existsSync(stagedPosPath) || !fs.existsSync(stagedMetPath)) {
                         throw new Error("Missing staged dataset or metrics artifact for promotion");
                     }
-                    const posData = JSON.parse(fs.readFileSync(stagedPosPath, "utf8"));
-                    const metData = JSON.parse(fs.readFileSync(stagedMetPath, "utf8"));
-                    atomicWriteJsonFile(getPositionDatasetPath(norm, period), posData);
-                    atomicWriteJsonFile(getPositionMetricsPath(norm, period), metData);
+                    datasetToPromote = JSON.parse(fs.readFileSync(stagedPosPath, "utf8"));
+                    metricsToPromote = JSON.parse(fs.readFileSync(stagedMetPath, "utf8"));
                 }
+
+                publishPositionAnalyticsPair({
+                    wallet: norm,
+                    period,
+                    dataset: datasetToPromote,
+                    metrics: metricsToPromote,
+                    bundlesBaseDir: path.join(ROOT, "data/analytics/bundles"),
+                });
             } catch (promoteErr) {
                 cleanupStaging();
                 const finishedAt = new Date().toISOString();
@@ -5349,13 +5380,16 @@ const server = http.createServer(async (request, response) => {
             json(request, response, 400, { error: 'Invalid period. Must be "30D", "90D", or "ALL_AVAILABLE"' });
             return;
         }
-        const metricsPath = getPositionMetricsPath(wallet, period);
-        try {
-            const content = JSON.parse(await fs.promises.readFile(metricsPath, "utf8"));
-            json(request, response, 200, { ...content, metrics: content });
-        } catch {
+        const pair = loadPublishedPositionPair(wallet, period, {
+            bundlesBaseDir: path.join(ROOT, "data/analytics/bundles"),
+            positionsBaseDir: path.join(ROOT, "data/analytics/positions"),
+            metricsBaseDir: path.join(ROOT, "data/analytics/metrics"),
+        });
+        if (!pair || !pair.metrics) {
             json(request, response, 404, { error: "Metrics not found for this wallet and period" });
+            return;
         }
+        json(request, response, 200, { ...pair.metrics, metrics: pair.metrics });
         return;
     }
 
@@ -5370,48 +5404,52 @@ const server = http.createServer(async (request, response) => {
             json(request, response, 400, { error: 'Invalid period. Must be "30D", "90D", or "ALL_AVAILABLE"' });
             return;
         }
-        const datasetPath = getPositionDatasetPath(wallet, period);
-        try {
-            const content = JSON.parse(await fs.promises.readFile(datasetPath, "utf8"));
-            const rawPositions = Array.isArray(content?.positions) ? content.positions : [];
-            const compactPositions = rawPositions.map((p) => ({
-                positionId: p.positionId,
-                poolAddress: p.poolAddress,
-                pairName: p.pairName,
-                tokenXMint: p.tokenXMint,
-                tokenYMint: p.tokenYMint,
-                tokenXSymbol: p.tokenXSymbol,
-                tokenYSymbol: p.tokenYSymbol,
-                openedAt: p.openedAt,
-                closedAt: p.closedAt,
-                holdDurationSeconds: p.holdDurationSeconds,
-                initialEntryUsd: p.initialEntryUsd,
-                firstObservedAddUsd: p.firstObservedAddUsd,
-                additionalLiquidityUsd: p.additionalLiquidityUsd,
-                totalDepositsUsd: p.totalDepositsUsd,
-                totalWithdrawalsUsd: p.totalWithdrawalsUsd,
-                claimedFeesUsd: p.claimedFeesUsd,
-                pnlUsd: p.pnlUsd,
-                pnlPct: p.pnlPct,
-                winLoss: p.winLoss,
-                dataQuality: p.dataQuality,
-                lifecycleMeta: {
-                    openingEventObserved: p.lifecycle?.openingEventObserved ?? false,
-                    closingEventObserved: p.lifecycle?.closingEventObserved ?? false,
-                    eventCount: p.lifecycle?.eventCount ?? p.lifecycle?.events?.length ?? 0,
-                },
-            }));
-            json(request, response, 200, {
-                positions: compactPositions,
-                totalCount: compactPositions.length,
-                sampling: content.sampling,
-                dataQuality: content.dataQuality,
-                timeframe: content.timeframe,
-                fetchedAt: content.fetchedAt || null,
-            });
-        } catch {
+        const pair = loadPublishedPositionPair(wallet, period, {
+            bundlesBaseDir: path.join(ROOT, "data/analytics/bundles"),
+            positionsBaseDir: path.join(ROOT, "data/analytics/positions"),
+            metricsBaseDir: path.join(ROOT, "data/analytics/metrics"),
+        });
+        if (!pair || !pair.dataset) {
             json(request, response, 404, { error: "Positions dataset not found for this wallet and period" });
+            return;
         }
+        const content = pair.dataset;
+        const rawPositions = Array.isArray(content?.positions) ? content.positions : [];
+        const compactPositions = rawPositions.map((p) => ({
+            positionId: p.positionId,
+            poolAddress: p.poolAddress,
+            pairName: p.pairName,
+            tokenXMint: p.tokenXMint,
+            tokenYMint: p.tokenYMint,
+            tokenXSymbol: p.tokenXSymbol,
+            tokenYSymbol: p.tokenYSymbol,
+            openedAt: p.openedAt,
+            closedAt: p.closedAt,
+            holdDurationSeconds: p.holdDurationSeconds,
+            initialEntryUsd: p.initialEntryUsd,
+            firstObservedAddUsd: p.firstObservedAddUsd,
+            additionalLiquidityUsd: p.additionalLiquidityUsd,
+            totalDepositsUsd: p.totalDepositsUsd,
+            totalWithdrawalsUsd: p.totalWithdrawalsUsd,
+            claimedFeesUsd: p.claimedFeesUsd,
+            pnlUsd: p.pnlUsd,
+            pnlPct: p.pnlPct,
+            winLoss: p.winLoss,
+            dataQuality: p.dataQuality,
+            lifecycleMeta: {
+                openingEventObserved: p.lifecycle?.openingEventObserved ?? false,
+                closingEventObserved: p.lifecycle?.closingEventObserved ?? false,
+                eventCount: p.lifecycle?.eventCount ?? p.lifecycle?.events?.length ?? 0,
+            },
+        }));
+        json(request, response, 200, {
+            positions: compactPositions,
+            totalCount: compactPositions.length,
+            sampling: content.sampling,
+            dataQuality: content.dataQuality,
+            timeframe: content.timeframe,
+            fetchedAt: content.fetchedAt || null,
+        });
         return;
     }
 
@@ -5432,24 +5470,28 @@ const server = http.createServer(async (request, response) => {
             json(request, response, 400, { error: "Missing positionId parameter" });
             return;
         }
-        const datasetPath = getPositionDatasetPath(wallet, period);
-        try {
-            const content = JSON.parse(await fs.promises.readFile(datasetPath, "utf8"));
-            const rawPositions = Array.isArray(content?.positions) ? content.positions : [];
-            const pos = rawPositions.find((p) => {
-                if (poolAddress) {
-                    return p.positionId === positionId && p.poolAddress === poolAddress;
-                }
-                return p.positionId === positionId;
-            });
-            if (!pos) {
-                json(request, response, 404, { error: "Position not found in dataset" });
-                return;
-            }
-            json(request, response, 200, { position: pos });
-        } catch {
+        const pair = loadPublishedPositionPair(wallet, period, {
+            bundlesBaseDir: path.join(ROOT, "data/analytics/bundles"),
+            positionsBaseDir: path.join(ROOT, "data/analytics/positions"),
+            metricsBaseDir: path.join(ROOT, "data/analytics/metrics"),
+        });
+        if (!pair || !pair.dataset) {
             json(request, response, 404, { error: "Positions dataset not found for this wallet and period" });
+            return;
         }
+        const content = pair.dataset;
+        const rawPositions = Array.isArray(content?.positions) ? content.positions : [];
+        const pos = rawPositions.find((p) => {
+            if (poolAddress) {
+                return p.positionId === positionId && p.poolAddress === poolAddress;
+            }
+            return p.positionId === positionId;
+        });
+        if (!pos) {
+            json(request, response, 404, { error: "Position not found in dataset" });
+            return;
+        }
+        json(request, response, 200, { position: pos });
         return;
     }
 
