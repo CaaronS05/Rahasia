@@ -424,3 +424,128 @@ export async function stopPositionAnalytics(
   if (!res.ok) throw new Error(data.error || `Failed to stop analysis (${res.status})`);
   return data;
 }
+
+// ===========================================================================
+// STEP 4 MONITORING ASSESSMENT TYPES & API
+// ===========================================================================
+
+export type MonitoringVerdict =
+  | "WORTH_MONITORING"
+  | "WATCH_WITH_CAUTION"
+  | "NOT_RECOMMENDED"
+  | "INSUFFICIENT_DATA";
+
+export type ManualFollowability =
+  | "HIGH"
+  | "MODERATE"
+  | "LOW"
+  | "UNKNOWN";
+
+export interface RiskAndConsistencyScoreComponent {
+  score: number;
+  maxScore: number;
+  cvar10Points: number;
+  weeklyRatioPoints: number;
+  cvar10: number | null;
+  profitableWeeksRatioPct: number | null;
+}
+
+export interface ProfitConcentrationScoreComponent {
+  score: number;
+  maxScore: number;
+  top1Points: number;
+  top5Points: number;
+  top1ConcentrationPct: number | null;
+  top5ConcentrationPct: number | null;
+}
+
+export interface TrackRecordScoreComponent {
+  score: number;
+  maxScore: number;
+  pnlObsPoints: number;
+  weeksPoints: number;
+  coveragePoints: number;
+  pnlUsdObservations: number;
+  pnlPctObservations: number;
+  observedWeeksWithKnownPnl: number;
+  pnlUsdCoveragePct: number;
+  pnlPctCoveragePct: number;
+}
+
+export interface ProfitabilityScoreComponent {
+  score: number;
+  maxScore: number;
+  sampleTotalPnlPoints: number;
+  medianPnlPctPoints: number;
+  sampleTotalPnlUsd: number | null;
+  medianPositionPnlPct: number | null;
+}
+
+export interface MonitoringScoreComponents {
+  riskAndConsistency: RiskAndConsistencyScoreComponent;
+  profitConcentration: ProfitConcentrationScoreComponent;
+  trackRecord: TrackRecordScoreComponent;
+  profitability: ProfitabilityScoreComponent;
+}
+
+export interface FollowabilityDetails {
+  medianHoldingTimeSeconds: number | null;
+  observedEntriesPerDay: number | null;
+  medianInitialEntryUsd: number | null;
+  holdingTimeObservations: number;
+  qualifyingOpeningObservations: number;
+  openingTimeCoveragePct: number;
+  label: "Historical Manual Followability Estimate";
+  description: string;
+}
+
+export interface MonitoringAssessmentEvidence {
+  sourceCoverageStatus: SourceCoverageStatus;
+  analyzedClosedPositions: number;
+  totalEligiblePositions: number;
+  isSampled: boolean;
+  samplingCoveragePct: number;
+  pnlUsdObservations: number;
+  pnlPctObservations: number;
+  pnlUsdCoveragePct: number;
+  pnlPctCoveragePct: number;
+  observedWeeksWithKnownPnl: number;
+  profitableWeeksCount: number;
+  historyStart: string | null;
+  historyEnd: string | null;
+  openingTimestampObservations: number;
+  openingTimestampCoveragePct: number;
+  holdingTimeObservations: number;
+  medianHoldingTimeSeconds: number | null;
+  observedEntriesPerDay: number | null;
+  medianInitialEntryUsd: number | null;
+}
+
+export interface MonitoringAssessmentResult {
+  version: "v1";
+  wallet: string;
+  period: AnalyticsPeriod;
+  sourceDatasetFetchedAt: string;
+  verdict: MonitoringVerdict;
+  monitoringScore: number | null;
+  scoreComponents: MonitoringScoreComponents | null;
+  manualFollowability: ManualFollowability;
+  followabilityDetails: FollowabilityDetails;
+  reasons: string[];
+  concerns: string[];
+  evidence: MonitoringAssessmentEvidence;
+  limitations: string[];
+}
+
+export async function getPositionAssessment(
+  wallet: string,
+  period: AnalyticsPeriod = "30D"
+): Promise<MonitoringAssessmentResult | null> {
+  const params = new URLSearchParams({ wallet, period });
+  const url = `${API_BASE}/api/position-analytics/assessment?${params.toString()}`;
+  const res = await fetch(url, { cache: "no-store" });
+  if (res.status === 404) return null;
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || `Failed to fetch assessment (${res.status})`);
+  return data as MonitoringAssessmentResult;
+}

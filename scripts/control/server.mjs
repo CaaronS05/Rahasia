@@ -10,6 +10,7 @@ import {
     loadPublishedPositionPair,
     getBundleFilePath,
 } from "../analytics/position-analytics-storage.ts";
+import { computeMonitoringAssessment } from "../analytics/monitoring-assessment.mjs";
 
 const HOST = "127.0.0.1";
 const PORT = Number.parseInt(process.env.CONTROL_SERVER_PORT || process.env.PORT || "8787", 10);
@@ -5390,6 +5391,35 @@ const server = http.createServer(async (request, response) => {
             return;
         }
         json(request, response, 200, { ...pair.metrics, metrics: pair.metrics });
+        return;
+    }
+
+    if (url.pathname === "/api/position-analytics/assessment" && request.method === "GET") {
+        const wallet = url.searchParams.get("wallet");
+        const period = url.searchParams.get("period") || "30D";
+        if (!isValidSolanaAddress(wallet)) {
+            json(request, response, 400, { error: "Invalid Solana wallet address" });
+            return;
+        }
+        if (!isValidAnalyticsPeriod(period)) {
+            json(request, response, 400, { error: 'Invalid period. Must be "30D", "90D", or "ALL_AVAILABLE"' });
+            return;
+        }
+        const pair = loadPublishedPositionPair(wallet, period, {
+            bundlesBaseDir: path.join(ROOT, "data/analytics/bundles"),
+            positionsBaseDir: path.join(ROOT, "data/analytics/positions"),
+            metricsBaseDir: path.join(ROOT, "data/analytics/metrics"),
+        });
+        if (!pair || !pair.dataset || !pair.metrics) {
+            json(request, response, 404, { error: "Published position dataset or metrics not found for this wallet and period" });
+            return;
+        }
+        if (pair.dataset.fetchedAt !== pair.metrics.sourceDatasetFetchedAt) {
+            json(request, response, 404, { error: "Mismatched dataset and metrics versions" });
+            return;
+        }
+        const assessment = computeMonitoringAssessment(pair.dataset, pair.metrics);
+        json(request, response, 200, assessment);
         return;
     }
 

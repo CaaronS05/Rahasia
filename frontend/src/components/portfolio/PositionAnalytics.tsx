@@ -26,10 +26,14 @@ import {
   type FullPositionDetail,
   type PairBreakdownItem,
   type PoolBreakdownItem,
+  type MonitoringAssessmentResult,
+  type MonitoringVerdict,
+  type ManualFollowability,
   getPositionAnalyticsStatus,
   getPositionMetrics,
   getPositions,
   getPositionDetail,
+  getPositionAssessment,
   startPositionAnalytics,
   stopPositionAnalytics,
 } from "../../lib/positionAnalyticsApi";
@@ -104,7 +108,7 @@ export function PositionAnalytics({ walletAddress }: Props) {
   const [status, setStatus] = useState<PositionAnalyticsStatus | null>(null);
   const [metrics, setMetrics] = useState<PositionMetricsResult | null>(null);
   const [positionsData, setPositionsData] = useState<PositionsResponse | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [assessment, setAssessment] = useState<MonitoringAssessmentResult | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
@@ -143,10 +147,11 @@ export function PositionAnalytics({ walletAddress }: Props) {
     setActionError(null);
 
     try {
-      const [st, m, pos] = await Promise.all([
+      const [st, m, pos, assess] = await Promise.all([
         getPositionAnalyticsStatus(wallet, p).catch(() => null),
         getPositionMetrics(wallet, p).catch(() => null),
         getPositions(wallet, p).catch(() => null),
+        getPositionAssessment(wallet, p).catch(() => null),
       ]);
 
       if (activeWalletRef.current === wallet && activePeriodRef.current === p) {
@@ -162,6 +167,17 @@ export function PositionAnalytics({ walletAddress }: Props) {
           return;
         }
 
+        if (
+          m &&
+          assess &&
+          m.sourceDatasetFetchedAt &&
+          assess.sourceDatasetFetchedAt &&
+          m.sourceDatasetFetchedAt !== assess.sourceDatasetFetchedAt
+        ) {
+          loadData(wallet, p, true);
+          return;
+        }
+
         const newVersion = pos?.fetchedAt || st?.lastAnalyzedAt || null;
         if (currentDatasetVersionRef.current !== null && currentDatasetVersionRef.current !== newVersion) {
           setPositionDetails({});
@@ -171,6 +187,7 @@ export function PositionAnalytics({ walletAddress }: Props) {
         setStatus(st);
         setMetrics(m);
         setPositionsData(pos);
+        setAssessment(assess);
       }
     } catch (err: unknown) {
       if (activeWalletRef.current === wallet && activePeriodRef.current === p) {
@@ -189,6 +206,7 @@ export function PositionAnalytics({ walletAddress }: Props) {
     setExpandedPositionKey(null);
     setExpandedPairs(new Set());
     setPositionDetails({});
+    setAssessment(null);
     currentDatasetVersionRef.current = null;
     loadData(walletAddress, period);
   }, [walletAddress, period, loadData]);
@@ -568,6 +586,263 @@ export function PositionAnalytics({ walletAddress }: Props) {
         </section>
       ) : metrics ? (
         <>
+          {/* ---------------------------------------------------- */}
+          {/* SECTION: MONITORING ASSESSMENT */}
+          {/* ---------------------------------------------------- */}
+          <section className="pa-section">
+            <div className="pa-section-header">
+              <div>
+                <h4 className="pa-section-title">Monitoring Assessment</h4>
+                <p className="pa-section-subtitle">
+                  Deterministic screening heuristic and historical manual followability — not a prediction of future profitability
+                </p>
+              </div>
+              <span className="pa-badge" style={{ background: "rgba(255,255,255,0.05)", color: "var(--muted)" }}>
+                V1 Assessment Engine
+              </span>
+            </div>
+
+            {assessment ? (
+              <div className="pa-assessment-container">
+                {/* Top Metrics Row: Verdict, Score, Followability */}
+                <div className="pa-grid-3">
+                  <div className="pa-card">
+                    <div className="pa-card-title">Monitoring Verdict</div>
+                    <div style={{ marginTop: "6px" }}>
+                      <span className={`pa-verdict-badge ${
+                        assessment.verdict === "WORTH_MONITORING"
+                          ? "worth-monitoring"
+                          : assessment.verdict === "WATCH_WITH_CAUTION"
+                          ? "watch-caution"
+                          : assessment.verdict === "NOT_RECOMMENDED"
+                          ? "not-recommended"
+                          : "insufficient-data"
+                      }`}>
+                        {assessment.verdict === "WORTH_MONITORING" && <CheckCircle2 size={14} />}
+                        {assessment.verdict === "WATCH_WITH_CAUTION" && <AlertTriangle size={14} />}
+                        {assessment.verdict === "NOT_RECOMMENDED" && <AlertTriangle size={14} />}
+                        {assessment.verdict === "INSUFFICIENT_DATA" && <Info size={14} />}
+                        {assessment.verdict.replace(/_/g, " ")}
+                      </span>
+                    </div>
+                    <div className="pa-card-sub" style={{ marginTop: "8px" }}>
+                      {assessment.verdict === "WORTH_MONITORING"
+                        ? "Meets all 10 quality & risk screening gates"
+                        : assessment.verdict === "WATCH_WITH_CAUTION"
+                        ? "Promising metrics with specific gating or risk constraints"
+                        : assessment.verdict === "NOT_RECOMMENDED"
+                        ? "Score below threshold or elevated risk profile"
+                        : "Insufficient observations to establish recommendation"}
+                    </div>
+                  </div>
+
+                  <div className="pa-card">
+                    <div className="pa-card-title">Monitoring Score</div>
+                    <div className="pa-card-value">
+                      {assessment.monitoringScore !== null ? (
+                        <>
+                          {assessment.monitoringScore}
+                          <span style={{ fontSize: "0.85rem", color: "var(--muted)", fontWeight: 500, marginLeft: "4px" }}>
+                            / 100
+                          </span>
+                        </>
+                      ) : (
+                        <span className="muted">—</span>
+                      )}
+                    </div>
+                    <div className="pa-card-sub">
+                      {assessment.monitoringScore !== null
+                        ? `Weighted across 4 dimensions (${assessment.scoreComponents ? "Risk, Concentration, Track Record, PnL" : ""})`
+                        : "Score withheld due to insufficient historical evidence"}
+                    </div>
+                  </div>
+
+                  <div className="pa-card">
+                    <div className="pa-card-title">Manual Followability</div>
+                    <div style={{ marginTop: "6px" }}>
+                      <span className={`pa-followability-badge ${
+                        assessment.manualFollowability === "HIGH"
+                          ? "high"
+                          : assessment.manualFollowability === "MODERATE"
+                          ? "moderate"
+                          : assessment.manualFollowability === "LOW"
+                          ? "low"
+                          : "unknown"
+                      }`}>
+                        {assessment.manualFollowability} FOLLOWABILITY
+                      </span>
+                    </div>
+                    <div className="pa-card-sub" style={{ marginTop: "8px" }}>
+                      {assessment.followabilityDetails.medianHoldingTimeSeconds !== null
+                        ? `Median Hold: ${formatDuration(assessment.followabilityDetails.medianHoldingTimeSeconds)} · ${assessment.followabilityDetails.observedEntriesPerDay?.toFixed(1) ?? "—"} entries/day`
+                        : "Hold duration and entry pacing data insufficient"}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Four Weighted Score Components */}
+                {assessment.scoreComponents ? (
+                  <div className="pa-grid-4" style={{ marginTop: "16px" }}>
+                    <div className="pa-score-component-card">
+                      <div className="pa-card-title" style={{ display: "flex", justifyContent: "space-between" }}>
+                        <span>Risk & Consistency</span>
+                        <span style={{ color: "var(--text)", fontWeight: 700 }}>
+                          {assessment.scoreComponents.riskAndConsistency.score} / {assessment.scoreComponents.riskAndConsistency.maxScore}
+                        </span>
+                      </div>
+                      <div className="pa-card-sub">
+                        CVaR10: {assessment.scoreComponents.riskAndConsistency.cvar10 !== null ? `${assessment.scoreComponents.riskAndConsistency.cvar10.toFixed(1)}%` : "—"} (+{assessment.scoreComponents.riskAndConsistency.cvar10Points} pts)
+                      </div>
+                      <div className="pa-card-sub">
+                        Profitable Weeks: {assessment.scoreComponents.riskAndConsistency.profitableWeeksRatioPct !== null ? `${assessment.scoreComponents.riskAndConsistency.profitableWeeksRatioPct.toFixed(0)}%` : "—"} (+{assessment.scoreComponents.riskAndConsistency.weeklyRatioPoints} pts)
+                      </div>
+                    </div>
+
+                    <div className="pa-score-component-card">
+                      <div className="pa-card-title" style={{ display: "flex", justifyContent: "space-between" }}>
+                        <span>Profit Concentration</span>
+                        <span style={{ color: "var(--text)", fontWeight: 700 }}>
+                          {assessment.scoreComponents.profitConcentration.score} / {assessment.scoreComponents.profitConcentration.maxScore}
+                        </span>
+                      </div>
+                      <div className="pa-card-sub">
+                        Top 1: {assessment.scoreComponents.profitConcentration.top1ConcentrationPct !== null ? `${assessment.scoreComponents.profitConcentration.top1ConcentrationPct.toFixed(1)}%` : "—"} (+{assessment.scoreComponents.profitConcentration.top1Points} pts)
+                      </div>
+                      <div className="pa-card-sub">
+                        Top 5: {assessment.scoreComponents.profitConcentration.top5ConcentrationPct !== null ? `${assessment.scoreComponents.profitConcentration.top5ConcentrationPct.toFixed(1)}%` : "—"} (+{assessment.scoreComponents.profitConcentration.top5Points} pts)
+                      </div>
+                    </div>
+
+                    <div className="pa-score-component-card">
+                      <div className="pa-card-title" style={{ display: "flex", justifyContent: "space-between" }}>
+                        <span>Track Record / Evidence</span>
+                        <span style={{ color: "var(--text)", fontWeight: 700 }}>
+                          {assessment.scoreComponents.trackRecord.score} / {assessment.scoreComponents.trackRecord.maxScore}
+                        </span>
+                      </div>
+                      <div className="pa-card-sub">
+                        Obs Count: {assessment.scoreComponents.trackRecord.pnlUsdObservations} (+{assessment.scoreComponents.trackRecord.pnlObsPoints} pts)
+                      </div>
+                      <div className="pa-card-sub">
+                        Obs Weeks: {assessment.scoreComponents.trackRecord.observedWeeksWithKnownPnl} (+{assessment.scoreComponents.trackRecord.weeksPoints} pts) · Cov: +{assessment.scoreComponents.trackRecord.coveragePoints} pts
+                      </div>
+                    </div>
+
+                    <div className="pa-score-component-card">
+                      <div className="pa-card-title" style={{ display: "flex", justifyContent: "space-between" }}>
+                        <span>Profitability</span>
+                        <span style={{ color: "var(--text)", fontWeight: 700 }}>
+                          {assessment.scoreComponents.profitability.score} / {assessment.scoreComponents.profitability.maxScore}
+                        </span>
+                      </div>
+                      <div className="pa-card-sub">
+                        Sample PnL: {formatUsd(assessment.scoreComponents.profitability.sampleTotalPnlUsd, true)} (+{assessment.scoreComponents.profitability.sampleTotalPnlPoints} pts)
+                      </div>
+                      <div className="pa-card-sub">
+                        Median Return: {formatPct(assessment.scoreComponents.profitability.medianPositionPnlPct, true)} (+{assessment.scoreComponents.profitability.medianPnlPctPoints} pts)
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+
+                {/* Evidence & Qualitative Breakdown */}
+                <div className="pa-grid-2" style={{ marginTop: "16px" }}>
+                  {/* Reasons & Concerns */}
+                  <div className="pa-card">
+                    <div className="pa-card-title">Supporting Reasons & Gating Factors</div>
+                    {assessment.reasons.length > 0 ? (
+                      <ul className="pa-evidence-list" style={{ marginTop: "10px" }}>
+                        {assessment.reasons.map((r, i) => (
+                          <li key={i} className="pa-evidence-item positive">
+                            <CheckCircle2 size={14} color="var(--green)" style={{ flexShrink: 0, marginTop: "2px" }} />
+                            <span>{r}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
+
+                    {assessment.concerns.length > 0 ? (
+                      <div style={{ marginTop: "16px" }}>
+                        <div className="pa-card-title" style={{ color: "var(--red)" }}>
+                          Key Concerns & Gating Warnings
+                        </div>
+                        <ul className="pa-evidence-list" style={{ marginTop: "8px" }}>
+                          {assessment.concerns.map((c, i) => (
+                            <li key={i} className="pa-evidence-item warning">
+                              <AlertTriangle size={14} color="var(--red)" style={{ flexShrink: 0, marginTop: "2px" }} />
+                              <span>{c}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    ) : null}
+                  </div>
+
+                  {/* Observation & Coverage Summary */}
+                  <div className="pa-card">
+                    <div className="pa-card-title">Evidence & Observation Summary</div>
+                    <div className="pa-evidence-grid" style={{ marginTop: "10px" }}>
+                      <div className="pa-evidence-row">
+                        <span className="pa-evidence-label">Source Extraction</span>
+                        <span className="pa-evidence-val">{assessment.evidence.sourceCoverageStatus}</span>
+                      </div>
+                      <div className="pa-evidence-row">
+                        <span className="pa-evidence-label">Analyzed Positions</span>
+                        <span className="pa-evidence-val">{assessment.evidence.analyzedClosedPositions}</span>
+                      </div>
+                      <div className="pa-evidence-row">
+                        <span className="pa-evidence-label">Sampling Coverage</span>
+                        <span className="pa-evidence-val">{assessment.evidence.samplingCoveragePct.toFixed(1)}%</span>
+                      </div>
+                      <div className="pa-evidence-row">
+                        <span className="pa-evidence-label">PnL Coverage (USD/%)</span>
+                        <span className="pa-evidence-val">{assessment.evidence.pnlUsdCoveragePct.toFixed(0)}% / {assessment.evidence.pnlPctCoveragePct.toFixed(0)}%</span>
+                      </div>
+                      <div className="pa-evidence-row">
+                        <span className="pa-evidence-label">Observed PnL Weeks</span>
+                        <span className="pa-evidence-val">{assessment.evidence.observedWeeksWithKnownPnl} weeks ({assessment.evidence.profitableWeeksCount} win)</span>
+                      </div>
+                      <div className="pa-evidence-row">
+                        <span className="pa-evidence-label">Entry Timestamp Cov</span>
+                        <span className="pa-evidence-val">{assessment.evidence.openingTimestampCoveragePct.toFixed(0)}%</span>
+                      </div>
+                      <div className="pa-evidence-row">
+                        <span className="pa-evidence-label">Median Hold Duration</span>
+                        <span className="pa-evidence-val">{formatDuration(assessment.evidence.medianHoldingTimeSeconds)}</span>
+                      </div>
+                      <div className="pa-evidence-row">
+                        <span className="pa-evidence-label">Typical Entry Size</span>
+                        <span className="pa-evidence-val">{formatUsd(assessment.evidence.medianInitialEntryUsd)}</span>
+                      </div>
+                    </div>
+
+                    <div style={{ marginTop: "12px", fontSize: "0.75rem", color: "var(--muted)", fontStyle: "italic" }}>
+                      * Median initial entry is shown as informational capital context only, not affordability evaluation.
+                    </div>
+                  </div>
+                </div>
+
+                {/* Limitations Banner */}
+                {assessment.limitations.length > 0 ? (
+                  <div className="pa-notice-banner" style={{ marginTop: "16px", background: "rgba(255,255,255,0.02)", border: "1px solid var(--border-soft)" }}>
+                    <Info size={15} color="var(--muted)" style={{ flexShrink: 0, marginTop: "2px" }} />
+                    <div style={{ fontSize: "0.78rem", color: "var(--muted)", display: "flex", flexDirection: "column", gap: "4px" }}>
+                      {assessment.limitations.map((lim, idx) => (
+                        <div key={idx}>• {lim}</div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ) : (
+              <div className="pa-card" style={{ padding: "16px 20px" }}>
+                <span style={{ fontSize: "0.85rem", color: "var(--muted)" }}>
+                  Monitoring assessment data is not yet available for this snapshot.
+                </span>
+              </div>
+            )}
+          </section>
+
           {/* ---------------------------------------------------- */}
           {/* SECTION B: CAPITAL & POSITION SIZING */}
           {/* ---------------------------------------------------- */}

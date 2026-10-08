@@ -339,3 +339,115 @@ export interface PositionMetricsResult {
     pairBreakdown: PairBreakdownItem[];
     poolBreakdown: PoolBreakdownItem[];
 }
+
+// ======================================================
+// STEP 4 MONITORING ASSESSMENT CONTRACTS
+// ======================================================
+
+export type MonitoringVerdict =
+    | "WORTH_MONITORING"
+    | "WATCH_WITH_CAUTION"
+    | "NOT_RECOMMENDED"
+    | "INSUFFICIENT_DATA";
+
+export type ManualFollowability =
+    | "HIGH"
+    | "MODERATE"
+    | "LOW"
+    | "UNKNOWN";
+
+export interface RiskAndConsistencyScoreComponent {
+    score: number;
+    maxScore: number;
+    cvar10Points: number;
+    weeklyRatioPoints: number;
+    cvar10: number | null;
+    profitableWeeksRatioPct: number | null;
+}
+
+export interface ProfitConcentrationScoreComponent {
+    score: number;
+    maxScore: number;
+    top1Points: number;
+    top5Points: number;
+    top1ConcentrationPct: number | null;
+    top5ConcentrationPct: number | null;
+}
+
+export interface TrackRecordScoreComponent {
+    score: number;
+    maxScore: number;
+    pnlObsPoints: number;
+    weeksPoints: number;
+    coveragePoints: number;
+    pnlUsdObservations: number;
+    pnlPctObservations: number;
+    observedWeeksWithKnownPnl: number;
+    pnlUsdCoveragePct: number;
+    pnlPctCoveragePct: number;
+}
+
+export interface ProfitabilityScoreComponent {
+    score: number;
+    maxScore: number;
+    sampleTotalPnlPoints: number;
+    medianPnlPctPoints: number;
+    sampleTotalPnlUsd: number | null;
+    medianPositionPnlPct: number | null;
+}
+
+export interface MonitoringScoreComponents {
+    riskAndConsistency: RiskAndConsistencyScoreComponent;
+    profitConcentration: ProfitConcentrationScoreComponent;
+    trackRecord: TrackRecordScoreComponent;
+    profitability: ProfitabilityScoreComponent;
+}
+
+export interface FollowabilityDetails {
+    medianHoldingTimeSeconds: number | null;
+    observedEntriesPerDay: number | null;
+    medianInitialEntryUsd: number | null;
+    holdingTimeObservations: number;
+    qualifyingOpeningObservations: number;
+    openingTimeCoveragePct: number;
+    label: "Historical Manual Followability Estimate";
+    description: string;
+}
+
+export interface MonitoringAssessmentEvidence {
+    sourceCoverageStatus: SourceCoverageStatus;
+    analyzedClosedPositions: number;
+    totalEligiblePositions: number;
+    isSampled: boolean;
+    samplingCoveragePct: number;
+    pnlUsdObservations: number;
+    pnlPctObservations: number;
+    pnlUsdCoveragePct: number;
+    pnlPctCoveragePct: number;
+    observedWeeksWithKnownPnl: number;
+    profitableWeeksCount: number;
+    historyStart: string | null;
+    historyEnd: string | null;
+    openingTimestampObservations: number;
+    openingTimestampCoveragePct: number;
+    holdingTimeObservations: number;
+    medianHoldingTimeSeconds: number | null;
+    observedEntriesPerDay: number | null;
+    medianInitialEntryUsd: number | null;
+}
+
+export interface MonitoringAssessmentResult {
+    version: "v1";
+    wallet: string;
+    period: AnalyticsPeriod;
+    sourceDatasetFetchedAt: string;
+    verdict: MonitoringVerdict;
+    monitoringScore: number | null;
+    scoreComponents: MonitoringScoreComponents | null;
+    manualFollowability: ManualFollowability;
+    followabilityDetails: FollowabilityDetails;
+    reasons: string[];
+    concerns: string[];
+    evidence: MonitoringAssessmentEvidence;
+    limitations: string[];
+}
