@@ -2,10 +2,13 @@ import {
     fabriqFetch,
     isFabriqDlmmPool,
     type FabriqFetchOptions,
+    type FabriqFetchCooldownCoordinator,
+    SharedCooldownCoordinator,
 } from "../discovery/core/fabriq-position-history.ts";
-import type {
-    RawPositionInput,
-    RawEventInput,
+import {
+    deduplicateRawEvents,
+    type RawPositionInput,
+    type RawEventInput,
 } from "./position-lifecycle-extractor.ts";
 
 export interface DiscoveredPoolItem {
@@ -26,21 +29,181 @@ export interface FabriqFetchPositionsResult {
     wallet: string;
     positions: RawPositionInput[];
     batchesFetched: number;
+    configuredConcurrency?: number;
+    peakInFlight?: number;
+    durationMs?: number;
+    retryCount?: number;
+    rateLimit429Count?: number;
 }
 
 export interface FabriqFetchTransactionsResult {
     wallet: string;
     events: RawEventInput[];
     batchesFetched: number;
+    configuredConcurrency?: number;
+    peakInFlight?: number;
+    durationMs?: number;
+    retryCount?: number;
+    rateLimit429Count?: number;
+    duplicatesRemoved?: number;
 }
 
 export const DEFAULT_MAX_404_RETRIES = Number(process.env.FABRIQ_MAX_404_RETRIES ?? "3");
 export const DEFAULT_DELAY_404_MS = Number(process.env.FABRIQ_404_DELAY_MS ?? "5000");
+export const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
+export const DEFAULT_POSITIONS_CONCURRENCY = 2;
+export const DEFAULT_TRANSACTIONS_CONCURRENCY = 3;
+export const DEFAULT_POSITIONS_BATCH_SIZE = 25;
+export const DEFAULT_TRANSACTIONS_BATCH_SIZE = 20;
+
+export const defaultPositionAnalyticsCooldown = new SharedCooldownCoordinator();
 
 export interface ClientLoggingOptions {
     onLog?: (msg: string) => void;
     max404Retries?: number;
     delay404Ms?: number;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+    concurrency?: number;
+    cooldownCoordinator?: FabriqFetchCooldownCoordinator;
+}
+
+export interface BoundedQueueOptions<TItem, TResult> {
+    items: TItem[];
+    concurrency: number;
+    worker: (item: TItem, index: number) => Promise<TResult>;
+    signal?: AbortSignal;
+    onProgress?: (progress: {
+        index: number;
+        total: number;
+        active: number;
+        peak: number;
+        stage: "start" | "success" | "error";
+        durationMs?: number;
+    }) => void;
+}
+
+export interface BoundedQueueStats {
+    totalItems: number;
+    peakInFlight: number;
+    durationMs: number;
+}
+
+/**
+ * Generic bounded worker queue preserving item order and failing fast on error.
+ */
+export async function runBoundedWorkerQueue<TItem, TResult>(
+    options: BoundedQueueOptions<TItem, TResult>
+): Promise<{ results: TResult[]; stats: BoundedQueueStats }> {
+    const { items, concurrency, worker, signal, onProgress } = options;
+    const total = items.length;
+    if (total === 0) {
+        return {
+            results: [],
+            stats: { totalItems: 0, peakInFlight: 0, durationMs: 0 },
+        };
+    }
+
+    if (signal?.aborted) {
+        throw signal.reason ?? new Error("Operation aborted");
+    }
+
+    const maxConcurrency = Math.max(1, Math.min(concurrency, total));
+    const results: TResult[] = new Array(total);
+    let nextIndex = 0;
+    let activeCount = 0;
+    let peakInFlight = 0;
+    let failureError: unknown = null;
+    let isTerminated = false;
+    const startTime = Date.now();
+
+    const { promise, resolve, reject } = Promise.withResolvers<{ results: TResult[]; stats: BoundedQueueStats }>();
+
+    const onAbort = () => {
+        isTerminated = true;
+        reject(signal?.reason ?? new Error("Operation aborted"));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+
+    const launchNext = () => {
+        if (isTerminated || signal?.aborted) return;
+
+        if (failureError) {
+            isTerminated = true;
+            signal?.removeEventListener("abort", onAbort);
+            reject(failureError);
+            return;
+        }
+
+        if (nextIndex >= total) {
+            if (activeCount === 0) {
+                isTerminated = true;
+                signal?.removeEventListener("abort", onAbort);
+                resolve({
+                    results,
+                    stats: {
+                        totalItems: total,
+                        peakInFlight,
+                        durationMs: Date.now() - startTime,
+                    },
+                });
+            }
+            return;
+        }
+
+        while (activeCount < maxConcurrency && nextIndex < total && !isTerminated) {
+            const currentIndex = nextIndex++;
+            const currentItem = items[currentIndex];
+            activeCount++;
+            if (activeCount > peakInFlight) {
+                peakInFlight = activeCount;
+            }
+
+            const itemStart = Date.now();
+            onProgress?.({
+                index: currentIndex,
+                total,
+                active: activeCount,
+                peak: peakInFlight,
+                stage: "start",
+            });
+
+            worker(currentItem, currentIndex)
+                .then((res) => {
+                    results[currentIndex] = res;
+                    activeCount--;
+                    onProgress?.({
+                        index: currentIndex,
+                        total,
+                        active: activeCount,
+                        peak: peakInFlight,
+                        stage: "success",
+                        durationMs: Date.now() - itemStart,
+                    });
+                    launchNext();
+                })
+                .catch((err: unknown) => {
+                    activeCount--;
+                    onProgress?.({
+                        index: currentIndex,
+                        total,
+                        active: activeCount,
+                        peak: peakInFlight,
+                        stage: "error",
+                        durationMs: Date.now() - itemStart,
+                    });
+                    if (!failureError) {
+                        failureError = err;
+                    }
+                    isTerminated = true;
+                    signal?.removeEventListener("abort", onAbort);
+                    reject(failureError);
+                });
+        }
+    };
+
+    launchNext();
+    return promise;
 }
 
 /**
@@ -52,7 +215,6 @@ export async function discoverWalletDlmmPools(
 ): Promise<FabriqPoolDiscoveryResult> {
     const log = options?.onLog ?? ((msg: string) => console.log(msg));
     log(`[FABRIQ-DISC] Discovering DLMM pools for wallet: ${wallet}`);
-
     const allDiscoveredPools: DiscoveredPoolItem[] = [];
     const seenPoolIds = new Set<string>();
     let page = 1;
@@ -81,6 +243,9 @@ export async function discoverWalletDlmmPools(
             onLog: log,
             max404Retries: options?.max404Retries ?? DEFAULT_MAX_404_RETRIES,
             delay404Ms: options?.delay404Ms ?? DEFAULT_DELAY_404_MS,
+            timeoutMs: options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+            signal: options?.signal,
+            cooldownCoordinator: options?.cooldownCoordinator ?? defaultPositionAnalyticsCooldown,
         };
         const resJson = await fabriqFetch<unknown>(
             `/history/${wallet}/pnl-by-pool`,
@@ -166,76 +331,118 @@ export async function fetchWalletPositionsForPools(
     options?: ClientLoggingOptions & { batchSize?: number }
 ): Promise<FabriqFetchPositionsResult> {
     const log = options?.onLog ?? ((msg: string) => console.log(msg));
-    const batchSize = Math.max(1, options?.batchSize ?? 25);
-    const positions: RawPositionInput[] = [];
+    const batchSize = Math.max(1, options?.batchSize ?? DEFAULT_POSITIONS_BATCH_SIZE);
+    const concurrency = Math.max(1, options?.concurrency ?? DEFAULT_POSITIONS_CONCURRENCY);
+    const timeoutMs = options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    const cooldownCoordinator = options?.cooldownCoordinator ?? defaultPositionAnalyticsCooldown;
     const allowedPoolIds = new Set(poolIds);
-    let batchesFetched = 0;
 
+    const batches: string[][] = [];
     for (let i = 0; i < poolIds.length; i += batchSize) {
-        batchesFetched++;
-        const batch = poolIds.slice(i, i + batchSize);
-        const params = new URLSearchParams();
-        params.set("poolIds", batch.join(","));
-        params.append("sources", "wallet");
-        params.append("sources", "hawkfi");
-        params.set("timezone", "Asia/Jakarta");
-        params.set("pnlCurrency", "USD");
-        params.set("pnlScope", "pool");
-        params.set("lastCloseScope", "pool");
-        params.set("durationScope", "pool");
-        params.set("depositsScope", "pool");
-        params.set("withdrawalsScope", "pool");
-        params.set("feesScope", "pool");
-
-        log(`[FABRIQ-POS] Fetching positions batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(poolIds.length / batchSize)} (${batch.length} pools)...`);
-
-        const fetchOpts: FabriqFetchOptions = {
-            onLog: log,
-            max404Retries: options?.max404Retries ?? DEFAULT_MAX_404_RETRIES,
-            delay404Ms: options?.delay404Ms ?? DEFAULT_DELAY_404_MS,
-        };
-        const posRes = await fabriqFetch<unknown>(
-            `/history/${wallet}/positions-by-pool`,
-            params,
-            fetchOpts
-        );
-
-        let dataNode: unknown = posRes;
-        if (posRes && typeof posRes === "object" && "data" in posRes) {
-            dataNode = (posRes as Record<string, unknown>).data;
-        }
-
-        if (dataNode && typeof dataNode === "object" && !Array.isArray(dataNode)) {
-            const mapObj = dataNode as Record<string, unknown>;
-            for (const [poolIdKey, list] of Object.entries(mapObj)) {
-                if (!allowedPoolIds.has(poolIdKey)) continue;
-                if (Array.isArray(list)) {
-                    for (const item of list) {
-                        if (!item || typeof item !== "object") continue;
-                        const pos = item as Record<string, unknown>;
-                        if (!pos.id) continue;
-                        positions.push(normalizeRawPositionRecord(pos, poolIdKey));
-                    }
-                }
-            }
-        } else if (Array.isArray(dataNode)) {
-            for (const item of dataNode) {
-                if (!item || typeof item !== "object") continue;
-                const pos = item as Record<string, unknown>;
-                if (!pos.id) continue;
-                const poolId = String(pos.pool_id || pos.poolId || "");
-                if (poolId && !allowedPoolIds.has(poolId)) continue;
-                positions.push(normalizeRawPositionRecord(pos, poolId));
-            }
-        }
+        batches.push(poolIds.slice(i, i + batchSize));
     }
 
-    log(`[FABRIQ-POS] Fetched ${positions.length} positions across ${poolIds.length} pools in ${batchesFetched} batches`);
+    log(`[FABRIQ-POS] Starting positions fetch for ${poolIds.length} pools across ${batches.length} batches (concurrency: ${concurrency}, batchSize: ${batchSize}, timeout: ${Math.round(timeoutMs / 1000)}s)`);
+
+    let retryCount = 0;
+    let rateLimit429Count = 0;
+
+    const queueResult = await runBoundedWorkerQueue({
+        items: batches,
+        concurrency,
+        signal: options?.signal,
+        worker: async (batch: string[]) => {
+            const params = new URLSearchParams();
+            params.set("poolIds", batch.join(","));
+            params.append("sources", "wallet");
+            params.append("sources", "hawkfi");
+            params.set("timezone", "Asia/Jakarta");
+            params.set("pnlCurrency", "USD");
+            params.set("pnlScope", "pool");
+            params.set("lastCloseScope", "pool");
+            params.set("durationScope", "pool");
+            params.set("depositsScope", "pool");
+            params.set("withdrawalsScope", "pool");
+            params.set("feesScope", "pool");
+
+            const fetchOpts: FabriqFetchOptions = {
+                onLog: log,
+                max404Retries: options?.max404Retries ?? DEFAULT_MAX_404_RETRIES,
+                delay404Ms: options?.delay404Ms ?? DEFAULT_DELAY_404_MS,
+                timeoutMs,
+                signal: options?.signal,
+                cooldownCoordinator,
+                onRetry: (info) => {
+                    retryCount++;
+                    if (info.status === 429) rateLimit429Count++;
+                },
+            };
+
+            const posRes = await fabriqFetch<unknown>(
+                `/history/${wallet}/positions-by-pool`,
+                params,
+                fetchOpts
+            );
+
+            let dataNode: unknown = posRes;
+            if (posRes && typeof posRes === "object" && "data" in posRes) {
+                dataNode = (posRes as Record<string, unknown>).data;
+            }
+
+            const batchPositions: RawPositionInput[] = [];
+
+            if (dataNode && typeof dataNode === "object" && !Array.isArray(dataNode)) {
+                const mapObj = dataNode as Record<string, unknown>;
+                for (const [poolIdKey, list] of Object.entries(mapObj)) {
+                    if (!allowedPoolIds.has(poolIdKey)) continue;
+                    if (Array.isArray(list)) {
+                        for (const item of list) {
+                            if (!item || typeof item !== "object") continue;
+                            const pos = item as Record<string, unknown>;
+                            if (!pos.id) continue;
+                            batchPositions.push(normalizeRawPositionRecord(pos, poolIdKey));
+                        }
+                    }
+                }
+            } else if (Array.isArray(dataNode)) {
+                for (const item of dataNode) {
+                    if (!item || typeof item !== "object") continue;
+                    const pos = item as Record<string, unknown>;
+                    if (!pos.id) continue;
+                    const poolId = String(pos.pool_id || pos.poolId || "");
+                    if (poolId && !allowedPoolIds.has(poolId)) continue;
+                    batchPositions.push(normalizeRawPositionRecord(pos, poolId));
+                }
+            }
+
+            return batchPositions;
+        },
+        onProgress: (p) => {
+            const batchNum = p.index + 1;
+            if (p.stage === "start") {
+                log(`[FABRIQ-POS] [Batch ${batchNum}/${p.total}] Fetching batch | active: ${p.active}/${concurrency} (peak: ${p.peak})`);
+            } else if (p.stage === "success") {
+                log(`[FABRIQ-POS] [Batch ${batchNum}/${p.total}] Completed in ${p.durationMs}ms | active: ${p.active}/${concurrency}`);
+            } else if (p.stage === "error") {
+                log(`[FABRIQ-POS] [Batch ${batchNum}/${p.total}] FAILED after ${p.durationMs}ms`);
+            }
+        },
+    });
+
+    // Flatten in strict batch order
+    const positions: RawPositionInput[] = queueResult.results.flatMap((batchPositions) => batchPositions);
+
+    log(`[FABRIQ-POS] Fetched ${positions.length} positions across ${poolIds.length} pools in ${batches.length} batches (${queueResult.stats.durationMs}ms, peak in-flight: ${queueResult.stats.peakInFlight}, retries: ${retryCount}, 429s: ${rateLimit429Count})`);
 
     return {
         wallet,
         positions,
-        batchesFetched,
+        batchesFetched: batches.length,
+        configuredConcurrency: concurrency,
+        peakInFlight: queueResult.stats.peakInFlight,
+        durationMs: queueResult.stats.durationMs,
+        retryCount,
+        rateLimit429Count,
     };
 }
 
@@ -281,100 +488,148 @@ export async function fetchTransactionsForPositions(
     options?: ClientLoggingOptions & { batchSize?: number }
 ): Promise<FabriqFetchTransactionsResult> {
     const log = options?.onLog ?? ((msg: string) => console.log(msg));
-    const batchSize = Math.max(1, options?.batchSize ?? 20);
-    const events: RawEventInput[] = [];
-    let batchesFetched = 0;
+    const batchSize = Math.max(1, options?.batchSize ?? DEFAULT_TRANSACTIONS_BATCH_SIZE);
+    const concurrency = Math.max(1, options?.concurrency ?? DEFAULT_TRANSACTIONS_CONCURRENCY);
+    const timeoutMs = options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    const cooldownCoordinator = options?.cooldownCoordinator ?? defaultPositionAnalyticsCooldown;
 
+    const batches: string[][] = [];
     for (let i = 0; i < positionIds.length; i += batchSize) {
-        batchesFetched++;
-        const batch = positionIds.slice(i, i + batchSize);
-        const params = new URLSearchParams();
-        params.set("positionIds", batch.join(","));
+        batches.push(positionIds.slice(i, i + batchSize));
+    }
 
-        log(`[FABRIQ-TX] Fetching transactions batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(positionIds.length / batchSize)} (${batch.length} positions)...`);
+    log(`[FABRIQ-TX] Starting transactions fetch for ${positionIds.length} positions across ${batches.length} batches (concurrency: ${concurrency}, batchSize: ${batchSize}, timeout: ${Math.round(timeoutMs / 1000)}s)`);
 
-        const fetchOpts: FabriqFetchOptions = {
-            onLog: log,
-            max404Retries: options?.max404Retries ?? DEFAULT_MAX_404_RETRIES,
-            delay404Ms: options?.delay404Ms ?? DEFAULT_DELAY_404_MS,
-        };
-        const txRes = await fabriqFetch<unknown>(
-            `/history/transactions`,
-            params,
-            fetchOpts
-        );
+    let retryCount = 0;
+    let rateLimit429Count = 0;
 
-        let dataNode: unknown = txRes;
-        if (txRes && typeof txRes === "object" && "data" in txRes) {
-            dataNode = (txRes as Record<string, unknown>).data;
-        }
+    const queueResult = await runBoundedWorkerQueue({
+        items: batches,
+        concurrency,
+        signal: options?.signal,
+        worker: async (batch: string[]) => {
+            const params = new URLSearchParams();
+            params.set("positionIds", batch.join(","));
 
-        const rawEventList: Record<string, unknown>[] = [];
+            const fetchOpts: FabriqFetchOptions = {
+                onLog: log,
+                max404Retries: options?.max404Retries ?? DEFAULT_MAX_404_RETRIES,
+                delay404Ms: options?.delay404Ms ?? DEFAULT_DELAY_404_MS,
+                timeoutMs,
+                signal: options?.signal,
+                cooldownCoordinator,
+                onRetry: (info) => {
+                    retryCount++;
+                    if (info.status === 429) rateLimit429Count++;
+                },
+            };
 
-        if (dataNode && typeof dataNode === "object" && !Array.isArray(dataNode)) {
-            const mapObj = dataNode as Record<string, unknown>;
-            for (const [posId, list] of Object.entries(mapObj)) {
-                if (Array.isArray(list)) {
-                    for (const item of list) {
-                        if (item && typeof item === "object") {
-                            const rec = item as Record<string, unknown>;
-                            rawEventList.push({
-                                ...rec,
-                                position_id: rec.position_id || rec.positionId || posId,
-                            });
+            const txRes = await fabriqFetch<unknown>(
+                `/history/transactions`,
+                params,
+                fetchOpts
+            );
+
+            let dataNode: unknown = txRes;
+            if (txRes && typeof txRes === "object" && "data" in txRes) {
+                dataNode = (txRes as Record<string, unknown>).data;
+            }
+
+            const rawEventList: Record<string, unknown>[] = [];
+
+            if (dataNode && typeof dataNode === "object" && !Array.isArray(dataNode)) {
+                const mapObj = dataNode as Record<string, unknown>;
+                for (const [posId, list] of Object.entries(mapObj)) {
+                    if (Array.isArray(list)) {
+                        for (const item of list) {
+                            if (item && typeof item === "object") {
+                                const rec = item as Record<string, unknown>;
+                                rawEventList.push({
+                                    ...rec,
+                                    position_id: rec.position_id || rec.positionId || posId,
+                                });
+                            }
                         }
                     }
                 }
-            }
-        } else if (Array.isArray(dataNode)) {
-            for (const item of dataNode) {
-                if (item && typeof item === "object") {
-                    rawEventList.push(item as Record<string, unknown>);
+            } else if (Array.isArray(dataNode)) {
+                for (const item of dataNode) {
+                    if (item && typeof item === "object") {
+                        rawEventList.push(item as Record<string, unknown>);
+                    }
                 }
             }
-        }
 
-        for (const tx of rawEventList) {
-            const positionId = String(tx.position_id || tx.positionId || tx.position || "");
-            const poolId = String(tx.pool_id || tx.poolId || positionToPoolMap.get(positionId) || "");
-            const rawId = String(tx.id || tx._id || "");
-            const rawType = String(tx.type || tx.rawType || tx.action || "UNKNOWN");
-            const createdAt = String(tx.created_at || tx.createdAt || tx.timestamp || "");
-            const signature = String(tx.signature || tx.tx_hash || tx.txHash || "");
-            const source = String(tx.source || "wallet");
+            const batchEvents: RawEventInput[] = [];
+            for (const tx of rawEventList) {
+                const positionId = String(tx.position_id || tx.positionId || tx.position || "");
+                const poolId = String(tx.pool_id || tx.poolId || positionToPoolMap.get(positionId) || "");
+                const rawId = String(tx.id || tx._id || "");
+                const rawType = String(tx.type || tx.rawType || tx.action || "UNKNOWN");
+                const createdAt = String(tx.created_at || tx.createdAt || tx.timestamp || "");
+                const signature = String(tx.signature || tx.tx_hash || tx.txHash || "");
+                const source = String(tx.source || "wallet");
 
-            const numOrNull = (val: unknown): number | null => {
-                if (val === null || val === undefined || val === "") return null;
-                const n = Number(val);
-                return Number.isFinite(n) ? n : null;
-            };
+                const numOrNull = (val: unknown): number | null => {
+                    if (val === null || val === undefined || val === "") return null;
+                    const n = Number(val);
+                    return Number.isFinite(n) ? n : null;
+                };
 
-            events.push({
-                rawId,
-                rawType,
-                positionId,
-                poolId,
-                createdAt,
-                signature,
-                source,
-                tokenXAmount: numOrNull(tx.token_x_amount ?? tx.tokenXAmount),
-                tokenYAmount: numOrNull(tx.token_y_amount ?? tx.tokenYAmount),
-                tokenXAmountUsd: numOrNull(tx.token_x_amount_usd ?? tx.tokenXAmountUsd),
-                tokenYAmountUsd: numOrNull(tx.token_y_amount_usd ?? tx.tokenYAmountUsd),
-                tokenXAmountSol: numOrNull(tx.token_x_amount_sol ?? tx.tokenXAmountSol),
-                tokenYAmountSol: numOrNull(tx.token_y_amount_sol ?? tx.tokenYAmountSol),
-                totalInUsd: numOrNull(tx.total_in_usd ?? tx.totalInUsd ?? tx.total_usd),
-                totalInSol: numOrNull(tx.total_in_sol ?? tx.totalInSol ?? tx.total_sol),
-                raw: tx,
-            });
-        }
+                batchEvents.push({
+                    rawId,
+                    rawType,
+                    positionId,
+                    poolId,
+                    createdAt,
+                    signature,
+                    source,
+                    tokenXAmount: numOrNull(tx.token_x_amount ?? tx.tokenXAmount),
+                    tokenYAmount: numOrNull(tx.token_y_amount ?? tx.tokenYAmount),
+                    tokenXAmountUsd: numOrNull(tx.token_x_amount_usd ?? tx.tokenXAmountUsd),
+                    tokenYAmountUsd: numOrNull(tx.token_y_amount_usd ?? tx.tokenYAmountUsd),
+                    tokenXAmountSol: numOrNull(tx.token_x_amount_sol ?? tx.tokenXAmountSol),
+                    tokenYAmountSol: numOrNull(tx.token_y_amount_sol ?? tx.tokenYAmountSol),
+                    totalInUsd: numOrNull(tx.total_in_usd ?? tx.totalInUsd ?? tx.total_usd),
+                    totalInSol: numOrNull(tx.total_in_sol ?? tx.totalInSol ?? tx.total_usd),
+                    raw: tx,
+                });
+            }
+
+            return batchEvents;
+        },
+        onProgress: (p) => {
+            const batchNum = p.index + 1;
+            if (p.stage === "start") {
+                log(`[FABRIQ-TX] [Batch ${batchNum}/${p.total}] Fetching batch | active: ${p.active}/${concurrency} (peak: ${p.peak})`);
+            } else if (p.stage === "success") {
+                log(`[FABRIQ-TX] [Batch ${batchNum}/${p.total}] Completed in ${p.durationMs}ms | active: ${p.active}/${concurrency}`);
+            } else if (p.stage === "error") {
+                log(`[FABRIQ-TX] [Batch ${batchNum}/${p.total}] FAILED after ${p.durationMs}ms`);
+            }
+        },
+    });
+
+    // Flatten in strict batch order
+    const allEvents: RawEventInput[] = queueResult.results.flatMap((batchEvents) => batchEvents);
+
+    // Conservative deduplication of duplicate events with strong identity evidence
+    const { deduplicated, duplicatesRemoved } = deduplicateRawEvents(allEvents);
+    if (duplicatesRemoved > 0) {
+        log(`[FABRIQ-TX] Deduplicated ${duplicatesRemoved} redundant event records (${deduplicated.length} retained)`);
     }
 
-    log(`[FABRIQ-TX] Fetched ${events.length} transaction events across ${positionIds.length} positions in ${batchesFetched} batches`);
+    log(`[FABRIQ-TX] Fetched ${deduplicated.length} transaction events across ${positionIds.length} positions in ${batches.length} batches (${queueResult.stats.durationMs}ms, peak in-flight: ${queueResult.stats.peakInFlight}, retries: ${retryCount}, 429s: ${rateLimit429Count})`);
 
     return {
         wallet,
-        events,
-        batchesFetched,
+        events: deduplicated,
+        batchesFetched: batches.length,
+        configuredConcurrency: concurrency,
+        peakInFlight: queueResult.stats.peakInFlight,
+        durationMs: queueResult.stats.durationMs,
+        retryCount,
+        rateLimit429Count,
+        duplicatesRemoved,
     };
 }

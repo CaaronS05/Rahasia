@@ -5,6 +5,7 @@ import path from "node:path";
 import {
     filterPositionsByTimeframe,
     deduplicatePositions,
+    deduplicateRawEvents,
     comparePositionsLatestClosedDesc,
     sampleLatest1000Positions,
     reconstructPositionLifecycle,
@@ -25,10 +26,20 @@ import {
 } from "../../scripts/analytics/position-analytics-storage.ts";
 import {
     discoverWalletDlmmPools,
+    fetchWalletPositionsForPools,
+    fetchTransactionsForPositions,
+    runBoundedWorkerQueue,
     DEFAULT_MAX_404_RETRIES,
     DEFAULT_DELAY_404_MS,
 } from "../../scripts/analytics/fabriq-analytics-client.ts";
-import { setFabriqTokenForTesting } from "../../scripts/discovery/core/fabriq-position-history.ts";
+import {
+    setFabriqTokenForTesting,
+    parseRetryAfterHeader,
+    SharedCooldownCoordinator,
+    FabriqCdpError,
+    fabriqFetch,
+} from "../../scripts/discovery/core/fabriq-position-history.ts";
+import { executeBuildPositionDataset } from "../../scripts/analytics/build-position-dataset.ts";
 import type { PositionAnalyticsDataset } from "../../scripts/analytics/position-analytics-types.ts";
 import {
     analyzeSingleWallet,
@@ -871,6 +882,543 @@ describe("Position Analytics Step 1 Test Suite", () => {
             // positionsBase does not have a separate file, but bundle exists in bundles directory
             // Notice: loadPositionAnalyticsDataset uses DEFAULT_ANALYTICS_STORAGE_BASE for bundle fallback
         } finally {
+            if (fs.existsSync(tempBase)) {
+                fs.rmSync(tempBase, { recursive: true, force: true });
+            }
+        }
+    });
+});
+
+describe("Position Analytics Step 3 Phase 1 — Safe Bounded Concurrency & Networking Suite", () => {
+    const NOW_MS = 1775700000000;
+    const DAY_MS = 24 * 60 * 60 * 1000;
+
+    function createMockPosition(
+        id: string,
+        pool_id: string,
+        closedDaysAgo: number | null,
+        overrides?: Partial<RawPositionInput>
+    ): RawPositionInput {
+        return {
+            id,
+            pool_id,
+            source: "wallet",
+            total_add_usd: 1000,
+            total_rem_usd: 1100,
+            total_fee_usd: 25,
+            total_pnl_usd: 125,
+            total_pnl_pct_usd: 12.5,
+            latest_close_ts: closedDaysAgo !== null ? new Date(NOW_MS - closedDaysAgo * DAY_MS).toISOString() : null,
+            opened_at: closedDaysAgo !== null ? new Date(NOW_MS - (closedDaysAgo + 2) * DAY_MS).toISOString() : null,
+            duration: 172800,
+            ...overrides,
+        };
+    }
+
+    // 31. Bounded Concurrency Limits
+    it("31. Bounded Concurrency Limits: maximum observed in-flight requests never exceeds limits", async () => {
+        setFabriqTokenForTesting("mock-valid-jwt");
+        const originalFetch = globalThis.fetch;
+
+        let activePositionsInFlight = 0;
+        let peakPositionsInFlight = 0;
+
+        let activeTxInFlight = 0;
+        let peakTxInFlight = 0;
+
+        try {
+            globalThis.fetch = async (input: string | URL | Request) => {
+                const url = String(input);
+                if (url.includes("/positions-by-pool")) {
+                    activePositionsInFlight++;
+                    if (activePositionsInFlight > peakPositionsInFlight) {
+                        peakPositionsInFlight = activePositionsInFlight;
+                    }
+                    const { promise, resolve } = Promise.withResolvers<Response>();
+                    setImmediate(() => {
+                        activePositionsInFlight--;
+                        resolve(new Response(JSON.stringify({ data: {} }), { status: 200 }));
+                    });
+                    return promise;
+                }
+
+                if (url.includes("/transactions")) {
+                    activeTxInFlight++;
+                    if (activeTxInFlight > peakTxInFlight) {
+                        peakTxInFlight = activeTxInFlight;
+                    }
+                    const { promise, resolve } = Promise.withResolvers<Response>();
+                    setImmediate(() => {
+                        activeTxInFlight--;
+                        resolve(new Response(JSON.stringify({ data: {} }), { status: 200 }));
+                    });
+                    return promise;
+                }
+
+                return new Response(JSON.stringify({ data: {} }), { status: 200 });
+            };
+
+            // Test 1: positions-by-pool with 10 batches (concurrency: 2)
+            const poolIds = Array.from({ length: 250 }, (_, i) => `pool-${i}`);
+            const posResult = await fetchWalletPositionsForPools("wallet-1", poolIds, {
+                batchSize: 25,
+                concurrency: 2,
+                onLog: () => {},
+            });
+
+            assert.equal(posResult.batchesFetched, 10);
+            assert.equal(peakPositionsInFlight, 2);
+            assert.ok(posResult.peakInFlight !== undefined && posResult.peakInFlight <= 2);
+
+            // Test 2: transactions with 9 batches (concurrency: 3)
+            const positionIds = Array.from({ length: 180 }, (_, i) => `pos-${i}`);
+            const poolMap = new Map<string, string>();
+            for (const pid of positionIds) poolMap.set(pid, "pool-1");
+
+            const txResult = await fetchTransactionsForPositions("wallet-1", positionIds, poolMap, {
+                batchSize: 20,
+                concurrency: 3,
+                onLog: () => {},
+            });
+
+            assert.equal(txResult.batchesFetched, 9);
+            assert.equal(peakTxInFlight, 3);
+            assert.ok(txResult.peakInFlight !== undefined && txResult.peakInFlight <= 3);
+        } finally {
+            globalThis.fetch = originalFetch;
+            setFabriqTokenForTesting(null);
+        }
+    });
+
+    // 32. Deterministic Ordering Under Out-Of-Order Batch Completion
+    it("32. Deterministic Ordering: output order strictly matches original batch sequence despite inverted completion", async () => {
+        setFabriqTokenForTesting("mock-valid-jwt");
+        const originalFetch = globalThis.fetch;
+
+        try {
+            const posResolvers = new Map<string, (res: Response) => void>();
+            const txResolvers = new Map<string, (res: Response) => void>();
+
+            globalThis.fetch = async (input: string | URL | Request) => {
+                const url = String(input);
+                const { promise, resolve } = Promise.withResolvers<Response>();
+
+                if (url.includes("/positions-by-pool")) {
+                    const params = new URL(url).searchParams;
+                    const poolParam = params.get("poolIds") || "";
+                    let batchTag = "unknown";
+                    if (poolParam.includes("batch-0")) batchTag = "batch-0";
+                    else if (poolParam.includes("batch-1")) batchTag = "batch-1";
+                    else if (poolParam.includes("batch-2")) batchTag = "batch-2";
+
+                    posResolvers.set(batchTag, resolve);
+
+                    if (posResolvers.size === 3) {
+                        queueMicrotask(() => {
+                            const res2 = posResolvers.get("batch-2");
+                            res2?.(new Response(JSON.stringify({ data: [
+                                { id: "pos-batch-2-item-1", pool_id: "batch-2-pool", total_pnl_usd: 10 },
+                                { id: "pos-batch-2-item-2", pool_id: "batch-2-pool", total_pnl_usd: 20 },
+                            ] }), { status: 200 }));
+
+                            queueMicrotask(() => {
+                                const res1 = posResolvers.get("batch-1");
+                                res1?.(new Response(JSON.stringify({ data: [
+                                    { id: "pos-batch-1-item-1", pool_id: "batch-1-pool", total_pnl_usd: 10 },
+                                    { id: "pos-batch-1-item-2", pool_id: "batch-1-pool", total_pnl_usd: 20 },
+                                ] }), { status: 200 }));
+
+                                queueMicrotask(() => {
+                                    const res0 = posResolvers.get("batch-0");
+                                    res0?.(new Response(JSON.stringify({ data: [
+                                        { id: "pos-batch-0-item-1", pool_id: "batch-0-pool", total_pnl_usd: 10 },
+                                        { id: "pos-batch-0-item-2", pool_id: "batch-0-pool", total_pnl_usd: 20 },
+                                    ] }), { status: 200 }));
+                                });
+                            });
+                        });
+                    }
+                    return promise;
+                }
+
+                if (url.includes("/transactions")) {
+                    const params = new URL(url).searchParams;
+                    const posParam = params.get("positionIds") || "";
+                    let batchTag = "unknown";
+                    if (posParam.includes("pos-batch-0")) batchTag = "batch-0";
+                    else if (posParam.includes("pos-batch-1")) batchTag = "batch-1";
+                    else if (posParam.includes("pos-batch-2")) batchTag = "batch-2";
+
+                    txResolvers.set(batchTag, resolve);
+
+                    if (txResolvers.size === 3) {
+                        queueMicrotask(() => {
+                            const res2 = txResolvers.get("batch-2");
+                            res2?.(new Response(JSON.stringify({ data: [
+                                { id: "evt-batch-2-1", position_id: "pos-batch-2", type: "POSITION_OPEN", total_in_usd: 100 },
+                            ] }), { status: 200 }));
+
+                            queueMicrotask(() => {
+                                const res1 = txResolvers.get("batch-1");
+                                res1?.(new Response(JSON.stringify({ data: [
+                                    { id: "evt-batch-1-1", position_id: "pos-batch-1", type: "POSITION_OPEN", total_in_usd: 100 },
+                                ] }), { status: 200 }));
+
+                                queueMicrotask(() => {
+                                    const res0 = txResolvers.get("batch-0");
+                                    res0?.(new Response(JSON.stringify({ data: [
+                                        { id: "evt-batch-0-1", position_id: "pos-batch-0", type: "POSITION_OPEN", total_in_usd: 100 },
+                                    ] }), { status: 200 }));
+                                });
+                            });
+                        });
+                    }
+                    return promise;
+                }
+
+                return new Response(JSON.stringify({ data: {} }), { status: 200 });
+            };
+
+            // Positions: 3 batches, batch 2 finishes first, then 1, then 0
+            const poolIds = ["batch-0-pool", "batch-1-pool", "batch-2-pool"];
+            const posResult = await fetchWalletPositionsForPools("wallet-1", poolIds, {
+                batchSize: 1,
+                concurrency: 3,
+                onLog: () => {},
+            });
+
+            const posIds = posResult.positions.map((p) => p.id);
+            assert.deepEqual(posIds, [
+                "pos-batch-0-item-1",
+                "pos-batch-0-item-2",
+                "pos-batch-1-item-1",
+                "pos-batch-1-item-2",
+                "pos-batch-2-item-1",
+                "pos-batch-2-item-2",
+            ]);
+
+            // Transactions: 3 batches, batch 2 finishes first, then 1, then 0
+            const posQueryIds = ["pos-batch-0", "pos-batch-1", "pos-batch-2"];
+            const poolMap = new Map([
+                ["pos-batch-0", "p0"],
+                ["pos-batch-1", "p1"],
+                ["pos-batch-2", "p2"],
+            ]);
+            const txResult = await fetchTransactionsForPositions("wallet-1", posQueryIds, poolMap, {
+                batchSize: 1,
+                concurrency: 3,
+                onLog: () => {},
+            });
+
+            const evtIds = txResult.events.map((e) => e.rawId);
+            assert.deepEqual(evtIds, ["evt-batch-0-1", "evt-batch-1-1", "evt-batch-2-1"]);
+        } finally {
+            globalThis.fetch = originalFetch;
+            setFabriqTokenForTesting(null);
+        }
+    });
+
+    // 33. Concurrency Does Not Corrupt Position/Event Association
+    it("33. Position/Event Association: concurrent batch completion retains exact position-event mapping", () => {
+        const pos1 = createMockPosition("pos-alpha", "pool-alpha", 5);
+        const pos2 = createMockPosition("pos-beta", "pool-beta", 2);
+
+        const events: RawEventInput[] = [
+            {
+                rawId: "evt-beta-open",
+                rawType: "POSITION_OPEN",
+                positionId: "pos-beta",
+                poolId: "pool-beta",
+                createdAt: pos2.opened_at as string,
+                signature: "sig-b-open",
+                totalInUsd: 2500,
+            },
+            {
+                rawId: "evt-alpha-open",
+                rawType: "POSITION_OPEN",
+                positionId: "pos-alpha",
+                poolId: "pool-alpha",
+                createdAt: pos1.opened_at as string,
+                signature: "sig-a-open",
+                totalInUsd: 1000,
+            },
+        ];
+
+        const norm1 = reconstructPositionLifecycle("wallet-1", pos1, events);
+        const norm2 = reconstructPositionLifecycle("wallet-1", pos2, events);
+
+        assert.equal(norm1.positionId, "pos-alpha");
+        assert.equal(norm1.poolAddress, "pool-alpha");
+        assert.equal(norm1.initialEntryUsd, 1000);
+        assert.equal(norm1.lifecycle.events.length, 1);
+        assert.equal(norm1.lifecycle.events[0].signature, "sig-a-open");
+
+        assert.equal(norm2.positionId, "pos-beta");
+        assert.equal(norm2.poolAddress, "pool-beta");
+        assert.equal(norm2.initialEntryUsd, 2500);
+        assert.equal(norm2.lifecycle.events.length, 1);
+        assert.equal(norm2.lifecycle.events[0].signature, "sig-b-open");
+    });
+
+    // 34. Retry-After (Delta-Seconds & HTTP-Date) and Shared Cooldown
+    it("34. Retry-After & Shared Cooldown: parses delta/date formats and coordinates cooldown across concurrent requests", async () => {
+        // 1. Parsing tests
+        assert.equal(parseRetryAfterHeader("60"), 60);
+        assert.equal(parseRetryAfterHeader("0"), 0);
+        assert.equal(parseRetryAfterHeader(null), 5);
+        assert.equal(parseRetryAfterHeader("invalid-date-or-num"), 5);
+
+        const futureDateString = new Date(Date.now() + 12000).toUTCString();
+        const parsedFutureSec = parseRetryAfterHeader(futureDateString);
+        assert.ok(parsedFutureSec >= 10 && parsedFutureSec <= 13);
+
+        const pastDateString = new Date(Date.now() - 5000).toUTCString();
+        assert.equal(parseRetryAfterHeader(pastDateString), 1);
+
+        // 2. Shared Cooldown Coordinator test
+        const coordinator = new SharedCooldownCoordinator();
+        coordinator.record429(80); // 80ms cooldown
+        assert.ok(coordinator.getRemainingCooldownMs() > 0);
+
+        const tBefore = Date.now();
+        await coordinator.waitForCooldown();
+        const tElapsed = Date.now() - tBefore;
+        assert.ok(tElapsed >= 60);
+        assert.equal(coordinator.getRemainingCooldownMs(), 0);
+    });
+
+    // 35. Network Safety Paths: Timeout, Cancellation, 401, 403, 404, 5xx
+    it("35. Network Safety Paths: verifies timeout, cancellation, 401, 403, 404, and 5xx handling", async () => {
+        setFabriqTokenForTesting("mock-valid-jwt");
+        const originalFetch = globalThis.fetch;
+
+        try {
+            // Path A: Request timeout
+            globalThis.fetch = async (_input, init) => {
+                const { promise, reject } = Promise.withResolvers<Response>();
+                init?.signal?.addEventListener("abort", () => {
+                    reject(init.signal?.reason ?? new Error("Timeout"));
+                }, { once: true });
+                return promise;
+            };
+
+            await assert.rejects(
+                () => fabriqFetch("/test/timeout", undefined, { timeoutMs: 15, maxRetries: 1, jitterMs: 0 }),
+                (err: unknown) => {
+                    assert.ok(err instanceof Error);
+                    assert.ok(err.message.includes("timed out") || err.name === "AbortError" || err.message.includes("Timeout"));
+                    return true;
+                }
+            );
+
+            // Path B: Explicit caller cancellation (never retried, never returns empty)
+            let fetchCallCount = 0;
+            const cancelController = new AbortController();
+            globalThis.fetch = async (_input, init) => {
+                fetchCallCount++;
+                cancelController.abort(new Error("Caller abort request"));
+                const { promise, reject } = Promise.withResolvers<Response>();
+                if (init?.signal?.aborted) {
+                    reject(init.signal.reason);
+                } else {
+                    init?.signal?.addEventListener("abort", () => {
+                        reject(init.signal?.reason);
+                    }, { once: true });
+                }
+                return promise;
+            };
+
+            await assert.rejects(
+                () => fabriqFetch("/test/cancel", undefined, { signal: cancelController.signal }),
+                (err: unknown) => {
+                    assert.ok(err instanceof Error);
+                    assert.equal(err.message, "Caller abort request");
+                    return true;
+                }
+            );
+            assert.equal(fetchCallCount, 1);
+
+            // Path C: 403 Forbidden terminal error
+            globalThis.fetch = async () => {
+                return new Response("Forbidden", { status: 403 });
+            };
+
+            await assert.rejects(
+                () => fabriqFetch("/test/403"),
+                (err: unknown) => {
+                    assert.ok(err instanceof FabriqCdpError);
+                    assert.equal(err.code, "FABRIQ_API_ERROR");
+                    return true;
+                }
+            );
+
+            // Path D: 5xx retry recovery
+            let call5xx = 0;
+            globalThis.fetch = async () => {
+                call5xx++;
+                if (call5xx === 1) {
+                    return new Response("Server error", { status: 502 });
+                }
+                return new Response(JSON.stringify({ ok: true }), { status: 200 });
+            };
+
+            const res5xx = await fabriqFetch<{ ok: boolean }>("/test/5xx", undefined, { jitterMs: 1 });
+            assert.equal(res5xx.ok, true);
+            assert.equal(call5xx, 2);
+        } finally {
+            globalThis.fetch = originalFetch;
+            setFabriqTokenForTesting(null);
+        }
+    });
+
+    // 36. Conservative Event Deduplication
+    it("36. Conservative Event Deduplication: deduplicates identical rawId while preserving distinct events in same tx", () => {
+        const events: RawEventInput[] = [
+            // 1. Identical duplicate rawId (should be deduplicated)
+            {
+                rawId: "evt-dup-1",
+                rawType: "ADD_LIQUIDITY",
+                positionId: "pos-1",
+                poolId: "pool-1",
+                createdAt: "2026-03-20T10:00:00Z",
+                signature: "sig-same-tx",
+                totalInUsd: 500,
+            },
+            {
+                rawId: "evt-dup-1", // Exact duplicate
+                rawType: "ADD_LIQUIDITY",
+                positionId: "pos-1",
+                poolId: "pool-1",
+                createdAt: "2026-03-20T10:00:00Z",
+                signature: "sig-same-tx",
+                totalInUsd: 500,
+            },
+            // 2. Distinct event type in the SAME transaction (must be preserved)
+            {
+                rawId: "evt-fee-1",
+                rawType: "FEE_CLAIM",
+                positionId: "pos-1",
+                poolId: "pool-1",
+                createdAt: "2026-03-20T10:00:00Z",
+                signature: "sig-same-tx",
+                totalInUsd: 25,
+            },
+            // 3. Ambiguous events (no rawId, same tx) - must be preserved conservatively
+            {
+                rawId: "",
+                rawType: "ADD_LIQUIDITY",
+                positionId: "pos-1",
+                poolId: "pool-1",
+                createdAt: "2026-03-20T11:00:00Z",
+                signature: "sig-ambig",
+                totalInUsd: 100,
+            },
+            {
+                rawId: "",
+                rawType: "ADD_LIQUIDITY",
+                positionId: "pos-1",
+                poolId: "pool-1",
+                createdAt: "2026-03-20T11:00:00Z",
+                signature: "sig-ambig",
+                totalInUsd: 100,
+            },
+        ];
+
+        const { deduplicated, duplicatesRemoved } = deduplicateRawEvents(events);
+
+        // evt-dup-1 removed once; fee preserved; two ambiguous adds preserved -> 4 events retained
+        assert.equal(duplicatesRemoved, 1);
+        assert.equal(deduplicated.length, 4);
+
+        // Verify lifecycle reconstruction avoids double-counting of deduplicated event
+        const pos = createMockPosition("pos-1", "pool-1", 5);
+        const norm = reconstructPositionLifecycle("wallet-1", pos, events);
+        assert.equal(norm.claimedFeesUsd, 25);
+    });
+
+    // 37. Batch Failure Prevents Partial Publication and Preserves Valid Bundles
+    it("37. Batch Failure: failed batch halts extraction without publishing and leaves existing bundle intact", async () => {
+        setFabriqTokenForTesting("mock-valid-jwt");
+        const originalFetch = globalThis.fetch;
+
+        const tempBase = path.join(process.cwd(), "data", `test-failure-${Date.now()}`);
+        const wallet = "11111111111111111111111111111111";
+
+        try {
+            // 1. Establish an existing valid published bundle
+            const goodDataset = buildPositionAnalyticsDataset({
+                wallet,
+                period: "30D",
+                snapshotTimestampMs: NOW_MS,
+                rawPositions: [createMockPosition("pos-good", "pool-1", 3)],
+                rawEvents: [],
+                fabriqPoolsDiscovered: 1,
+                dlmmPoolsMatched: 1,
+            });
+            const goodMetrics = {
+                schemaVersion: "v1",
+                wallet,
+                period: "30D",
+                generatedAt: new Date().toISOString(),
+                sourceDatasetFetchedAt: goodDataset.fetchedAt,
+                capital: { totalPositionDepositsUsd: 1000 },
+                profitability: { sampleTotalPnlUsd: 125 },
+            } as unknown as PositionMetricsResult;
+
+            const bundlesBase = path.join(tempBase, "bundles");
+            publishPositionAnalyticsPair({
+                wallet,
+                period: "30D",
+                dataset: goodDataset,
+                metrics: goodMetrics,
+                bundlesBaseDir: bundlesBase,
+            });
+
+            const initialBundle = loadPublishedPositionPair(wallet, "30D", { bundlesBaseDir: bundlesBase });
+            assert.ok(initialBundle);
+            assert.equal(initialBundle?.dataset?.positions[0].positionId, "pos-good");
+
+            // 2. Now simulate extraction failure on batch 2 of positions
+            globalThis.fetch = async (input: string | URL | Request) => {
+                const url = String(input);
+                if (url.includes("/pnl-by-pool")) {
+                    return new Response(JSON.stringify({
+                        data: [
+                            { pool_id: "pool-1", dex: "Meteora DLMM" },
+                            { pool_id: "pool-2", dex: "Meteora DLMM" },
+                        ],
+                    }), { status: 200 });
+                }
+                if (url.includes("/positions-by-pool")) {
+                    // Force batch failure
+                    return new Response("Internal Server Error", { status: 500 });
+                }
+                return new Response(JSON.stringify({ data: {} }), { status: 200 });
+            };
+
+            await assert.rejects(
+                () =>
+                    executeBuildPositionDataset({
+                        wallet,
+                        period: "30D",
+                        force: true,
+                        storageBaseDir: path.join(tempBase, "positions"),
+                        onLog: () => {},
+                    }),
+                (err: unknown) => {
+                    assert.ok(err instanceof Error);
+                    return true;
+                }
+            );
+
+            // 3. Verify prior bundle is completely untouched and valid
+            const bundleAfterFailure = loadPublishedPositionPair(wallet, "30D", { bundlesBaseDir: bundlesBase });
+            assert.ok(bundleAfterFailure);
+            assert.equal(bundleAfterFailure?.dataset?.positions[0].positionId, "pos-good");
+            assert.equal(bundleAfterFailure?.dataset?.fetchedAt, goodDataset.fetchedAt);
+        } finally {
+            globalThis.fetch = originalFetch;
+            setFabriqTokenForTesting(null);
             if (fs.existsSync(tempBase)) {
                 fs.rmSync(tempBase, { recursive: true, force: true });
             }

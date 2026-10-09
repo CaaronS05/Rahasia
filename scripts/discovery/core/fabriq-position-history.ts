@@ -83,8 +83,22 @@ export function logStage(
     }
 }
 
-function sleep(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted) {
+        return Promise.reject(signal.reason ?? new Error("Operation aborted"));
+    }
+    const { promise, resolve, reject } = Promise.withResolvers<void>();
+    let timer: NodeJS.Timeout | undefined;
+    const onAbort = () => {
+        clearTimeout(timer);
+        reject(signal?.reason ?? new Error("Operation aborted"));
+    };
+    timer = setTimeout(() => {
+        signal?.removeEventListener("abort", onAbort);
+        resolve();
+    }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
+    return promise;
 }
 
 let cdpBrowser: Browser | null = null;
@@ -626,11 +640,81 @@ export function loadCanonicalLegacyDlmmPoolAddresses(
     return addresses;
 }
 
+export function parseRetryAfterHeader(headerValue: string | null | undefined, defaultSeconds = 5): number {
+    if (!headerValue) return defaultSeconds;
+    const trimmed = headerValue.trim();
+    if (!trimmed) return defaultSeconds;
+    const delta = Number(trimmed);
+    if (Number.isFinite(delta) && delta >= 0) {
+        return Math.ceil(delta);
+    }
+    const parsedDateMs = Date.parse(trimmed);
+    if (!Number.isNaN(parsedDateMs)) {
+        const diffSeconds = (parsedDateMs - Date.now()) / 1000;
+        return Math.max(1, Math.ceil(diffSeconds));
+    }
+    return defaultSeconds;
+}
+
+export function calculateBoundedJitter(maxJitterMs = 500): number {
+    if (maxJitterMs <= 0) return 0;
+    return Math.floor(Math.random() * maxJitterMs);
+}
+
+export interface FabriqFetchCooldownCoordinator {
+    record429(cooldownMs: number): void;
+    waitForCooldown(signal?: AbortSignal): Promise<void>;
+    getRemainingCooldownMs(): number;
+    reset(): void;
+}
+
+export class SharedCooldownCoordinator implements FabriqFetchCooldownCoordinator {
+    private cooldownUntilMs = 0;
+    private log?: (msg: string) => void;
+
+    constructor(log?: (msg: string) => void) {
+        this.log = log;
+    }
+
+    record429(cooldownMs: number): void {
+        const candidate = Date.now() + Math.max(0, cooldownMs);
+        if (candidate > this.cooldownUntilMs) {
+            this.cooldownUntilMs = candidate;
+        }
+    }
+
+    async waitForCooldown(signal?: AbortSignal): Promise<void> {
+        if (signal?.aborted) {
+            throw signal.reason ?? new Error("Operation aborted");
+        }
+        const waitMs = this.cooldownUntilMs - Date.now();
+        if (waitMs > 0) {
+            this.log?.(`[COOLDOWN] Pausing for ${Math.round(waitMs)}ms due to active 429 rate limit cooldown across concurrent requests...`);
+            await sleep(waitMs, signal);
+        }
+    }
+
+    getRemainingCooldownMs(): number {
+        return Math.max(0, this.cooldownUntilMs - Date.now());
+    }
+
+    reset(): void {
+        this.cooldownUntilMs = 0;
+    }
+}
+
 export interface FabriqFetchOptions {
     onLog?: (msg: string) => void;
+    maxRetries?: number;
+    retryDelayMs?: number;
     max404Retries?: number;
     delay404Ms?: number;
     startTimeMs?: number;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+    cooldownCoordinator?: FabriqFetchCooldownCoordinator;
+    jitterMs?: number;
+    onRetry?: (info: { status?: number; attempt: number; delayMs: number; error?: unknown }) => void;
 }
 
 export async function fabriqFetch<T>(
@@ -640,27 +724,58 @@ export async function fabriqFetch<T>(
     attempt = 1,
     attempt404 = 0
 ): Promise<T> {
+    const maxRetries = options?.maxRetries ?? MAX_RETRIES;
     const queryString = params?.toString() ? `?${params.toString()}` : "";
     const url = `${FABRIQ_API_BASE}${endpoint}${queryString}`;
     const log = options?.onLog;
 
-    logStage(8, "FABRIQ_API", `Fetching endpoint ${endpoint} (attempt ${attempt}/${MAX_RETRIES})...`, log);
+    logStage(8, "FABRIQ_API", `Fetching endpoint ${endpoint} (attempt ${attempt}/${maxRetries})...`, log);
+    if (options?.signal?.aborted) {
+        throw options.signal.reason ?? new Error("Operation aborted");
+    }
+
+    if (options?.cooldownCoordinator) {
+        await options.cooldownCoordinator.waitForCooldown(options.signal);
+    }
 
     try {
         const jwt = await getToken(false, log);
 
-        const response = await fetch(url, {
-            headers: {
-                Authorization: `Bearer ${jwt}`,
-                Accept: "application/json",
-            },
-        });
+        let timeoutId: NodeJS.Timeout | undefined;
+        let fetchSignal: AbortSignal | undefined = options?.signal;
+        let timeoutController: AbortController | undefined;
+
+        if (options?.timeoutMs && options.timeoutMs > 0) {
+            timeoutController = new AbortController();
+            timeoutId = setTimeout(() => {
+                timeoutController?.abort(new Error(`Request timed out after ${options.timeoutMs}ms`));
+            }, options.timeoutMs);
+
+            if (options.signal) {
+                fetchSignal = AbortSignal.any([options.signal, timeoutController.signal]);
+            } else {
+                fetchSignal = timeoutController.signal;
+            }
+        }
+
+        let response: Response;
+        try {
+            response = await fetch(url, {
+                headers: {
+                    Authorization: `Bearer ${jwt}`,
+                    Accept: "application/json",
+                },
+                signal: fetchSignal,
+            });
+        } finally {
+            clearTimeout(timeoutId);
+        }
 
         // --------------------------------
         // JWT expired/rejected (401)
         // --------------------------------
         if (response.status === 401) {
-            if (attempt >= MAX_RETRIES) {
+            if (attempt >= maxRetries) {
                 throw new FabriqCdpError({
                     code: "AUTH_SESSION_ERROR",
                     stageNumber: 8,
@@ -670,11 +785,11 @@ export async function fabriqFetch<T>(
                     recommendedAction: "Refresh session in Brave by visiting https://fabriq.trade.",
                 });
             }
-
+            options?.onRetry?.({ status: 401, attempt, delayMs: 0 });
             log?.("[AUTH] 401 → refreshing JWT");
             await getToken(true, log);
 
-            return fabriqFetch<T>(endpoint, params, options, attempt + 1);
+            return fabriqFetch<T>(endpoint, params, options, attempt + 1, attempt404);
         }
 
         // --------------------------------
@@ -721,7 +836,8 @@ export async function fabriqFetch<T>(
             const nextAttempt404 = attempt404 + 1;
             const limitStr = typeof max404 === "number" ? ` (attempt ${nextAttempt404}/${max404}, elapsed ${elapsedSec}s)` : "";
             logStage(8, "FABRIQ_API", `[FABRIQ] 404 data not ready for ${endpoint}${limitStr}; waiting ${Math.round(delay / 1000)}s and retrying...`, log);
-            await sleep(delay);
+            options?.onRetry?.({ status: 404, attempt: nextAttempt404, delayMs: delay });
+            await sleep(delay, options?.signal);
             return fabriqFetch<T>(
                 endpoint,
                 params,
@@ -735,31 +851,36 @@ export async function fabriqFetch<T>(
         // Rate limit (429)
         // --------------------------------
         if (response.status === 429) {
-            const retryAfter =
-                Number(response.headers.get("retry-after")) || 5;
+            const retryAfterSec = parseRetryAfterHeader(response.headers.get("retry-after"), 5);
+            const jitterMs = calculateBoundedJitter(options?.jitterMs ?? 500);
+            const cooldownMs = retryAfterSec * 1000 + jitterMs;
 
-            if (attempt >= MAX_RETRIES) {
+            if (options?.cooldownCoordinator) {
+                options.cooldownCoordinator.record429(cooldownMs);
+            }
+
+            if (attempt >= maxRetries) {
                 throw new FabriqCdpError({
                     code: "RATE_LIMITED",
                     stageNumber: 8,
                     stageName: "Fabriq history API request",
                     message: `429 Too Many Requests after ${attempt} retries.`,
                     retriesAttempted: attempt,
-                    recommendedAction: `Wait ${retryAfter} seconds before requesting Fabriq API again.`,
+                    recommendedAction: `Wait ${retryAfterSec} seconds before requesting Fabriq API again.`,
                 });
             }
 
-            logStage(8, "FABRIQ_API", `[RATE_LIMITED] Waiting ${retryAfter}s (attempt ${attempt}/${MAX_RETRIES})...`, log);
-            await sleep(retryAfter * 1000);
+            logStage(8, "FABRIQ_API", `[RATE_LIMITED] Waiting ${retryAfterSec}s (attempt ${attempt}/${maxRetries})...`, log);
+            await sleep(cooldownMs, options?.signal);
 
-            return fabriqFetch<T>(endpoint, params, options, attempt + 1);
+            return fabriqFetch<T>(endpoint, params, options, attempt + 1, attempt404);
         }
 
         // --------------------------------
         // Server error (5xx)
         // --------------------------------
         if (response.status >= 500) {
-            if (attempt >= MAX_RETRIES) {
+            if (attempt >= maxRetries) {
                 throw new FabriqCdpError({
                     code: "FABRIQ_API_ERROR",
                     stageNumber: 8,
@@ -770,11 +891,13 @@ export async function fabriqFetch<T>(
                 });
             }
 
-            const delay = attempt * 2000;
+            const jitterMs = calculateBoundedJitter(options?.jitterMs ?? 500);
+            const delay = options?.retryDelayMs !== undefined ? options.retryDelayMs : (attempt * 2000 + jitterMs);
+            options?.onRetry?.({ status: response.status, attempt, delayMs: delay });
             logStage(8, "FABRIQ_API", `[RETRY] Server ${response.status}, waiting ${delay}ms...`, log);
-            await sleep(delay);
+            await sleep(delay, options?.signal);
 
-            return fabriqFetch<T>(endpoint, params, options, attempt + 1);
+            return fabriqFetch<T>(endpoint, params, options, attempt + 1, attempt404);
         }
 
         if (!response.ok) {
@@ -783,25 +906,33 @@ export async function fabriqFetch<T>(
         }
 
         return (await response.json()) as T;
-    } catch (error: any) {
+    } catch (error: unknown) {
+        if (options?.signal?.aborted) {
+            throw options.signal.reason ?? error;
+        }
+
         if (error instanceof FabriqCdpError) {
             throw error;
         }
-        const msg = String(error?.message || "");
+
+        const msg = error instanceof Error ? error.message : String(error ?? "");
         if (
             msg.includes("403 Forbidden") ||
             msg.includes("No Brave context found") ||
             msg.includes("Fabriq tab not found") ||
             msg.includes("/auth/verify failed") ||
             msg.includes("JWT missing") ||
-            attempt >= MAX_RETRIES
+            attempt >= maxRetries
         ) {
             throw error;
         }
 
-        const delay = attempt * 2000;
-        await sleep(delay);
-        return fabriqFetch<T>(endpoint, params, options, attempt + 1);
+        const jitterMs = calculateBoundedJitter(options?.jitterMs ?? 500);
+        const delay = options?.retryDelayMs !== undefined ? options.retryDelayMs : (attempt * 2000 + jitterMs);
+        options?.onRetry?.({ attempt, delayMs: delay, error });
+        logStage(8, "FABRIQ_API", `[RETRY] Attempt ${attempt} failed: ${msg}, waiting ${delay}ms...`, log);
+        await sleep(delay, options?.signal);
+        return fabriqFetch<T>(endpoint, params, options, attempt + 1, attempt404);
     }
 }
 

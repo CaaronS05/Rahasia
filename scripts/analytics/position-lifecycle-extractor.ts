@@ -273,6 +273,73 @@ export function deduplicatePositions(
         duplicatesRemoved,
     };
 }
+/**
+ * Deduplicate raw lifecycle events with strong identity evidence.
+ *
+ * Rules:
+ * 1. Never treat transaction signature alone as a unique event identifier.
+ * 2. Deduplicate only when strong identity evidence exists:
+ *    - Matching rawId (or raw.id / raw._id) for the same position.
+ *    - Matching signature + instruction_index / event_index for the same position.
+ * 3. Preserve distinct liquidity/fee events inside the same transaction.
+ * 4. Where duplicate identity is ambiguous (no unique ID or instruction index),
+ *    preserve events rather than risking false removal.
+ * 5. Preserve nulls, UNKNOWN, and financial metrics semantics.
+ */
+export function deduplicateRawEvents(
+    events: RawEventInput[],
+    warnings?: string[]
+): {
+    deduplicated: RawEventInput[];
+    duplicatesRemoved: number;
+} {
+    const retained: RawEventInput[] = [];
+    const seenEventKeys = new Set<string>();
+    let duplicatesRemoved = 0;
+
+    for (const ev of events) {
+        const positionId = String(ev.positionId || ev.raw?.position_id || ev.raw?.positionId || "");
+        const rawIdCandidate = ev.rawId || ev.raw?.id || ev.raw?._id;
+        const rawId = rawIdCandidate !== undefined && rawIdCandidate !== null ? String(rawIdCandidate).trim() : "";
+
+        let identityKey: string | null = null;
+
+        if (rawId) {
+            identityKey = `rawid:${positionId}:${rawId}`;
+        } else {
+            const rawObj = ev.raw;
+            const indexCandidate =
+                rawObj?.instruction_index ??
+                rawObj?.instructionIndex ??
+                rawObj?.event_index ??
+                rawObj?.eventIndex ??
+                rawObj?.log_index ??
+                rawObj?.logIndex;
+            const signature = String(ev.signature || ev.raw?.signature || ev.raw?.tx_hash || "").trim();
+
+            if (signature && indexCandidate !== undefined && indexCandidate !== null) {
+                identityKey = `sig-idx:${positionId}:${signature}:${String(indexCandidate).trim()}`;
+            }
+        }
+
+        if (identityKey) {
+            if (seenEventKeys.has(identityKey)) {
+                duplicatesRemoved++;
+                warnings?.push(`Duplicate event ignored for key: ${identityKey}`);
+                continue;
+            }
+            seenEventKeys.add(identityKey);
+        }
+
+        retained.push(ev);
+    }
+
+    return {
+        deduplicated: retained,
+        duplicatesRemoved,
+    };
+}
+
 
 /**
  * Compare two positions for sorting:
@@ -388,9 +455,11 @@ export function reconstructPositionLifecycle(
         const poolMatch = !e.poolId || e.poolId === pos.pool_id || e.raw?.pool_id === pos.pool_id;
         return posMatch && poolMatch;
     });
+    // 1b. Deduplicate matching events with strong identity evidence
+    const { deduplicated: cleanEvents } = deduplicateRawEvents(matchingEvents);
 
     // 2. Deterministic chronological sort: createdAt ASC, signature ASC, rawId ASC
-    matchingEvents.sort((a, b) => {
+    cleanEvents.sort((a, b) => {
         const timeA = parseTimestampMs(a.createdAt) ?? 0;
         const timeB = parseTimestampMs(b.createdAt) ?? 0;
         if (timeA !== timeB) return timeA - timeB;
@@ -404,10 +473,9 @@ export function reconstructPositionLifecycle(
         return idA.localeCompare(idB);
     });
 
-    const normalizedEvents: LifecycleTransactionItem[] = matchingEvents.map((e) => {
+    const normalizedEvents: LifecycleTransactionItem[] = cleanEvents.map((e) => {
         const rawType = String(e.rawType || e.raw?.type || e.raw?.action || "UNKNOWN");
         let category: LifecycleTransactionItem["category"] = "unknown";
-
         if (rawType === "POSITION_OPEN" || rawType === "initialize") {
             category = "initialize";
         } else if (rawType === "ADD_LIQUIDITY" || rawType === "add") {

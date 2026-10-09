@@ -27,8 +27,11 @@ export interface BuildPositionDatasetOptions {
     dryRun?: boolean;
     storageBaseDir?: string;
     onLog?: (msg: string) => void;
+    signal?: AbortSignal;
+    positionsConcurrency?: number;
+    transactionsConcurrency?: number;
+    requestTimeoutMs?: number;
 }
-
 export interface BuildPositionDatasetResult {
     success: boolean;
     dataset: PositionAnalyticsDataset | null;
@@ -79,7 +82,11 @@ export async function executeBuildPositionDataset(
 
     // 1. STAGE: Pool discovery
     log(`[STAGE 1/7] Discovering DLMM pools...`);
-    const poolDiscovery = await discoverWalletDlmmPools(wallet, { onLog: log });
+    const poolDiscovery = await discoverWalletDlmmPools(wallet, {
+        onLog: log,
+        signal: options.signal,
+        timeoutMs: options.requestTimeoutMs,
+    });
     const dlmmPoolIds = poolDiscovery.dlmmPools.map((p) => p.poolId);
 
     if (dlmmPoolIds.length === 0) {
@@ -112,7 +119,12 @@ export async function executeBuildPositionDataset(
 
     // 2. STAGE: Position extraction
     log(`[STAGE 2/7] Fetching closed positions across ${dlmmPoolIds.length} DLMM pools...`);
-    const positionsResult = await fetchWalletPositionsForPools(wallet, dlmmPoolIds, { onLog: log });
+    const positionsResult = await fetchWalletPositionsForPools(wallet, dlmmPoolIds, {
+        onLog: log,
+        signal: options.signal,
+        concurrency: options.positionsConcurrency,
+        timeoutMs: options.requestTimeoutMs,
+    });
     log(`[STAGE 2/7] Fetched ${positionsResult.positions.length} raw positions.`);
 
     // 3. STAGE: Deduplication & 4. STAGE: Latest-1000 selection
@@ -140,12 +152,19 @@ export async function executeBuildPositionDataset(
 
     let rawEvents = loadTransactionCheckpoint(wallet, selectedPositionIds);
     let txBatchesFetched = 0;
+    let txRetries = 0;
 
     if (!rawEvents || force) {
         if (selectedPositionIds.length > 0) {
-            const txResult = await fetchTransactionsForPositions(wallet, selectedPositionIds, positionToPoolMap, { onLog: log });
+            const txResult = await fetchTransactionsForPositions(wallet, selectedPositionIds, positionToPoolMap, {
+                onLog: log,
+                signal: options.signal,
+                concurrency: options.transactionsConcurrency,
+                timeoutMs: options.requestTimeoutMs,
+            });
             rawEvents = txResult.events;
             txBatchesFetched = txResult.batchesFetched;
+            txRetries = txResult.retryCount ?? 0;
             saveTransactionCheckpoint(wallet, selectedPositionIds, rawEvents);
         } else {
             rawEvents = [];
@@ -171,6 +190,7 @@ export async function executeBuildPositionDataset(
             poolPagesFetched: poolDiscovery.pagesFetched,
             positionBatchesFetched: positionsResult.batchesFetched,
             transactionBatchesFetched: txBatchesFetched,
+            requestRetries: (positionsResult.retryCount ?? 0) + txRetries,
         },
     });
 
