@@ -113,12 +113,12 @@ export const FOLLOWABILITY_THRESHOLDS = Object.freeze({
  * @param {number|null} seconds
  * @returns {string}
  */
-function formatDurationSimple(seconds) {
-    if (seconds === null || seconds === undefined || !Number.isFinite(seconds)) return "—";
+export function formatDurationSimple(seconds) {
+    if (seconds === null || seconds === undefined || !Number.isFinite(seconds) || seconds < 0) return "—";
     if (seconds < 60) return `${Math.round(seconds)}s`;
     const mins = Math.floor(seconds / 60);
     if (mins < 60) return `${mins}m`;
-    const hours = Math.floor(seconds / 60);
+    const hours = Math.floor(mins / 60);
     const remMins = mins % 60;
     if (hours < 24) return remMins > 0 ? `${hours}h ${remMins}m` : `${hours}h`;
     const days = Math.floor(hours / 24);

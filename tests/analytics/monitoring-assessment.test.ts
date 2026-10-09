@@ -5,6 +5,7 @@ import path from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
 import {
     computeMonitoringAssessment,
+    formatDurationSimple,
     MONITORING_VERDICTS,
     MANUAL_FOLLOWABILITY,
     SCORING_THRESHOLDS,
@@ -709,6 +710,119 @@ describe("Monitoring Assessment Engine & API Suite", () => {
         // Ensure reason contains actual data references
         assert.ok(res.reasons.some((r: string) => r.includes("7 of 10 observed weeks")));
         assert.ok(res.reasons.some((r: string) => r.includes("CVaR10 of -6.5%")));
+    });
+
+    // -------------------------------------------------------------------------
+    // 12b. Duration formatting regression
+    // -------------------------------------------------------------------------
+    it("12b. Duration formatting regression: formats durations accurately in formatDurationSimple and assessment output", () => {
+        // Direct unit tests for formatDurationSimple
+        assert.equal(formatDurationSimple(60), "1m");
+        assert.equal(formatDurationSimple(3600), "1h");
+        assert.equal(formatDurationSimple(3900), "1h 5m");
+        assert.equal(formatDurationSimple(21600), "6h");
+        assert.equal(formatDurationSimple(86400), "1d");
+        assert.equal(formatDurationSimple(90000), "1d 1h");
+        assert.equal(formatDurationSimple(null), "—");
+        assert.equal(formatDurationSimple(undefined), "—");
+        assert.equal(formatDurationSimple(NaN), "—");
+        assert.equal(formatDurationSimple(-1), "—");
+        // @ts-expect-error - testing invalid runtime input
+        assert.equal(formatDurationSimple("invalid"), "—");
+
+        const ds = createMockDataset();
+
+        // Public assessment reason verification: HIGH manual followability
+        const checkHighHoldReason = (seconds: number, expectedDurationStr: string) => {
+            const met = createMockMetrics({
+                riskAndConsistency: {
+                    ...createMockMetrics().riskAndConsistency,
+                    cvar10PositionPnlPct: -25.0, // Suppress cvar reason
+                    top1ProfitConcentrationPct: 50.0, // Suppress concentration reason
+                    profitableWeeksCount: 0, // Suppress weekly profit reason
+                },
+                profitability: {
+                    ...createMockMetrics().profitability,
+                    sampleTotalPnlUsd: -500, // Suppress positive pnl reason
+                },
+                metricCoverage: {
+                    ...createMockMetrics().metricCoverage,
+                    pnlUsdObservations: 35, // Suppress track record reason
+                },
+                tradingBehavior: {
+                    ...createMockMetrics().tradingBehavior,
+                    medianHoldingTimeSeconds: seconds,
+                    observedEntriesPerDay: 1.0,
+                },
+            });
+            const res = computeMonitoringAssessment(ds, met);
+            assert.equal(res.manualFollowability, MANUAL_FOLLOWABILITY.HIGH);
+            assert.ok(
+                res.reasons.some((r: string) =>
+                    r === `Manual followability favorable: median hold duration is ${expectedDurationStr} with 1.0 entries/day`
+                ),
+                `Expected reason with "${expectedDurationStr}", got reasons: ${JSON.stringify(res.reasons)}`
+            );
+        };
+
+        checkHighHoldReason(21600, "6h");
+        checkHighHoldReason(86400, "1d");
+        checkHighHoldReason(90000, "1d 1h");
+
+        // Public assessment concern verification: LOW manual followability with short hold duration
+        const checkShortHoldConcern = (seconds: number, expectedDurationStr: string) => {
+            const met = createMockMetrics({
+                tradingBehavior: {
+                    ...createMockMetrics().tradingBehavior,
+                    medianHoldingTimeSeconds: seconds,
+                    observedEntriesPerDay: 1.0,
+                },
+            });
+            const res = computeMonitoringAssessment(ds, met);
+            assert.equal(res.manualFollowability, MANUAL_FOLLOWABILITY.LOW);
+            assert.ok(
+                res.concerns.some((c: string) =>
+                    c === `Short median hold duration (${expectedDurationStr}) with 1.0 entries/day makes manual following difficult`
+                ),
+                `Expected concern with "${expectedDurationStr}", got concerns: ${JSON.stringify(res.concerns)}`
+            );
+        };
+
+        checkShortHoldConcern(60, "1m");
+
+        // Public assessment concern verification: LOW manual followability with fast trading (>6 entries/day)
+        const checkFastTradingConcern = (seconds: number, expectedDurationStr: string) => {
+            const met = createMockMetrics({
+                tradingBehavior: {
+                    ...createMockMetrics().tradingBehavior,
+                    medianHoldingTimeSeconds: seconds,
+                    observedEntriesPerDay: 8.0,
+                },
+            });
+            const res = computeMonitoringAssessment(ds, met);
+            assert.equal(res.manualFollowability, MANUAL_FOLLOWABILITY.LOW);
+            assert.ok(
+                res.concerns.some((c: string) =>
+                    c === `Short median hold duration (${expectedDurationStr}) with 8.0 entries/day makes manual following difficult`
+                ),
+                `Expected concern with "${expectedDurationStr}", got concerns: ${JSON.stringify(res.concerns)}`
+            );
+        };
+
+        checkFastTradingConcern(3600, "1h");
+        checkFastTradingConcern(3900, "1h 5m");
+
+        // Null / invalid duration produces UNKNOWN followability without hold duration reason or concern
+        const metNull = createMockMetrics({
+            tradingBehavior: {
+                ...createMockMetrics().tradingBehavior,
+                medianHoldingTimeSeconds: null,
+            },
+        });
+        const resNull = computeMonitoringAssessment(ds, metNull);
+        assert.equal(resNull.manualFollowability, MANUAL_FOLLOWABILITY.UNKNOWN);
+        assert.ok(!resNull.reasons.some((r: string) => r.includes("median hold duration")));
+        assert.ok(!resNull.concerns.some((c: string) => c.includes("median hold duration")));
     });
 
     // -------------------------------------------------------------------------
