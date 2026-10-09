@@ -451,3 +451,132 @@ export interface MonitoringAssessmentResult {
     evidence: MonitoringAssessmentEvidence;
     limitations: string[];
 }
+
+// ======================================================
+// METEORA VERIFICATION LAYER CONTRACTS
+// ======================================================
+
+export type MeteoraVerificationClassification =
+    | "MATCH"
+    | "USD_VALUATION_DIFFERENCE"
+    | "SIGN_MISMATCH"
+    | "MISSING"
+    | "NOT_COMPARABLE";
+
+export interface MeteoraVerificationSourceProvenance {
+    source: "meteora_official_api";
+    baseUrl: string;
+    endpointsCalled: string[];
+    fetchedAt: string;
+    clientVersion: string;
+}
+
+export interface MonetaryPrecisionValue {
+    rawString: string;
+    numeric: number;
+    decimalPlaces: number;
+}
+
+export interface MeteoraTokenFlowComparison {
+    token: "tokenX" | "tokenY";
+    localAmount: number | null;
+    meteoraAmount: MonetaryPrecisionValue | null;
+    amountDelta: number | null;
+    isExactMatch: boolean;
+}
+
+export interface MeteoraUsdComparison {
+    metric: "deposits" | "withdrawals" | "claimedFees" | "pnlUsd";
+    localUsd: number | null;
+    meteoraUsd: MonetaryPrecisionValue | null;
+    usdDelta: number | null;
+    usdDeltaPct: number | null;
+    isWithinTolerance: boolean;
+}
+
+export interface PositionVerificationDetail {
+    wallet: string;
+    poolAddress: string;
+    positionAddress: string;
+    classification: MeteoraVerificationClassification;
+    isMatched: boolean;
+    matchReasons: string[];
+    divergenceReasons: string[];
+
+    timestamps: {
+        localOpenedAt: string | null;
+        meteoraCreatedAt: string | null;
+        localClosedAt: string | null;
+        meteoraClosedAt: string | null;
+        closedTimestampDeltaSeconds: number | null;
+        timestampsMatch: boolean;
+    };
+
+    tokenFlows: {
+        depositedTokenX: MeteoraTokenFlowComparison;
+        depositedTokenY: MeteoraTokenFlowComparison;
+        withdrawnTokenX: MeteoraTokenFlowComparison;
+        withdrawnTokenY: MeteoraTokenFlowComparison;
+        claimedFeesTokenX: MeteoraTokenFlowComparison;
+        claimedFeesTokenY: MeteoraTokenFlowComparison;
+        allTokensMatch: boolean;
+    };
+
+    usdValuations: {
+        deposits: MeteoraUsdComparison;
+        withdrawals: MeteoraUsdComparison;
+        claimedFees: MeteoraUsdComparison;
+        pnlUsd: MeteoraUsdComparison;
+        pnlSignFlip: boolean;
+    };
+
+    solValuations?: {
+        meteoraPnlSol: MonetaryPrecisionValue | null;
+    };
+
+    metadataEnrichment?: {
+        tokenXMint: string | null;
+        tokenYMint: string | null;
+        minPrice: string | null;
+        maxPrice: string | null;
+        lowerBinId: number | null;
+        upperBinId: number | null;
+    };
+
+    provenance: MeteoraVerificationSourceProvenance;
+}
+
+export interface MeteoraVerificationSummary {
+    totalPositionsEvaluated: number;
+    matchedCount: number;
+    usdValuationDifferenceCount: number;
+    signMismatchCount: number;
+    missingCount: number;
+    notComparableCount: number;
+    tokenFlowExactMatchRatePct: number;
+    closedTimestampMatchRatePct: number;
+}
+
+export interface MeteoraMissingOrAmbiguousRecord {
+    positionAddress?: string;
+    poolAddress?: string;
+    issue:
+        | "MISSING_IN_METEORA"
+        | "MISSING_IN_LOCAL"
+        | "AMBIGUOUS_DUPLICATE"
+        | "NOT_CLOSED"
+        | "INSUFFICIENT_DATA";
+    details: string;
+}
+
+export interface MeteoraVerificationReport {
+    version: "v1";
+    targetWallet: string;
+    period: AnalyticsPeriod;
+    verifiedAt: string;
+    provenance: MeteoraVerificationSourceProvenance;
+    summary: MeteoraVerificationSummary;
+    positions: PositionVerificationDetail[];
+    missingOrAmbiguousRecords: MeteoraMissingOrAmbiguousRecord[];
+    nonDestructiveNotice: "Verification results do not mutate or replace Fabriq-derived published metrics.";
+}
