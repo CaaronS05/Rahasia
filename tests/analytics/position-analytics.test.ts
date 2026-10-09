@@ -23,6 +23,12 @@ import {
     publishPositionAnalyticsPair,
     loadPublishedPositionPair,
     getBundleFilePath,
+    loadTransactionCheckpointRecord,
+    saveTransactionCheckpointRecord,
+    loadTransactionCheckpoint,
+    saveTransactionCheckpoint,
+    getTransactionCheckpointPath,
+    type TransactionCheckpoint,
 } from "../../scripts/analytics/position-analytics-storage.ts";
 import {
     discoverWalletDlmmPools,
@@ -1422,6 +1428,853 @@ describe("Position Analytics Step 3 Phase 1 — Safe Bounded Concurrency & Netwo
             if (fs.existsSync(tempBase)) {
                 fs.rmSync(tempBase, { recursive: true, force: true });
             }
+        }
+    });
+});
+describe("Position Analytics Step 3 Phase 2 — Resilience, Incremental Checkpoints & Cancellation Suite", () => {
+    const NOW_MS = 1775700000000;
+    const DAY_MS = 24 * 60 * 60 * 1000;
+
+    function createMockPosition(
+        id: string,
+        pool_id: string,
+        closedDaysAgo: number | null,
+        overrides?: Partial<RawPositionInput>
+    ): RawPositionInput {
+        return {
+            id,
+            pool_id,
+            source: "wallet",
+            total_add_usd: 1000,
+            total_rem_usd: 1100,
+            total_fee_usd: 25,
+            total_pnl_usd: 125,
+            total_pnl_pct_usd: 12.5,
+            latest_close_ts: closedDaysAgo !== null ? new Date(NOW_MS - closedDaysAgo * DAY_MS).toISOString() : null,
+            opened_at: closedDaysAgo !== null ? new Date(NOW_MS - (closedDaysAgo + 2) * DAY_MS).toISOString() : null,
+            duration: 172800,
+            ...overrides,
+        };
+    }
+
+    // 38. Batch Selesai Out-Of-Order: verifies deterministic ordering is preserved regardless of completion order
+    it("38. Batch selesai out-of-order: deterministic event order strictly preserved despite inverted batch completion", async () => {
+        setFabriqTokenForTesting("mock-valid-jwt");
+        const originalFetch = globalThis.fetch;
+        const tempBase = path.join(process.cwd(), "data", `test-cp-ooo-${Date.now()}`);
+
+        try {
+            const wallet = "wallet-out-of-order";
+            const positionIds = ["pos-0", "pos-1", "pos-2", "pos-3"];
+            const poolMap = new Map<string, string>([
+                ["pos-0", "pool-1"],
+                ["pos-1", "pool-1"],
+                ["pos-2", "pool-1"],
+                ["pos-3", "pool-1"],
+            ]);
+
+            let resolveBatch0: ((res: Response) => void) | null = null;
+            let resolveBatch1: ((res: Response) => void) | null = null;
+
+            globalThis.fetch = async (input: string | URL | Request) => {
+                const url = String(input);
+                if (url.includes("pos-0") || url.includes("pos-1")) {
+                    const { promise, resolve } = Promise.withResolvers<Response>();
+                    resolveBatch0 = resolve;
+                    return promise;
+                }
+                if (url.includes("pos-2") || url.includes("pos-3")) {
+                    const { promise, resolve } = Promise.withResolvers<Response>();
+                    resolveBatch1 = resolve;
+                    return promise;
+                }
+                return new Response(JSON.stringify({ data: {} }), { status: 200 });
+            };
+
+            const fetchPromise = fetchTransactionsForPositions(wallet, positionIds, poolMap, {
+                batchSize: 2,
+                concurrency: 2,
+                checkpointBaseDir: tempBase,
+                onLog: () => {},
+            });
+
+            // Wait for both batches to be in flight
+            while (!resolveBatch0 || !resolveBatch1) {
+                await new Promise((r) => setTimeout(r, 10));
+            }
+
+            // Invert completion order: resolve batch 1 FIRST, then batch 0
+            resolveBatch1!(
+                new Response(
+                    JSON.stringify({
+                        data: [
+                            { id: "tx-b1-event", position_id: "pos-2", type: "POSITION_OPEN", created_at: "2026-03-02T10:00:00Z" },
+                        ],
+                    }),
+                    { status: 200 }
+                )
+            );
+
+            await new Promise((r) => setTimeout(r, 20));
+
+            // Now resolve batch 0
+            resolveBatch0!(
+                new Response(
+                    JSON.stringify({
+                        data: [
+                            { id: "tx-b0-event", position_id: "pos-0", type: "POSITION_OPEN", created_at: "2026-03-01T10:00:00Z" },
+                        ],
+                    }),
+                    { status: 200 }
+                )
+            );
+
+            const result = await fetchPromise;
+            assert.equal(result.events.length, 2);
+            // Strict batch index order: batch 0 events MUST come first, then batch 1 events!
+            assert.equal(result.events[0].rawId, "tx-b0-event");
+            assert.equal(result.events[1].rawId, "tx-b1-event");
+
+            // Check checkpoint on disk
+            const cp = loadTransactionCheckpointRecord(wallet, positionIds, { baseDir: tempBase });
+            assert.ok(cp);
+            assert.equal(cp?.isComplete, true);
+            assert.equal(cp?.events[0].rawId, "tx-b0-event");
+            assert.equal(cp?.events[1].rawId, "tx-b1-event");
+        } finally {
+            globalThis.fetch = originalFetch;
+            setFabriqTokenForTesting(null);
+            if (fs.existsSync(tempBase)) {
+                fs.rmSync(tempBase, { recursive: true, force: true });
+            }
+        }
+    });
+
+    // 39. Resume Hanya Mengambil Missing Batches
+    it("39. Resume hanya mengambil missing batches: fetches only uncompleted batches on resume", async () => {
+        setFabriqTokenForTesting("mock-valid-jwt");
+        const originalFetch = globalThis.fetch;
+        const tempBase = path.join(process.cwd(), "data", `test-cp-resume-${Date.now()}`);
+
+        try {
+            const wallet = "wallet-resume-test";
+            const positionIds = ["p0", "p1", "p2", "p3", "p4", "p5"];
+            const poolMap = new Map<string, string>();
+            for (const pid of positionIds) poolMap.set(pid, "pool-1");
+
+            // Create pre-existing checkpoint where batch 0 (p0, p1) and batch 2 (p4, p5) are already done
+            const preCheckpoint: TransactionCheckpoint = {
+                schemaVersion: "v2",
+                wallet,
+                savedAt: new Date().toISOString(),
+                selectedPositionIds: positionIds,
+                completedPositionIds: ["p0", "p1", "p4", "p5"],
+                completedBatchIndices: [0, 2],
+                batchRecords: [
+                    {
+                        batchIndex: 0,
+                        positionIds: ["p0", "p1"],
+                        eventCount: 1,
+                        completedAt: new Date().toISOString(),
+                        events: [
+                            {
+                                rawId: "ev-b0",
+                                rawType: "POSITION_OPEN",
+                                positionId: "p0",
+                                poolId: "pool-1",
+                                createdAt: "2026-03-01T10:00:00Z",
+                                signature: "sig-0",
+                                source: "wallet",
+                                tokenXAmount: 1,
+                                tokenYAmount: 1,
+                                tokenXAmountUsd: 10,
+                                tokenYAmountUsd: 10,
+                                tokenXAmountSol: 0.1,
+                                tokenYAmountSol: 0.1,
+                                totalInUsd: 20,
+                                totalInSol: 0.2,
+                            },
+                        ],
+                    },
+                    {
+                        batchIndex: 2,
+                        positionIds: ["p4", "p5"],
+                        eventCount: 1,
+                        completedAt: new Date().toISOString(),
+                        events: [
+                            {
+                                rawId: "ev-b2",
+                                rawType: "POSITION_CLOSE",
+                                positionId: "p4",
+                                poolId: "pool-1",
+                                createdAt: "2026-03-03T10:00:00Z",
+                                signature: "sig-2",
+                                source: "wallet",
+                                tokenXAmount: 1,
+                                tokenYAmount: 1,
+                                tokenXAmountUsd: 10,
+                                tokenYAmountUsd: 10,
+                                tokenXAmountSol: 0.1,
+                                tokenYAmountSol: 0.1,
+                                totalInUsd: 20,
+                                totalInSol: 0.2,
+                            },
+                        ],
+                    },
+                ],
+                events: [],
+                isComplete: false,
+                coverage: {
+                    totalSelectedPositions: 6,
+                    completedPositionsCount: 4,
+                    totalBatches: 3,
+                    completedBatchesCount: 2,
+                    isComplete: false,
+                },
+            };
+
+            saveTransactionCheckpointRecord(preCheckpoint, { baseDir: tempBase });
+
+            // Monitor HTTP requests made during resume
+            const requestedUrls: string[] = [];
+            globalThis.fetch = async (input: string | URL | Request) => {
+                const url = String(input);
+                requestedUrls.push(url);
+                if (url.includes("/transactions")) {
+                    return new Response(
+                        JSON.stringify({
+                            data: [
+                                { id: "ev-b1", position_id: "p2", type: "ADD_LIQUIDITY", created_at: "2026-03-02T10:00:00Z" },
+                            ],
+                        }),
+                        { status: 200 }
+                    );
+                }
+                return new Response(JSON.stringify({ data: {} }), { status: 200 });
+            };
+
+            const result = await fetchTransactionsForPositions(wallet, positionIds, poolMap, {
+                batchSize: 2,
+                concurrency: 2,
+                checkpointBaseDir: tempBase,
+                onLog: () => {},
+            });
+
+            // Assert exactly 1 batch was requested over the network!
+            assert.equal(requestedUrls.length, 1);
+            assert.ok(requestedUrls[0].includes("p2") && requestedUrls[0].includes("p3"));
+            assert.ok(!requestedUrls[0].includes("p0") && !requestedUrls[0].includes("p4"));
+
+            // Assert all 3 batches are represented in deterministic order in the result
+            assert.equal(result.events.length, 3);
+            assert.equal(result.events[0].rawId, "ev-b0");
+            assert.equal(result.events[1].rawId, "ev-b1");
+            assert.equal(result.events[2].rawId, "ev-b2");
+            assert.equal(result.batchesFetched, 1);
+
+            // Final checkpoint is now complete on disk
+            const finalCp = loadTransactionCheckpointRecord(wallet, positionIds, { baseDir: tempBase });
+            assert.equal(finalCp?.isComplete, true);
+            assert.equal(finalCp?.completedPositionIds.length, 6);
+        } finally {
+            globalThis.fetch = originalFetch;
+            setFabriqTokenForTesting(null);
+            if (fs.existsSync(tempBase)) {
+                fs.rmSync(tempBase, { recursive: true, force: true });
+            }
+        }
+    });
+
+    // 40. Zero-Event Batch Tercatat Complete
+    it("40. Zero-event batch tercatat complete: records empty batch as complete and avoids re-fetching", async () => {
+        setFabriqTokenForTesting("mock-valid-jwt");
+        const originalFetch = globalThis.fetch;
+        const tempBase = path.join(process.cwd(), "data", `test-cp-zero-${Date.now()}`);
+
+        try {
+            const wallet = "wallet-zero-event-test";
+            const positionIds = ["z0", "z1", "z2", "z3"];
+            const poolMap = new Map<string, string>();
+            for (const pid of positionIds) poolMap.set(pid, "pool-1");
+
+            let fetchCount = 0;
+            globalThis.fetch = async (input: string | URL | Request) => {
+                const url = String(input);
+                fetchCount++;
+                if (url.includes("z0") || url.includes("z1")) {
+                    // Zero events returned for batch 0
+                    return new Response(JSON.stringify({ data: [] }), { status: 200 });
+                }
+                if (url.includes("z2") || url.includes("z3")) {
+                    return new Response(
+                        JSON.stringify({
+                            data: [{ id: "ev-z1", position_id: "z2", type: "POSITION_OPEN" }],
+                        }),
+                        { status: 200 }
+                    );
+                }
+                return new Response(JSON.stringify({ data: {} }), { status: 200 });
+            };
+
+            const res1 = await fetchTransactionsForPositions(wallet, positionIds, poolMap, {
+                batchSize: 2,
+                concurrency: 2,
+                checkpointBaseDir: tempBase,
+                onLog: () => {},
+            });
+
+            assert.equal(fetchCount, 2);
+            assert.equal(res1.events.length, 1);
+
+            // Verify checkpoint on disk records zero-event batch as complete
+            const cp = loadTransactionCheckpointRecord(wallet, positionIds, { baseDir: tempBase });
+            assert.ok(cp);
+            assert.equal(cp?.isComplete, true);
+            assert.equal(cp?.completedPositionIds.length, 4);
+            const b0Record = cp?.batchRecords?.find((b) => b.batchIndex === 0);
+            assert.ok(b0Record);
+            assert.equal(b0Record?.eventCount, 0);
+
+            // Now run a second time with the same parameters
+            fetchCount = 0;
+            const res2 = await fetchTransactionsForPositions(wallet, positionIds, poolMap, {
+                batchSize: 2,
+                concurrency: 2,
+                checkpointBaseDir: tempBase,
+                onLog: () => {},
+            });
+
+            // Zero-event batch was NOT re-fetched; completely reused from checkpoint!
+            assert.equal(fetchCount, 0);
+            assert.equal(res2.fromCheckpoint, true);
+            assert.equal(res2.events.length, 1);
+        } finally {
+            globalThis.fetch = originalFetch;
+            setFabriqTokenForTesting(null);
+            if (fs.existsSync(tempBase)) {
+                fs.rmSync(tempBase, { recursive: true, force: true });
+            }
+        }
+    });
+
+    // 41. Interrupted Checkpoint Lalu Resume
+    it("41. Interrupted checkpoint lalu resume: saves partial checkpoint on abort and resumes to completion", async () => {
+        setFabriqTokenForTesting("mock-valid-jwt");
+        const originalFetch = globalThis.fetch;
+        const tempBase = path.join(process.cwd(), "data", `test-cp-interrupt-${Date.now()}`);
+
+        try {
+            const wallet = "wallet-interrupt-test";
+            const positionIds = ["i0", "i1", "i2", "i3"];
+            const poolMap = new Map<string, string>();
+            for (const pid of positionIds) poolMap.set(pid, "pool-1");
+
+            const controller = new AbortController();
+
+            globalThis.fetch = async (input: string | URL | Request) => {
+                const url = String(input);
+                if (url.includes("i0") || url.includes("i1")) {
+                    // Batch 0 completes successfully
+                    return new Response(
+                        JSON.stringify({
+                            data: [{ id: "ev-i0", position_id: "i0", type: "POSITION_OPEN" }],
+                        }),
+                        { status: 200 }
+                    );
+                }
+                if (url.includes("i2") || url.includes("i3")) {
+                    // Wait for abort signal on batch 1
+                    const { promise, reject } = Promise.withResolvers<Response>();
+                    controller.signal.addEventListener(
+                        "abort",
+                        () => reject(new Error("Operation aborted")),
+                        { once: true }
+                    );
+                    return promise;
+                }
+                return new Response(JSON.stringify({ data: {} }), { status: 200 });
+            };
+
+            // Start run 1 with concurrency 1 so batch 0 completes before batch 1 is aborted
+            let batch0Saved = false;
+            const runPromise = fetchTransactionsForPositions(wallet, positionIds, poolMap, {
+                batchSize: 2,
+                concurrency: 1,
+                checkpointBaseDir: tempBase,
+                signal: controller.signal,
+                onBatchSaved: (cp) => {
+                    if (cp.completedPositionIds.includes("i0")) {
+                        batch0Saved = true;
+                        // Trigger abort right after batch 0 is saved to disk!
+                        controller.abort();
+                    }
+                },
+                onLog: () => {},
+            });
+
+            await assert.rejects(runPromise, /aborted/i);
+            assert.equal(batch0Saved, true);
+
+            // Verify partial checkpoint exists on disk with isComplete: false
+            const partialCp = loadTransactionCheckpointRecord(wallet, positionIds, { baseDir: tempBase });
+            assert.ok(partialCp);
+            assert.equal(partialCp?.isComplete, false);
+            assert.deepEqual(partialCp?.completedPositionIds, ["i0", "i1"]);
+
+            // Resume run (Run 2) with clean controller
+            let resumedFetches = 0;
+            globalThis.fetch = async (input: string | URL | Request) => {
+                const url = String(input);
+                resumedFetches++;
+                if (url.includes("i2") || url.includes("i3")) {
+                    return new Response(
+                        JSON.stringify({
+                            data: [{ id: "ev-i1", position_id: "i2", type: "POSITION_CLOSE" }],
+                        }),
+                        { status: 200 }
+                    );
+                }
+                return new Response(JSON.stringify({ data: {} }), { status: 200 });
+            };
+
+            const resumeResult = await fetchTransactionsForPositions(wallet, positionIds, poolMap, {
+                batchSize: 2,
+                concurrency: 1,
+                checkpointBaseDir: tempBase,
+                onLog: () => {},
+            });
+
+            // Only batch 1 was fetched during resume!
+            assert.equal(resumedFetches, 1);
+            assert.equal(resumeResult.events.length, 2);
+            assert.equal(resumeResult.events[0].rawId, "ev-i0");
+            assert.equal(resumeResult.events[1].rawId, "ev-i1");
+
+            // Checkpoint on disk is now complete
+            const finalCp = loadTransactionCheckpointRecord(wallet, positionIds, { baseDir: tempBase });
+            assert.equal(finalCp?.isComplete, true);
+        } finally {
+            globalThis.fetch = originalFetch;
+            setFabriqTokenForTesting(null);
+            if (fs.existsSync(tempBase)) {
+                fs.rmSync(tempBase, { recursive: true, force: true });
+            }
+        }
+    });
+
+    // 42. Changed Selection atau Expired Checkpoint Ditolak
+    it("42. Changed selection atau expired checkpoint ditolak: rejects stale or selection-mismatched checkpoints", () => {
+        const tempBase = path.join(process.cwd(), "data", `test-cp-reject-${Date.now()}`);
+        const wallet = "wallet-validation-test";
+
+        try {
+            // Case A: Selection mismatch
+            const cpA: TransactionCheckpoint = {
+                schemaVersion: "v2",
+                wallet,
+                savedAt: new Date().toISOString(),
+                selectedPositionIds: ["pA", "pB"],
+                completedPositionIds: ["pA", "pB"],
+                completedBatchIndices: [0],
+                events: [],
+                isComplete: true,
+                coverage: {
+                    totalSelectedPositions: 2,
+                    completedPositionsCount: 2,
+                    totalBatches: 1,
+                    completedBatchesCount: 1,
+                    isComplete: true,
+                },
+            };
+            saveTransactionCheckpointRecord(cpA, { baseDir: tempBase });
+
+            // Query with different selection: ["pA", "pC"]
+            const loadedDiffSelection = loadTransactionCheckpointRecord(wallet, ["pA", "pC"], { baseDir: tempBase });
+            assert.equal(loadedDiffSelection, null);
+
+            // Query with different selection length: ["pA"]
+            const loadedDiffLen = loadTransactionCheckpointRecord(wallet, ["pA"], { baseDir: tempBase });
+            assert.equal(loadedDiffLen, null);
+
+            // Case B: Expired checkpoint
+            const fiveHoursAgo = new Date(Date.now() - 5 * 60 * 60 * 1000).toISOString();
+            const cpExpired: TransactionCheckpoint = {
+                schemaVersion: "v2",
+                wallet,
+                savedAt: fiveHoursAgo,
+                selectedPositionIds: ["pA", "pB"],
+                completedPositionIds: ["pA", "pB"],
+                completedBatchIndices: [0],
+                events: [],
+                isComplete: true,
+                coverage: {
+                    totalSelectedPositions: 2,
+                    completedPositionsCount: 2,
+                    totalBatches: 1,
+                    completedBatchesCount: 1,
+                    isComplete: true,
+                },
+            };
+            saveTransactionCheckpointRecord(cpExpired, { baseDir: tempBase });
+
+            // Default maxAge is 4 hours, so 5 hours is expired
+            const loadedExpired = loadTransactionCheckpointRecord(wallet, ["pA", "pB"], { baseDir: tempBase });
+            assert.equal(loadedExpired, null);
+        } finally {
+            if (fs.existsSync(tempBase)) {
+                fs.rmSync(tempBase, { recursive: true, force: true });
+            }
+        }
+    });
+
+    // 43. Failure dengan Active Concurrent Requests & Coordinated Stop
+    it("43. Failure dengan active concurrent requests: coordinates queue halt and settles active workers", async () => {
+        setFabriqTokenForTesting("mock-valid-jwt");
+        const originalFetch = globalThis.fetch;
+        const tempBase = path.join(process.cwd(), "data", `test-cp-fail-coord-${Date.now()}`);
+
+        try {
+            const wallet = "wallet-fail-coord";
+            const positionIds = ["f0", "f1", "f2", "f3", "f4", "f5"];
+            const poolMap = new Map<string, string>();
+            for (const pid of positionIds) poolMap.set(pid, "pool-1");
+
+            let activeWorkers = 0;
+            let peakConcurrent = 0;
+
+            globalThis.fetch = async (input: string | URL | Request) => {
+                const url = String(input);
+                activeWorkers++;
+                if (activeWorkers > peakConcurrent) peakConcurrent = activeWorkers;
+
+                if (url.includes("f2") || url.includes("f3")) {
+                    // Force fatal server error on batch 1
+                    activeWorkers--;
+                    return new Response("Database failure", { status: 500 });
+                }
+
+                // Other batches linger slightly
+                await new Promise((r) => setTimeout(r, 40));
+                activeWorkers--;
+                return new Response(JSON.stringify({ data: [] }), { status: 200 });
+            };
+
+            await assert.rejects(
+                () =>
+                    fetchTransactionsForPositions(wallet, positionIds, poolMap, {
+                        batchSize: 2,
+                        concurrency: 3,
+                        checkpointBaseDir: tempBase,
+                        onLog: () => {},
+                    }),
+                (err: unknown) => {
+                    assert.ok(err instanceof Error);
+                    return true;
+                }
+            );
+
+            // Assert all workers settled cleanly
+            assert.equal(activeWorkers, 0);
+
+            // Checkpoint does NOT record failed batch as complete
+            const cp = loadTransactionCheckpointRecord(wallet, positionIds, { baseDir: tempBase });
+            if (cp) {
+                assert.equal(cp.isComplete, false);
+                assert.ok(!cp.completedPositionIds.includes("f2"));
+                assert.ok(!cp.completedPositionIds.includes("f3"));
+            }
+        } finally {
+            globalThis.fetch = originalFetch;
+            setFabriqTokenForTesting(null);
+            if (fs.existsSync(tempBase)) {
+                fs.rmSync(tempBase, { recursive: true, force: true });
+            }
+        }
+    });
+
+    // 44. SIGTERM / Abort Mid-Run & Graceful Cancellation
+    it("44. SIGTERM dan Stop mid-run: abort signal halts dispatch, settles workers, and prevents partial publication", async () => {
+        setFabriqTokenForTesting("mock-valid-jwt");
+        const originalFetch = globalThis.fetch;
+        const tempBase = path.join(process.cwd(), "data", `test-cp-sigterm-${Date.now()}`);
+
+        try {
+            const wallet = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU";
+            const abortController = new AbortController();
+
+            let poolFetched = false;
+            globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
+                const url = String(input);
+                if (url.includes("/pnl-by-pool")) {
+                    poolFetched = true;
+                    return new Response(
+                        JSON.stringify({
+                            data: [{ pool_id: "pool-1", dex: "Meteora DLMM" }],
+                        }),
+                        { status: 200 }
+                    );
+                }
+                if (url.includes("/positions-by-pool")) {
+                    abortController.abort(new Error("Process received SIGTERM"));
+                    if (init?.signal?.aborted) {
+                        throw init.signal.reason ?? new Error("Aborted");
+                    }
+                    const { promise, reject } = Promise.withResolvers<Response>();
+                    init?.signal?.addEventListener("abort", () => {
+                        reject(init.signal?.reason ?? new Error("Aborted"));
+                    }, { once: true });
+                    return promise;
+                }
+                return new Response(JSON.stringify({ data: {} }), { status: 200 });
+            };
+
+            const runPromise = executeBuildPositionDataset({
+                wallet,
+                period: "30D",
+                storageBaseDir: path.join(tempBase, "positions"),
+                checkpointBaseDir: path.join(tempBase, "checkpoints"),
+                signal: abortController.signal,
+                onLog: () => {},
+            });
+
+            await assert.rejects(runPromise, /SIGTERM|aborted/i);
+            assert.equal(poolFetched, true);
+
+            // Assert no dataset was saved or published
+            const posFile = path.join(tempBase, "positions", wallet, "30D.json");
+            assert.equal(fs.existsSync(posFile), false);
+        } finally {
+            globalThis.fetch = originalFetch;
+            setFabriqTokenForTesting(null);
+            if (fs.existsSync(tempBase)) {
+                fs.rmSync(tempBase, { recursive: true, force: true });
+            }
+        }
+    });
+
+    // 45. Tidak Ada Orphan Requests atau Unhandled Rejections
+    it("45. Tidak ada orphan requests atau unhandled rejections: verifies bounded queue cleanly settles all promises", async () => {
+        const unhandledErrors: unknown[] = [];
+        const onUnhandled = (err: unknown) => {
+            unhandledErrors.push(err);
+        };
+        process.on("unhandledRejection", onUnhandled);
+
+        try {
+            const items = [1, 2, 3, 4, 5, 6];
+            let activeWorkers = 0;
+
+            await assert.rejects(
+                () =>
+                    runBoundedWorkerQueue({
+                        items,
+                        concurrency: 3,
+                        worker: async (item, _idx, signal) => {
+                            activeWorkers++;
+                            if (item === 3) {
+                                activeWorkers--;
+                                throw new Error("Simulated worker fatal failure");
+                            }
+                            const { promise, reject } = Promise.withResolvers<number>();
+                            signal?.addEventListener("abort", () => {
+                                activeWorkers--;
+                                reject(new Error("Worker aborted"));
+                            }, { once: true });
+                            return promise;
+                        },
+                    }),
+                /Simulated worker fatal failure/
+            );
+
+            // Give event loop time to verify no dangling rejections
+            await new Promise((r) => setTimeout(r, 50));
+            assert.equal(unhandledErrors.length, 0);
+            assert.equal(activeWorkers, 0);
+        } finally {
+            process.off("unhandledRejection", onUnhandled);
+        }
+    });
+
+    // 46. Tidak Ada Partial Dataset Publication & Incomplete Checkpoint Rejection
+    it("46. Tidak ada partial dataset publication: rejects incomplete checkpoints and refuses dataset publication", () => {
+        const tempBase = path.join(process.cwd(), "data", `test-cp-partial-pub-${Date.now()}`);
+        const wallet = "wallet-partial-pub";
+
+        try {
+            const partialCheckpoint: TransactionCheckpoint = {
+                schemaVersion: "v2",
+                wallet,
+                savedAt: new Date().toISOString(),
+                selectedPositionIds: ["pos-1", "pos-2"],
+                completedPositionIds: ["pos-1"], // only 1 of 2 positions completed!
+                completedBatchIndices: [0],
+                events: [
+                    {
+                        rawId: "ev-partial",
+                        rawType: "POSITION_OPEN",
+                        positionId: "pos-1",
+                        poolId: "pool-1",
+                        createdAt: "2026-03-01T10:00:00Z",
+                        signature: "sig-part",
+                        source: "wallet",
+                        tokenXAmount: 1,
+                        tokenYAmount: 1,
+                        tokenXAmountUsd: 10,
+                        tokenYAmountUsd: 10,
+                        tokenXAmountSol: 0.1,
+                        tokenYAmountSol: 0.1,
+                        totalInUsd: 20,
+                        totalInSol: 0.2,
+                    },
+                ],
+                isComplete: false,
+                coverage: {
+                    totalSelectedPositions: 2,
+                    completedPositionsCount: 1,
+                    totalBatches: 2,
+                    completedBatchesCount: 1,
+                    isComplete: false,
+                },
+            };
+            saveTransactionCheckpointRecord(partialCheckpoint, { baseDir: tempBase });
+
+            // loadTransactionCheckpoint MUST return null for incomplete checkpoint
+            const events = loadTransactionCheckpoint(wallet, ["pos-1", "pos-2"], { baseDir: tempBase });
+            assert.equal(events, null);
+
+            // Record can be inspected
+            const rec = loadTransactionCheckpointRecord(wallet, ["pos-1", "pos-2"], { baseDir: tempBase });
+            assert.ok(rec);
+            assert.equal(rec?.isComplete, false);
+            assert.equal(rec?.coverage.isComplete, false);
+        } finally {
+            if (fs.existsSync(tempBase)) {
+                fs.rmSync(tempBase, { recursive: true, force: true });
+            }
+        }
+    });
+
+    // 47. Existing Valid Bundle Tetap Utuh Pada Stop/Failure
+    it("47. Existing valid bundle tetap utuh pada stop/failure: verifies prior published bundle is immutable across aborted runs", async () => {
+        setFabriqTokenForTesting("mock-valid-jwt");
+        const originalFetch = globalThis.fetch;
+        const tempBase = path.join(process.cwd(), "data", `test-cp-bundle-intact-${Date.now()}`);
+
+        try {
+            const wallet = "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM";
+            const bundlesBase = path.join(tempBase, "bundles");
+            const positionsBase = path.join(tempBase, "positions");
+
+            // 1. Establish an initial valid bundle
+            const goodDataset = buildPositionAnalyticsDataset({
+                wallet,
+                period: "30D",
+                snapshotTimestampMs: NOW_MS,
+                rawPositions: [createMockPosition("pos-good-original", "pool-1", 5)],
+                rawEvents: [],
+                fabriqPoolsDiscovered: 1,
+                dlmmPoolsMatched: 1,
+            });
+            const goodMetrics = {
+                schemaVersion: "v1",
+                wallet,
+                period: "30D",
+                generatedAt: new Date().toISOString(),
+                sourceDatasetFetchedAt: goodDataset.fetchedAt,
+                capital: { totalPositionDepositsUsd: 1000 },
+                profitability: { sampleTotalPnlUsd: 200 },
+            } as unknown as PositionMetricsResult;
+
+            publishPositionAnalyticsPair({
+                wallet,
+                period: "30D",
+                dataset: goodDataset,
+                metrics: goodMetrics,
+                bundlesBaseDir: bundlesBase,
+            });
+
+            const initialBundle = loadPublishedPositionPair(wallet, "30D", { bundlesBaseDir: bundlesBase });
+            assert.ok(initialBundle);
+            assert.equal(initialBundle?.dataset?.positions[0].positionId, "pos-good-original");
+
+            // 2. Now attempt a refreshed build that gets aborted mid-run
+            const controller = new AbortController();
+            globalThis.fetch = async (_input, init) => {
+                controller.abort(new Error("User stopped pipeline"));
+                if (init?.signal?.aborted) {
+                    throw init.signal.reason ?? new Error("Aborted");
+                }
+                const { promise, reject } = Promise.withResolvers<Response>();
+                init?.signal?.addEventListener("abort", () => {
+                    reject(init.signal?.reason ?? new Error("Aborted"));
+                }, { once: true });
+                return promise;
+            };
+
+            await assert.rejects(
+                () =>
+                    executeBuildPositionDataset({
+                        wallet,
+                        period: "30D",
+                        force: true,
+                        storageBaseDir: positionsBase,
+                        signal: controller.signal,
+                        onLog: () => {},
+                    }),
+                /stopped|aborted/i
+            );
+
+            // 3. Confirm original bundle is completely intact and matches original provenance
+            const preservedBundle = loadPublishedPositionPair(wallet, "30D", { bundlesBaseDir: bundlesBase });
+            assert.ok(preservedBundle);
+            assert.equal(preservedBundle?.dataset?.positions[0].positionId, "pos-good-original");
+            assert.equal(preservedBundle?.dataset?.fetchedAt, goodDataset.fetchedAt);
+            assert.equal(preservedBundle?.metrics?.sourceDatasetFetchedAt, goodDataset.fetchedAt);
+        } finally {
+            globalThis.fetch = originalFetch;
+            setFabriqTokenForTesting(null);
+            if (fs.existsSync(tempBase)) {
+                fs.rmSync(tempBase, { recursive: true, force: true });
+            }
+        }
+    });
+
+    // 48. Cancellation Tidak Memicu Retry Tambahan
+    it("48. Cancellation tidak memicu retry tambahan: abort signal terminates request on attempt 1 without retry delays", async () => {
+        setFabriqTokenForTesting("mock-valid-jwt");
+        const originalFetch = globalThis.fetch;
+
+        try {
+            const controller = new AbortController();
+            let attempts = 0;
+
+            globalThis.fetch = async (_input, init) => {
+                attempts++;
+                controller.abort(new Error("Immediate cancellation"));
+                if (init?.signal?.aborted) {
+                    throw init.signal.reason ?? new Error("Aborted");
+                }
+                const { promise, reject } = Promise.withResolvers<Response>();
+                init?.signal?.addEventListener("abort", () => {
+                    reject(init.signal?.reason ?? new Error("Aborted"));
+                }, { once: true });
+                return promise;
+            };
+
+            await assert.rejects(
+                () =>
+                    fabriqFetch("/test/no-retry-on-cancel", undefined, {
+                        signal: controller.signal,
+                        maxRetries: 3,
+                    }),
+                /cancellation|aborted/i
+            );
+
+            // Must strictly have stopped at attempt 1! Zero retries executed.
+            assert.equal(attempts, 1);
+        } finally {
+            globalThis.fetch = originalFetch;
+            setFabriqTokenForTesting(null);
         }
     });
 });

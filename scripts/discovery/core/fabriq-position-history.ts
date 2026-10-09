@@ -687,8 +687,9 @@ export class SharedCooldownCoordinator implements FabriqFetchCooldownCoordinator
         if (signal?.aborted) {
             throw signal.reason ?? new Error("Operation aborted");
         }
-        const waitMs = this.cooldownUntilMs - Date.now();
-        if (waitMs > 0) {
+        while (this.cooldownUntilMs > Date.now()) {
+            const waitMs = this.cooldownUntilMs - Date.now();
+            if (waitMs <= 0) break;
             this.log?.(`[COOLDOWN] Pausing for ${Math.round(waitMs)}ms due to active 429 rate limit cooldown across concurrent requests...`);
             await sleep(waitMs, signal);
         }

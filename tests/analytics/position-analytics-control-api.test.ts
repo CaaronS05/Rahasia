@@ -884,4 +884,38 @@ describe("Position Analytics Backend Control API", () => {
             } catch {}
         }
     });
+
+    it("14. Control API Stop Mid-Run: Gracefully terminates active child process via SIGTERM and transitions status to stopped", async () => {
+        const testStopWallet = "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d";
+        // Start analysis
+        const startRes = await fetch(`${BASE_URL}/api/position-analytics/start`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ wallet: testStopWallet, period: "30D", force: true }),
+        });
+        assert.equal(startRes.status, 202);
+
+        // Immediately request stop
+        const stopRes = await fetch(`${BASE_URL}/api/position-analytics/stop`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ wallet: testStopWallet }),
+        });
+        assert.equal(stopRes.status, 202);
+        const stopData = await stopRes.json();
+        assert.ok(stopData.status === "stopping" || stopData.status === "stopped");
+
+        // Wait for process to exit and state to settle to "stopped"
+        let finalStatus = "";
+        for (let i = 0; i < 40; i++) {
+            await new Promise((r) => setTimeout(r, 100));
+            const statusRes = await fetch(`${BASE_URL}/api/position-analytics/status?wallet=${testStopWallet}&period=30D`);
+            const statusData = await statusRes.json();
+            if (statusData.status === "stopped") {
+                finalStatus = "stopped";
+                break;
+            }
+        }
+        assert.equal(finalStatus, "stopped");
+    });
 });

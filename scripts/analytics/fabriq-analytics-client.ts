@@ -6,11 +6,17 @@ import {
     SharedCooldownCoordinator,
 } from "../discovery/core/fabriq-position-history.ts";
 import {
+    loadTransactionCheckpointRecord,
+    saveTransactionCheckpointRecord,
+    type TransactionCheckpoint,
+    type CheckpointBatchRecord,
+} from "./position-analytics-storage.ts";
+import type { AnalyticsPeriod } from "./position-analytics-types.ts";
+import {
     deduplicateRawEvents,
     type RawPositionInput,
     type RawEventInput,
 } from "./position-lifecycle-extractor.ts";
-
 export interface DiscoveredPoolItem {
     poolId: string;
     dex?: string;
@@ -46,6 +52,8 @@ export interface FabriqFetchTransactionsResult {
     retryCount?: number;
     rateLimit429Count?: number;
     duplicatesRemoved?: number;
+    fromCheckpoint?: boolean;
+    checkpoint?: TransactionCheckpoint | null;
 }
 
 export const DEFAULT_MAX_404_RETRIES = Number(process.env.FABRIQ_MAX_404_RETRIES ?? "3");
@@ -71,7 +79,7 @@ export interface ClientLoggingOptions {
 export interface BoundedQueueOptions<TItem, TResult> {
     items: TItem[];
     concurrency: number;
-    worker: (item: TItem, index: number) => Promise<TResult>;
+    worker: (item: TItem, index: number, signal?: AbortSignal) => Promise<TResult>;
     signal?: AbortSignal;
     onProgress?: (progress: {
         index: number;
@@ -117,28 +125,19 @@ export async function runBoundedWorkerQueue<TItem, TResult>(
     let isTerminated = false;
     const startTime = Date.now();
 
+    const queueAbortController = new AbortController();
+
     const { promise, resolve, reject } = Promise.withResolvers<{ results: TResult[]; stats: BoundedQueueStats }>();
 
-    const onAbort = () => {
-        isTerminated = true;
-        reject(signal?.reason ?? new Error("Operation aborted"));
-    };
-    signal?.addEventListener("abort", onAbort, { once: true });
-
-    const launchNext = () => {
-        if (isTerminated || signal?.aborted) return;
-
-        if (failureError) {
+    const checkTermination = () => {
+        if (activeCount === 0) {
             isTerminated = true;
             signal?.removeEventListener("abort", onAbort);
-            reject(failureError);
-            return;
-        }
-
-        if (nextIndex >= total) {
-            if (activeCount === 0) {
-                isTerminated = true;
-                signal?.removeEventListener("abort", onAbort);
+            if (signal?.aborted) {
+                reject(signal.reason ?? new Error("Operation aborted"));
+            } else if (failureError) {
+                reject(failureError);
+            } else {
                 resolve({
                     results,
                     stats: {
@@ -148,10 +147,28 @@ export async function runBoundedWorkerQueue<TItem, TResult>(
                     },
                 });
             }
+        }
+    };
+
+    const onAbort = () => {
+        isTerminated = true;
+        queueAbortController.abort(signal?.reason ?? new Error("Operation aborted"));
+        checkTermination();
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+
+    const launchNext = () => {
+        if (isTerminated || signal?.aborted || failureError) {
+            checkTermination();
             return;
         }
 
-        while (activeCount < maxConcurrency && nextIndex < total && !isTerminated) {
+        if (nextIndex >= total) {
+            checkTermination();
+            return;
+        }
+
+        while (activeCount < maxConcurrency && nextIndex < total && !isTerminated && !signal?.aborted && !failureError) {
             const currentIndex = nextIndex++;
             const currentItem = items[currentIndex];
             activeCount++;
@@ -168,7 +185,11 @@ export async function runBoundedWorkerQueue<TItem, TResult>(
                 stage: "start",
             });
 
-            worker(currentItem, currentIndex)
+            const workerSignal = signal
+                ? AbortSignal.any([signal, queueAbortController.signal])
+                : queueAbortController.signal;
+
+            worker(currentItem, currentIndex, workerSignal)
                 .then((res) => {
                     results[currentIndex] = res;
                     activeCount--;
@@ -192,12 +213,13 @@ export async function runBoundedWorkerQueue<TItem, TResult>(
                         stage: "error",
                         durationMs: Date.now() - itemStart,
                     });
-                    if (!failureError) {
+
+                    if (!failureError && !signal?.aborted) {
                         failureError = err;
+                        isTerminated = true;
+                        queueAbortController.abort(err);
                     }
-                    isTerminated = true;
-                    signal?.removeEventListener("abort", onAbort);
-                    reject(failureError);
+                    launchNext();
                 });
         }
     };
@@ -351,7 +373,7 @@ export async function fetchWalletPositionsForPools(
         items: batches,
         concurrency,
         signal: options?.signal,
-        worker: async (batch: string[]) => {
+        worker: async (batch: string[], _batchIdx, workerSignal) => {
             const params = new URLSearchParams();
             params.set("poolIds", batch.join(","));
             params.append("sources", "wallet");
@@ -370,7 +392,7 @@ export async function fetchWalletPositionsForPools(
                 max404Retries: options?.max404Retries ?? DEFAULT_MAX_404_RETRIES,
                 delay404Ms: options?.delay404Ms ?? DEFAULT_DELAY_404_MS,
                 timeoutMs,
-                signal: options?.signal,
+                signal: workerSignal,
                 cooldownCoordinator,
                 onRetry: (info) => {
                     retryCount++;
@@ -481,11 +503,110 @@ function normalizeRawPositionRecord(pos: Record<string, unknown>, poolIdFallback
 /**
  * Fetch lifecycle transactions for selected position IDs in bounded batches.
  */
+export interface FabriqFetchTransactionsOptions extends ClientLoggingOptions {
+    batchSize?: number;
+    concurrency?: number;
+    timeoutMs?: number;
+    max404Retries?: number;
+    delay404Ms?: number;
+    signal?: AbortSignal;
+    cooldownCoordinator?: FabriqFetchCooldownCoordinator;
+    checkpointBaseDir?: string;
+    period?: AnalyticsPeriod;
+    maxCheckpointAgeMs?: number;
+    force?: boolean;
+    checkpoint?: TransactionCheckpoint | null;
+    disableCheckpoint?: boolean;
+    onBatchSaved?: (checkpoint: TransactionCheckpoint) => void;
+}
+
+function parseRawEventsFromResponse(
+    txRes: unknown,
+    positionToPoolMap: Map<string, string>
+): RawEventInput[] {
+    let dataNode: unknown = txRes;
+    if (txRes && typeof txRes === "object" && "data" in txRes) {
+        dataNode = (txRes as Record<string, unknown>).data;
+    }
+
+    const rawEventList: Record<string, unknown>[] = [];
+
+    if (dataNode && typeof dataNode === "object" && !Array.isArray(dataNode)) {
+        const mapObj = dataNode as Record<string, unknown>;
+        for (const [posId, list] of Object.entries(mapObj)) {
+            if (Array.isArray(list)) {
+                for (const item of list) {
+                    if (item && typeof item === "object") {
+                        const rec = item as Record<string, unknown>;
+                        rawEventList.push({
+                            ...rec,
+                            position_id: rec.position_id || rec.positionId || posId,
+                        });
+                    }
+                }
+            }
+        }
+    } else if (Array.isArray(dataNode)) {
+        for (const item of dataNode) {
+            if (item && typeof item === "object") {
+                rawEventList.push(item as Record<string, unknown>);
+            }
+        }
+    }
+
+    const numOrNull = (val: unknown): number | null => {
+        if (val === null || val === undefined || val === "") return null;
+        const n = Number(val);
+        return Number.isFinite(n) ? n : null;
+    };
+
+    const batchEvents: RawEventInput[] = [];
+    for (const tx of rawEventList) {
+        const positionId = String(tx.position_id || tx.positionId || tx.position || "");
+        const poolId = String(tx.pool_id || tx.poolId || positionToPoolMap.get(positionId) || "");
+        const rawId = String(tx.id || tx._id || "");
+        const rawType = String(tx.type || tx.rawType || tx.action || "UNKNOWN");
+        const createdAt = String(tx.created_at || tx.createdAt || tx.timestamp || "");
+        const signature = String(tx.signature || tx.tx_hash || tx.txHash || "");
+        const source = String(tx.source || "wallet");
+
+        batchEvents.push({
+            rawId,
+            rawType,
+            positionId,
+            poolId,
+            createdAt,
+            signature,
+            source,
+            tokenXAmount: numOrNull(tx.token_x_amount ?? tx.tokenXAmount),
+            tokenYAmount: numOrNull(tx.token_y_amount ?? tx.tokenYAmount),
+            tokenXAmountUsd: numOrNull(tx.token_x_amount_usd ?? tx.tokenXAmountUsd),
+            tokenYAmountUsd: numOrNull(tx.token_y_amount_usd ?? tx.tokenYAmountUsd),
+            tokenXAmountSol: numOrNull(tx.token_x_amount_sol ?? tx.tokenXAmountSol),
+            tokenYAmountSol: numOrNull(tx.token_y_amount_sol ?? tx.tokenYAmountSol),
+            totalInUsd: numOrNull(tx.total_in_usd ?? tx.totalInUsd ?? tx.total_usd),
+            totalInSol: numOrNull(tx.total_in_sol ?? tx.totalInSol ?? tx.total_usd),
+            raw: tx,
+        });
+    }
+
+    return batchEvents;
+}
+
+interface BatchSpec {
+    batchIndex: number;
+    positionIds: string[];
+}
+
+/**
+ * Fetch lifecycle transactions for selected position IDs in bounded batches.
+ * Supports incremental checkpoints, resumable execution, and coordinated cancellation.
+ */
 export async function fetchTransactionsForPositions(
     wallet: string,
     positionIds: string[],
     positionToPoolMap: Map<string, string>,
-    options?: ClientLoggingOptions & { batchSize?: number }
+    options?: FabriqFetchTransactionsOptions
 ): Promise<FabriqFetchTransactionsResult> {
     const log = options?.onLog ?? ((msg: string) => console.log(msg));
     const batchSize = Math.max(1, options?.batchSize ?? DEFAULT_TRANSACTIONS_BATCH_SIZE);
@@ -493,30 +614,159 @@ export async function fetchTransactionsForPositions(
     const timeoutMs = options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
     const cooldownCoordinator = options?.cooldownCoordinator ?? defaultPositionAnalyticsCooldown;
 
-    const batches: string[][] = [];
+    const allBatches: BatchSpec[] = [];
     for (let i = 0; i < positionIds.length; i += batchSize) {
-        batches.push(positionIds.slice(i, i + batchSize));
+        allBatches.push({
+            batchIndex: Math.floor(i / batchSize),
+            positionIds: positionIds.slice(i, i + batchSize),
+        });
     }
 
-    log(`[FABRIQ-TX] Starting transactions fetch for ${positionIds.length} positions across ${batches.length} batches (concurrency: ${concurrency}, batchSize: ${batchSize}, timeout: ${Math.round(timeoutMs / 1000)}s)`);
+    if (positionIds.length === 0) {
+        return {
+            wallet,
+            events: [],
+            batchesFetched: 0,
+            configuredConcurrency: concurrency,
+            peakInFlight: 0,
+            durationMs: 0,
+            retryCount: 0,
+            rateLimit429Count: 0,
+            duplicatesRemoved: 0,
+            fromCheckpoint: false,
+            checkpoint: null,
+        };
+    }
+
+    const useCheckpoint = !options?.force && !options?.disableCheckpoint;
+    let existingCheckpoint: TransactionCheckpoint | null = null;
+
+    if (useCheckpoint) {
+        existingCheckpoint = options?.checkpoint !== undefined
+            ? options.checkpoint
+            : loadTransactionCheckpointRecord(wallet, positionIds, {
+                baseDir: options?.checkpointBaseDir,
+                period: options?.period,
+                maxAgeMs: options?.maxCheckpointAgeMs,
+            });
+    }
+
+    const completedBatchMap = new Map<number, { positionIds: string[]; events: RawEventInput[]; completedAt: string }>();
+    const completedPositionIdsSet = new Set<string>();
+
+    if (existingCheckpoint) {
+        if (Array.isArray(existingCheckpoint.batchRecords)) {
+            for (const rec of existingCheckpoint.batchRecords) {
+                completedBatchMap.set(rec.batchIndex, {
+                    positionIds: rec.positionIds,
+                    events: rec.events || [],
+                    completedAt: rec.completedAt,
+                });
+                for (const pid of rec.positionIds) {
+                    completedPositionIdsSet.add(pid);
+                }
+            }
+        } else if (existingCheckpoint.isComplete) {
+            for (const pid of existingCheckpoint.completedPositionIds) {
+                completedPositionIdsSet.add(pid);
+            }
+        }
+    }
+
+    if (existingCheckpoint && existingCheckpoint.isComplete && positionIds.every((id) => completedPositionIdsSet.has(id))) {
+        log(`[FABRIQ-TX] Reused complete checkpoint for ${positionIds.length} positions (${existingCheckpoint.events.length} events). No network requests needed.`);
+        return {
+            wallet,
+            events: existingCheckpoint.events,
+            batchesFetched: 0,
+            configuredConcurrency: concurrency,
+            peakInFlight: 0,
+            durationMs: 0,
+            retryCount: 0,
+            rateLimit429Count: 0,
+            duplicatesRemoved: 0,
+            fromCheckpoint: true,
+            checkpoint: existingCheckpoint,
+        };
+    }
+
+    const pendingBatches = allBatches.filter((b) => !b.positionIds.every((pid) => completedPositionIdsSet.has(pid)));
+    const alreadyCompletedBatchesCount = allBatches.length - pendingBatches.length;
+
+    if (alreadyCompletedBatchesCount > 0) {
+        log(`[FABRIQ-TX] Resuming from checkpoint: ${alreadyCompletedBatchesCount}/${allBatches.length} batches (${completedPositionIdsSet.size}/${positionIds.length} positions) already complete. Fetching ${pendingBatches.length} remaining batches...`);
+    } else {
+        log(`[FABRIQ-TX] Starting transactions fetch for ${positionIds.length} positions across ${allBatches.length} batches (concurrency: ${concurrency}, batchSize: ${batchSize}, timeout: ${Math.round(timeoutMs / 1000)}s)`);
+    }
+
+    const persistCheckpoint = () => {
+        if (options?.disableCheckpoint) return null;
+
+        const sortedIndices = Array.from(completedBatchMap.keys()).sort((a, b) => a - b);
+        const allRawEvents = sortedIndices.flatMap((idx) => completedBatchMap.get(idx)!.events);
+        const { deduplicated } = deduplicateRawEvents(allRawEvents);
+
+        const completedPositions = Array.from(completedPositionIdsSet);
+        const isComplete = positionIds.length > 0 && positionIds.every((id) => completedPositionIdsSet.has(id));
+
+        const batchRecords: CheckpointBatchRecord[] = sortedIndices.map((idx) => {
+            const rec = completedBatchMap.get(idx)!;
+            return {
+                batchIndex: idx,
+                positionIds: rec.positionIds,
+                eventCount: rec.events.length,
+                completedAt: rec.completedAt,
+                events: rec.events,
+            };
+        });
+
+        const checkpoint: TransactionCheckpoint = {
+            schemaVersion: "v2",
+            wallet: wallet.trim(),
+            savedAt: new Date().toISOString(),
+            period: options?.period,
+            selectedPositionIds: positionIds,
+            completedPositionIds: completedPositions,
+            completedBatchIndices: sortedIndices,
+            batchRecords,
+            events: deduplicated,
+            isComplete,
+            coverage: {
+                totalSelectedPositions: positionIds.length,
+                completedPositionsCount: completedPositions.length,
+                totalBatches: allBatches.length,
+                completedBatchesCount: completedBatchMap.size,
+                isComplete,
+            },
+            positionIds: completedPositions,
+        };
+
+        saveTransactionCheckpointRecord(checkpoint, {
+            baseDir: options?.checkpointBaseDir,
+            period: options?.period,
+        });
+
+        options?.onBatchSaved?.(checkpoint);
+        return checkpoint;
+    };
 
     let retryCount = 0;
     let rateLimit429Count = 0;
 
     const queueResult = await runBoundedWorkerQueue({
-        items: batches,
+        items: pendingBatches,
         concurrency,
         signal: options?.signal,
-        worker: async (batch: string[]) => {
+        worker: async (batchSpec: BatchSpec, _workerIdx, workerSignal) => {
             const params = new URLSearchParams();
-            params.set("positionIds", batch.join(","));
+            params.set("positionIds", batchSpec.positionIds.join(","));
 
             const fetchOpts: FabriqFetchOptions = {
                 onLog: log,
                 max404Retries: options?.max404Retries ?? DEFAULT_MAX_404_RETRIES,
                 delay404Ms: options?.delay404Ms ?? DEFAULT_DELAY_404_MS,
                 timeoutMs,
-                signal: options?.signal,
+                signal: workerSignal,
                 cooldownCoordinator,
                 onRetry: (info) => {
                     retryCount++;
@@ -530,71 +780,20 @@ export async function fetchTransactionsForPositions(
                 fetchOpts
             );
 
-            let dataNode: unknown = txRes;
-            if (txRes && typeof txRes === "object" && "data" in txRes) {
-                dataNode = (txRes as Record<string, unknown>).data;
+            const batchEvents = parseRawEventsFromResponse(txRes, positionToPoolMap);
+
+            // Record batch completion (even if batchEvents is empty with 0 events)
+            completedBatchMap.set(batchSpec.batchIndex, {
+                positionIds: batchSpec.positionIds,
+                events: batchEvents,
+                completedAt: new Date().toISOString(),
+            });
+            for (const pid of batchSpec.positionIds) {
+                completedPositionIdsSet.add(pid);
             }
 
-            const rawEventList: Record<string, unknown>[] = [];
-
-            if (dataNode && typeof dataNode === "object" && !Array.isArray(dataNode)) {
-                const mapObj = dataNode as Record<string, unknown>;
-                for (const [posId, list] of Object.entries(mapObj)) {
-                    if (Array.isArray(list)) {
-                        for (const item of list) {
-                            if (item && typeof item === "object") {
-                                const rec = item as Record<string, unknown>;
-                                rawEventList.push({
-                                    ...rec,
-                                    position_id: rec.position_id || rec.positionId || posId,
-                                });
-                            }
-                        }
-                    }
-                }
-            } else if (Array.isArray(dataNode)) {
-                for (const item of dataNode) {
-                    if (item && typeof item === "object") {
-                        rawEventList.push(item as Record<string, unknown>);
-                    }
-                }
-            }
-
-            const batchEvents: RawEventInput[] = [];
-            for (const tx of rawEventList) {
-                const positionId = String(tx.position_id || tx.positionId || tx.position || "");
-                const poolId = String(tx.pool_id || tx.poolId || positionToPoolMap.get(positionId) || "");
-                const rawId = String(tx.id || tx._id || "");
-                const rawType = String(tx.type || tx.rawType || tx.action || "UNKNOWN");
-                const createdAt = String(tx.created_at || tx.createdAt || tx.timestamp || "");
-                const signature = String(tx.signature || tx.tx_hash || tx.txHash || "");
-                const source = String(tx.source || "wallet");
-
-                const numOrNull = (val: unknown): number | null => {
-                    if (val === null || val === undefined || val === "") return null;
-                    const n = Number(val);
-                    return Number.isFinite(n) ? n : null;
-                };
-
-                batchEvents.push({
-                    rawId,
-                    rawType,
-                    positionId,
-                    poolId,
-                    createdAt,
-                    signature,
-                    source,
-                    tokenXAmount: numOrNull(tx.token_x_amount ?? tx.tokenXAmount),
-                    tokenYAmount: numOrNull(tx.token_y_amount ?? tx.tokenYAmount),
-                    tokenXAmountUsd: numOrNull(tx.token_x_amount_usd ?? tx.tokenXAmountUsd),
-                    tokenYAmountUsd: numOrNull(tx.token_y_amount_usd ?? tx.tokenYAmountUsd),
-                    tokenXAmountSol: numOrNull(tx.token_x_amount_sol ?? tx.tokenXAmountSol),
-                    tokenYAmountSol: numOrNull(tx.token_y_amount_sol ?? tx.tokenYAmountSol),
-                    totalInUsd: numOrNull(tx.total_in_usd ?? tx.totalInUsd ?? tx.total_usd),
-                    totalInSol: numOrNull(tx.total_in_sol ?? tx.totalInSol ?? tx.total_usd),
-                    raw: tx,
-                });
-            }
+            // Atomically update and persist checkpoint
+            persistCheckpoint();
 
             return batchEvents;
         },
@@ -610,26 +809,25 @@ export async function fetchTransactionsForPositions(
         },
     });
 
-    // Flatten in strict batch order
-    const allEvents: RawEventInput[] = queueResult.results.flatMap((batchEvents) => batchEvents);
-
-    // Conservative deduplication of duplicate events with strong identity evidence
+    const sortedIndices = Array.from(completedBatchMap.keys()).sort((a, b) => a - b);
+    const allEvents = sortedIndices.flatMap((idx) => completedBatchMap.get(idx)!.events);
     const { deduplicated, duplicatesRemoved } = deduplicateRawEvents(allEvents);
-    if (duplicatesRemoved > 0) {
-        log(`[FABRIQ-TX] Deduplicated ${duplicatesRemoved} redundant event records (${deduplicated.length} retained)`);
-    }
 
-    log(`[FABRIQ-TX] Fetched ${deduplicated.length} transaction events across ${positionIds.length} positions in ${batches.length} batches (${queueResult.stats.durationMs}ms, peak in-flight: ${queueResult.stats.peakInFlight}, retries: ${retryCount}, 429s: ${rateLimit429Count})`);
+    const finalCheckpoint = persistCheckpoint();
+
+    log(`[FABRIQ-TX] Fetched ${deduplicated.length} transaction events across ${positionIds.length} positions in ${allBatches.length} batches (${queueResult.stats.durationMs}ms, peak in-flight: ${queueResult.stats.peakInFlight}, retries: ${retryCount}, 429s: ${rateLimit429Count})`);
 
     return {
         wallet,
         events: deduplicated,
-        batchesFetched: batches.length,
+        batchesFetched: pendingBatches.length,
         configuredConcurrency: concurrency,
         peakInFlight: queueResult.stats.peakInFlight,
         durationMs: queueResult.stats.durationMs,
         retryCount,
         rateLimit429Count,
         duplicatesRemoved,
+        fromCheckpoint: false,
+        checkpoint: finalCheckpoint,
     };
 }

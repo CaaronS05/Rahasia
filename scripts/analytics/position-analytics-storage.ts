@@ -394,11 +394,41 @@ export function savePositionMetrics(
     return targetPath;
 }
 
+export interface CheckpointBatchRecord {
+    batchIndex: number;
+    positionIds: string[];
+    eventCount: number;
+    completedAt: string;
+    events?: RawEventInput[];
+}
+
+export interface TransactionCheckpointCoverage {
+    totalSelectedPositions: number;
+    completedPositionsCount: number;
+    totalBatches: number;
+    completedBatchesCount: number;
+    isComplete: boolean;
+}
+
 export interface TransactionCheckpoint {
+    schemaVersion: "v2";
     wallet: string;
     savedAt: string;
-    positionIds: string[];
+    period?: AnalyticsPeriod;
+    selectedPositionIds: string[];
+    completedPositionIds: string[];
+    completedBatchIndices: number[];
+    batchRecords?: CheckpointBatchRecord[];
     events: RawEventInput[];
+    isComplete: boolean;
+    coverage: TransactionCheckpointCoverage;
+    positionIds?: string[];
+}
+
+export interface LoadTransactionCheckpointOptions {
+    maxAgeMs?: number;
+    baseDir?: string;
+    period?: AnalyticsPeriod;
 }
 
 /**
@@ -406,66 +436,187 @@ export interface TransactionCheckpoint {
  */
 export function getTransactionCheckpointPath(
     wallet: string,
-    baseDir = DEFAULT_CHECKPOINT_STORAGE_BASE
+    baseDir = DEFAULT_CHECKPOINT_STORAGE_BASE,
+    period?: AnalyticsPeriod
 ): string {
-    return path.resolve(baseDir, `${wallet.trim()}-tx-events.json`);
+    const filename = period ? `${wallet.trim()}-${period}-tx-events.json` : `${wallet.trim()}-tx-events.json`;
+    return path.resolve(baseDir, filename);
 }
 
 /**
- * Load transaction checkpoint if available and freshness is within maxAgeMs (default: 4 hours).
+ * Load raw transaction checkpoint record if available, fresh, and matching selection identity.
+ * Validates freshness and selection identity so that stale or different checkpoints are rejected.
  */
-export function loadTransactionCheckpoint(
+export function loadTransactionCheckpointRecord(
     wallet: string,
-    positionIds: string[],
-    options?: { maxAgeMs?: number; baseDir?: string }
-): RawEventInput[] | null {
+    selectedPositionIds: string[],
+    options?: LoadTransactionCheckpointOptions
+): TransactionCheckpoint | null {
     const baseDir = options?.baseDir ?? DEFAULT_CHECKPOINT_STORAGE_BASE;
     const maxAgeMs = options?.maxAgeMs ?? 4 * 60 * 60 * 1000;
-    const cpPath = getTransactionCheckpointPath(wallet, baseDir);
+    const normWallet = wallet.trim();
 
-    if (!fs.existsSync(cpPath)) return null;
+    let cpPath = options?.period
+        ? getTransactionCheckpointPath(normWallet, baseDir, options.period)
+        : getTransactionCheckpointPath(normWallet, baseDir);
+
+    if (!fs.existsSync(cpPath)) {
+        if (options?.period) {
+            const fallbackPath = getTransactionCheckpointPath(normWallet, baseDir);
+            if (fs.existsSync(fallbackPath)) {
+                cpPath = fallbackPath;
+            } else {
+                return null;
+            }
+        } else {
+            return null;
+        }
+    }
 
     try {
         const raw = fs.readFileSync(cpPath, "utf8");
-        const cp = JSON.parse(raw) as TransactionCheckpoint;
+        const cp = JSON.parse(raw) as any;
 
-        if (!cp || cp.wallet !== wallet.trim() || !Array.isArray(cp.events)) {
-            return null;
-        }
+        if (!cp || typeof cp !== "object") return null;
+        if (typeof cp.wallet !== "string" || cp.wallet.trim() !== normWallet) return null;
+        if (!Array.isArray(cp.events)) return null;
 
-        const age = Date.now() - new Date(cp.savedAt).getTime();
-        if (age > maxAgeMs) {
+        // Freshness validation
+        const savedTime = new Date(cp.savedAt).getTime();
+        if (!Number.isFinite(savedTime)) return null;
+        const age = Date.now() - savedTime;
+        if (age < 0 || age > maxAgeMs) {
             return null; // Expired
         }
 
-        // Check if all requested positionIds are covered in the checkpoint
-        const covered = new Set(cp.positionIds || []);
-        const allCovered = positionIds.every((id) => covered.has(id));
-        if (!allCovered) {
-            return null; // Partial coverage, need fresh
+        // Period validation if specified on both sides
+        if (options?.period && cp.period && cp.period !== options.period) {
+            return null; // Period mismatch
         }
 
-        return cp.events;
+        // Selection identity validation:
+        // The checkpoint's selectedPositionIds MUST match selectedPositionIds exactly.
+        const cpSelected: string[] = Array.isArray(cp.selectedPositionIds)
+            ? cp.selectedPositionIds
+            : Array.isArray(cp.positionIds)
+            ? cp.positionIds
+            : [];
+
+        if (cpSelected.length !== selectedPositionIds.length) {
+            return null; // Different position selection count
+        }
+
+        for (let i = 0; i < selectedPositionIds.length; i++) {
+            if (cpSelected[i] !== selectedPositionIds[i]) {
+                return null; // Selection content or order differs
+            }
+        }
+
+        const completedIds: string[] = Array.isArray(cp.completedPositionIds)
+            ? cp.completedPositionIds
+            : Array.isArray(cp.positionIds)
+            ? cp.positionIds
+            : [];
+
+        const isComplete = Boolean(cp.isComplete ?? (completedIds.length === selectedPositionIds.length));
+
+        const completedIndices: number[] = Array.isArray(cp.completedBatchIndices)
+            ? cp.completedBatchIndices
+            : [];
+
+        const coverage: TransactionCheckpointCoverage = cp.coverage && typeof cp.coverage === "object"
+            ? cp.coverage
+            : {
+                totalSelectedPositions: selectedPositionIds.length,
+                completedPositionsCount: completedIds.length,
+                totalBatches: completedIndices.length || 1,
+                completedBatchesCount: completedIndices.length || (isComplete ? 1 : 0),
+                isComplete,
+            };
+
+        return {
+            schemaVersion: "v2",
+            wallet: normWallet,
+            savedAt: cp.savedAt,
+            period: cp.period ?? options?.period,
+            selectedPositionIds,
+            completedPositionIds: completedIds,
+            completedBatchIndices: completedIndices,
+            batchRecords: Array.isArray(cp.batchRecords) ? cp.batchRecords : undefined,
+            events: cp.events,
+            isComplete,
+            coverage,
+            positionIds: completedIds,
+        };
     } catch {
         return null;
     }
 }
 
 /**
+ * Load completed transaction checkpoint events if available, fresh, matching selection,
+ * and completely finished.
+ * Never returns events for an incomplete / partial checkpoint.
+ */
+export function loadTransactionCheckpoint(
+    wallet: string,
+    positionIds: string[],
+    options?: LoadTransactionCheckpointOptions
+): RawEventInput[] | null {
+    const cp = loadTransactionCheckpointRecord(wallet, positionIds, options);
+    if (!cp || !cp.isComplete) {
+        return null;
+    }
+    const covered = new Set(cp.completedPositionIds);
+    const allCovered = positionIds.every((id) => covered.has(id));
+    if (!allCovered) {
+        return null;
+    }
+    return cp.events;
+}
+
+/**
  * Save transaction checkpoint atomically.
+ */
+export function saveTransactionCheckpointRecord(
+    checkpoint: TransactionCheckpoint,
+    options?: { baseDir?: string; period?: AnalyticsPeriod }
+): string {
+    const baseDir = options?.baseDir ?? DEFAULT_CHECKPOINT_STORAGE_BASE;
+    const period = options?.period ?? checkpoint.period;
+    const cpPath = getTransactionCheckpointPath(checkpoint.wallet, baseDir, period);
+    atomicWriteJsonFile(cpPath, checkpoint);
+    return cpPath;
+}
+
+/**
+ * Save transaction checkpoint atomically (backwards-compatible wrapper).
  */
 export function saveTransactionCheckpoint(
     wallet: string,
     positionIds: string[],
     events: RawEventInput[],
-    baseDir = DEFAULT_CHECKPOINT_STORAGE_BASE
+    baseDir = DEFAULT_CHECKPOINT_STORAGE_BASE,
+    period?: AnalyticsPeriod
 ): void {
-    const cpPath = getTransactionCheckpointPath(wallet, baseDir);
-    const cp: TransactionCheckpoint = {
+    const checkpoint: TransactionCheckpoint = {
+        schemaVersion: "v2",
         wallet: wallet.trim(),
         savedAt: new Date().toISOString(),
-        positionIds,
+        period,
+        selectedPositionIds: positionIds,
+        completedPositionIds: positionIds,
+        completedBatchIndices: [0],
         events,
+        isComplete: true,
+        coverage: {
+            totalSelectedPositions: positionIds.length,
+            completedPositionsCount: positionIds.length,
+            totalBatches: 1,
+            completedBatchesCount: 1,
+            isComplete: true,
+        },
+        positionIds,
     };
-    atomicWriteJsonFile(cpPath, cp);
+    saveTransactionCheckpointRecord(checkpoint, { baseDir, period });
 }

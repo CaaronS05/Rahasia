@@ -15,8 +15,6 @@ import {
 import {
     savePositionAnalyticsDataset,
     loadPositionAnalyticsDataset,
-    loadTransactionCheckpoint,
-    saveTransactionCheckpoint,
 } from "./position-analytics-storage.ts";
 import { isValidSolanaAddress } from "../v1/single-wallet-intelligence.ts";
 
@@ -26,6 +24,7 @@ export interface BuildPositionDatasetOptions {
     force?: boolean;
     dryRun?: boolean;
     storageBaseDir?: string;
+    checkpointBaseDir?: string;
     onLog?: (msg: string) => void;
     signal?: AbortSignal;
     positionsConcurrency?: number;
@@ -150,27 +149,25 @@ export async function executeBuildPositionDataset(
         positionToPoolMap.set(p.positionId, p.poolAddress);
     }
 
-    let rawEvents = loadTransactionCheckpoint(wallet, selectedPositionIds);
+    let rawEvents: RawEventInput[] = [];
     let txBatchesFetched = 0;
     let txRetries = 0;
 
-    if (!rawEvents || force) {
-        if (selectedPositionIds.length > 0) {
-            const txResult = await fetchTransactionsForPositions(wallet, selectedPositionIds, positionToPoolMap, {
-                onLog: log,
-                signal: options.signal,
-                concurrency: options.transactionsConcurrency,
-                timeoutMs: options.requestTimeoutMs,
-            });
-            rawEvents = txResult.events;
-            txBatchesFetched = txResult.batchesFetched;
-            txRetries = txResult.retryCount ?? 0;
-            saveTransactionCheckpoint(wallet, selectedPositionIds, rawEvents);
-        } else {
-            rawEvents = [];
-        }
+    if (selectedPositionIds.length > 0) {
+        const txResult = await fetchTransactionsForPositions(wallet, selectedPositionIds, positionToPoolMap, {
+            onLog: log,
+            signal: options.signal,
+            concurrency: options.transactionsConcurrency,
+            timeoutMs: options.requestTimeoutMs,
+            period,
+            checkpointBaseDir: options.checkpointBaseDir,
+            force,
+        });
+        rawEvents = txResult.events;
+        txBatchesFetched = txResult.batchesFetched;
+        txRetries = txResult.retryCount ?? 0;
     } else {
-        log(`[STAGE 5/7] Reused ${rawEvents.length} transactions from checkpoint.`);
+        rawEvents = [];
     }
 
     // 6. STAGE: Initial entry validation & Metadata enrichment
@@ -236,6 +233,7 @@ function parseCliArgs(): {
     force: boolean;
     dryRun: boolean;
     storageBaseDir?: string;
+    checkpointBaseDir?: string;
 } {
     const args = process.argv.slice(2);
     let wallet: string | null = null;
@@ -243,6 +241,7 @@ function parseCliArgs(): {
     let force = false;
     let dryRun = false;
     let storageBaseDir: string | undefined = undefined;
+    let checkpointBaseDir: string | undefined = undefined;
     for (let i = 0; i < args.length; i++) {
         const arg = args[i];
         if (arg === "--wallet" && args[i + 1]) {
@@ -264,20 +263,35 @@ function parseCliArgs(): {
             i++;
         } else if (arg.startsWith("--storage-base-dir=")) {
             storageBaseDir = arg.slice(19).trim();
+        } else if (arg === "--checkpoint-base-dir" && args[i + 1]) {
+            checkpointBaseDir = args[i + 1].trim();
+            i++;
+        } else if (arg.startsWith("--checkpoint-base-dir=")) {
+            checkpointBaseDir = arg.slice(22).trim();
         }
     }
-    return { wallet, period, force, dryRun, storageBaseDir };
+    return { wallet, period, force, dryRun, storageBaseDir, checkpointBaseDir };
 }
-
 // CLI Execution Entrypoint
 const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
 if (isMain) {
-    const { wallet, period, force, dryRun, storageBaseDir } = parseCliArgs();
+    const { wallet, period, force, dryRun, storageBaseDir, checkpointBaseDir } = parseCliArgs();
 
     if (!wallet) {
-        console.error("Usage: node --experimental-strip-types scripts/analytics/build-position-dataset.ts --wallet <ADDRESS> [--period <30D|90D|ALL_AVAILABLE>] [--force] [--dry-run] [--storage-base-dir <DIR>]");
+        console.error("Usage: node --experimental-strip-types scripts/analytics/build-position-dataset.ts --wallet <ADDRESS> [--period <30D|90D|ALL_AVAILABLE>] [--force] [--dry-run] [--storage-base-dir <DIR>] [--checkpoint-base-dir <DIR>]");
         process.exit(1);
     }
+
+    const abortController = new AbortController();
+
+    const onTerminationSignal = (signalName: string) => {
+        if (abortController.signal.aborted) return;
+        console.log(`[POSITION-ANALYTICS] Received ${signalName}. Initiating graceful cancellation...`);
+        abortController.abort(new Error(`Process received ${signalName}`));
+    };
+
+    process.on("SIGTERM", () => onTerminationSignal("SIGTERM"));
+    process.on("SIGINT", () => onTerminationSignal("SIGINT"));
 
     executeBuildPositionDataset({
         wallet,
@@ -285,14 +299,21 @@ if (isMain) {
         force,
         dryRun,
         storageBaseDir,
+        checkpointBaseDir,
+        signal: abortController.signal,
     })
         .then((res) => {
             if (!res.success) {
                 console.error(`ERROR: ${res.error || "Dataset build failed"}`);
                 process.exit(1);
             }
+            process.exit(0);
         })
         .catch((err) => {
+            if (abortController.signal.aborted || String(err?.message || "").includes("aborted") || String(err?.message || "").includes("SIGTERM")) {
+                console.error(`[POSITION-ANALYTICS] Pipeline cancelled: ${err instanceof Error ? err.message : String(err)}`);
+                process.exit(143);
+            }
             console.error(`FATAL: ${err instanceof Error ? err.message : String(err)}`);
             process.exit(1);
         });
