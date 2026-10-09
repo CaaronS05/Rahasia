@@ -14,6 +14,7 @@ import type {
     PositionAnalyticsBundle,
     PositionAnalyticsDataset,
     PositionVerificationDetail,
+    RequestBudgetTracker,
 } from "./position-analytics-types.ts";
 
 export const DEFAULT_METEORA_API_BASE = "https://dlmm.datapi.meteora.ag";
@@ -117,6 +118,9 @@ export interface MeteoraApiPositionPnLData {
 export interface MeteoraApiPoolPnLResponse {
     positions?: MeteoraApiPositionPnLData[];
     total?: number;
+    hasNext?: boolean;
+    page?: number;
+    pageSize?: number;
 }
 
 export interface MeteoraApiHistoricalEvent {
@@ -150,11 +154,37 @@ export interface MeteoraFetchOptions {
     fetchFn?: (url: string, init?: RequestInit) => Promise<Response>;
     clientVersion?: string;
     sleepFn?: (ms: number) => Promise<void>;
+    requestBudgetTracker?: RequestBudgetTracker;
+}
+
+export interface PaginationState {
+    isComplete: boolean;
+    pagesFetched: number;
+    totalRecords?: number;
+    reason?: string;
+}
+
+export interface FetchPoolClosedPositionsOptions extends MeteoraFetchOptions {
+    maxPages?: number;
+    pageSize?: number;
+    endpointsCalled?: string[];
+    paginationState?: PaginationState;
 }
 
 // ======================================================
 // SAFE NETWORKING & BOUNDED RETRIES
 // ======================================================
+
+export class MeteoraTerminalError extends Error {
+    readonly statusCode: number;
+    readonly isTerminal = true;
+
+    constructor(statusCode: number, message: string) {
+        super(message);
+        this.name = "MeteoraTerminalError";
+        this.statusCode = statusCode;
+    }
+}
 
 export async function fetchMeteoraJson<T>(
     endpoint: string,
@@ -172,6 +202,14 @@ export async function fetchMeteoraJson<T>(
     let lastError: Error | null = null;
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        // Enforce hard request budget across attempts
+        if (options.requestBudgetTracker) {
+            if (options.requestBudgetTracker.attempts >= options.requestBudgetTracker.maxAttempts) {
+                throw new Error(`Hard network budget of ${options.requestBudgetTracker.maxAttempts} HTTP attempts exceeded.`);
+            }
+            options.requestBudgetTracker.attempts++;
+        }
+
         const controller = new AbortController();
         const timeoutHandle = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -183,8 +221,6 @@ export async function fetchMeteoraJson<T>(
                 },
                 signal: controller.signal,
             });
-
-            clearTimeout(timeoutHandle);
 
             // Rate-limited 429 handling
             if (res.status === 429) {
@@ -213,17 +249,30 @@ export async function fetchMeteoraJson<T>(
                 continue;
             }
 
+            // Terminal client errors (400, 401, 403, 404, etc.): do NOT retry
+            if (res.status >= 400 && res.status < 500) {
+                throw new MeteoraTerminalError(
+                    res.status,
+                    `Meteora API terminal client error HTTP ${res.status}: ${res.statusText || "Terminal error"}`
+                );
+            }
+
             if (!res.ok) {
                 throw new Error(`Meteora API error HTTP ${res.status}: ${res.statusText}`);
             }
 
+            // Parse response body while timeout is still active
             const data = (await res.json()) as T;
             return { data, status: res.status };
         } catch (err: unknown) {
-            clearTimeout(timeoutHandle);
             lastError = err instanceof Error ? err : new Error(String(err));
 
-            // Don't retry if aborted explicitly or non-retryable error
+            // Terminal client errors and budget exhaustion must fail immediately without retrying
+            if (lastError instanceof MeteoraTerminalError || lastError.message.includes("Hard network budget")) {
+                throw lastError;
+            }
+
+            // Don't retry if aborted explicitly or reached max retries
             if (controller.signal.aborted && attempt === maxRetries) {
                 throw new Error(`Meteora API request timed out after ${timeoutMs}ms: ${fullUrl}`);
             }
@@ -233,6 +282,8 @@ export async function fetchMeteoraJson<T>(
             }
 
             await sleep(baseRetryDelayMs * attempt);
+        } finally {
+            clearTimeout(timeoutHandle);
         }
     }
 
@@ -246,18 +297,18 @@ export async function fetchMeteoraJson<T>(
 export async function fetchPoolClosedPositions(
     poolAddress: string,
     wallet: string,
-    options: MeteoraFetchOptions & {
-        maxPages?: number;
-        pageSize?: number;
-        endpointsCalled?: string[];
-    } = {}
+    options: FetchPoolClosedPositionsOptions = {}
 ): Promise<MeteoraApiPositionPnLData[]> {
     const maxPages = options.maxPages ?? 5;
     const pageSize = options.pageSize ?? 50;
     const allPositions: MeteoraApiPositionPnLData[] = [];
+    let isComplete = false;
+    let pagesFetched = 0;
+    let completionReason = "";
 
     for (let page = 1; page <= maxPages; page++) {
-        const queryPath = `/positions/${poolAddress}/pnl?user=${wallet}&status=closed&page=${page}&limit=${pageSize}`;
+        pagesFetched = page;
+        const queryPath = `/positions/${poolAddress}/pnl?user=${wallet}&status=closed&page=${page}&page_size=${pageSize}`;
         if (options.endpointsCalled) {
             options.endpointsCalled.push(queryPath);
         }
@@ -266,14 +317,63 @@ export async function fetchPoolClosedPositions(
         const positions = res.data?.positions || [];
         allPositions.push(...positions);
 
-        if (positions.length === 0 || positions.length < pageSize) {
+        const hasNext = res.data?.hasNext;
+        const total = res.data?.total;
+
+        // Documented pagination: explicit hasNext = false signals end of collection
+        if (hasNext === false) {
+            isComplete = true;
+            completionReason = "hasNext is false";
+            break;
+        }
+
+        // Empty page means no further data
+        if (positions.length === 0) {
+            isComplete = true;
+            completionReason = "empty positions array returned";
+            break;
+        }
+
+        // Known total reached or exceeded
+        if (typeof total === "number" && allPositions.length >= total) {
+            isComplete = true;
+            completionReason = "all total positions loaded";
+            break;
+        }
+
+        // Documented pagination: hasNext = true
+        if (hasNext === true) {
+            if (page === maxPages) {
+                isComplete = false;
+                completionReason = `maxPages (${maxPages}) reached with hasNext=true`;
+                break;
+            }
+            continue;
+        }
+
+        // Fallback: fewer positions returned than page_size implies last page
+        if (positions.length < pageSize) {
+            isComplete = true;
+            completionReason = "returned positions less than pageSize";
+            break;
+        }
+
+        // Full page returned on maxPages without explicit hasNext
+        if (page === maxPages) {
+            isComplete = false;
+            completionReason = `maxPages (${maxPages}) reached with full page (${positions.length})`;
             break;
         }
     }
 
+    if (options.paginationState) {
+        options.paginationState.isComplete = isComplete;
+        options.paginationState.pagesFetched = pagesFetched;
+        options.paginationState.reason = completionReason;
+    }
+
     return allPositions;
 }
-
 // ======================================================
 // COMPARISON LOGIC
 // ======================================================
@@ -304,7 +404,7 @@ export function compareTokenFlow(
             localAmount,
             meteoraAmount,
             amountDelta: null,
-            isExactMatch: localAmount === null && meteoraAmount === null,
+            isExactMatch: false,
         };
     }
 
@@ -336,7 +436,7 @@ export function compareUsdMetric(
             meteoraUsd,
             usdDelta: null,
             usdDeltaPct: null,
-            isWithinTolerance: localUsd === null && meteoraUsd === null,
+            isWithinTolerance: false,
         };
     }
 
@@ -362,34 +462,54 @@ export function compareUsdMetric(
  * Reconstruct local token quantities from position lifecycle events
  */
 export function extractLocalTokenFlows(position: NormalizedPositionRecord): {
-    depositedTokenX: number;
-    depositedTokenY: number;
-    withdrawnTokenX: number;
-    withdrawnTokenY: number;
-    claimedFeesTokenX: number;
-    claimedFeesTokenY: number;
+    depositedTokenX: number | null;
+    depositedTokenY: number | null;
+    withdrawnTokenX: number | null;
+    withdrawnTokenY: number | null;
+    claimedFeesTokenX: number | null;
+    claimedFeesTokenY: number | null;
 } {
-    let depX = 0;
-    let depY = 0;
-    let withX = 0;
-    let withY = 0;
-    let feeX = 0;
-    let feeY = 0;
+    const events = position.lifecycle?.events;
+    if (!events || events.length === 0) {
+        return {
+            depositedTokenX: null,
+            depositedTokenY: null,
+            withdrawnTokenX: null,
+            withdrawnTokenY: null,
+            claimedFeesTokenX: null,
+            claimedFeesTokenY: null,
+        };
+    }
 
-    const events = position.lifecycle?.events || [];
+    let depX: number | null = 0;
+    let depY: number | null = 0;
+    let withX: number | null = 0;
+    let withY: number | null = 0;
+    let feeX: number | null = 0;
+    let feeY: number | null = 0;
+
     for (const evt of events) {
-        const x = evt.tokenXAmount ?? 0;
-        const y = evt.tokenYAmount ?? 0;
+        const x = evt.tokenXAmount;
+        const y = evt.tokenYAmount;
 
         if (evt.category === "add") {
-            depX += x;
-            depY += y;
+            if (x === null || x === undefined) depX = null;
+            else if (depX !== null) depX += x;
+
+            if (y === null || y === undefined) depY = null;
+            else if (depY !== null) depY += y;
         } else if (evt.category === "remove") {
-            withX += x;
-            withY += y;
+            if (x === null || x === undefined) withX = null;
+            else if (withX !== null) withX += x;
+
+            if (y === null || y === undefined) withY = null;
+            else if (withY !== null) withY += y;
         } else if (evt.category === "claim_fee") {
-            feeX += x;
-            feeY += y;
+            if (x === null || x === undefined) feeX = null;
+            else if (feeX !== null) feeX += x;
+
+            if (y === null || y === undefined) feeY = null;
+            else if (feeY !== null) feeY += y;
         }
     }
 
@@ -401,6 +521,25 @@ export function extractLocalTokenFlows(position: NormalizedPositionRecord): {
         claimedFeesTokenX: feeX,
         claimedFeesTokenY: feeY,
     };
+}
+
+function resolvePairTotalUsd(pair: MeteoraTokenPairWithTotal | null | undefined): MonetaryPrecisionValue | null {
+    if (!pair) return null;
+    if (pair.total?.usd !== undefined && pair.total?.usd !== null) {
+        return parseMonetaryString(pair.total.usd);
+    }
+    const xUsd = pair.tokenX?.usd;
+    const yUsd = pair.tokenY?.usd;
+    if (xUsd == null && yUsd == null) {
+        return null;
+    }
+    const parsedX = xUsd != null ? parseMonetaryString(xUsd) : null;
+    const parsedY = yUsd != null ? parseMonetaryString(yUsd) : null;
+    if (parsedX === null && parsedY === null) {
+        return null;
+    }
+    const total = (parsedX?.numeric ?? 0) + (parsedY?.numeric ?? 0);
+    return parseMonetaryString(total);
 }
 
 /**
@@ -485,18 +624,9 @@ export function comparePositionRecord(
     }
 
     // 3. USD Valuations
-    const metDepUsd = parseMonetaryString(
-        meteoraPos.allTimeDeposits?.total?.usd ??
-        (Number(meteoraPos.allTimeDeposits?.tokenX?.usd || 0) + Number(meteoraPos.allTimeDeposits?.tokenY?.usd || 0))
-    );
-    const metWithUsd = parseMonetaryString(
-        meteoraPos.allTimeWithdrawals?.total?.usd ??
-        (Number(meteoraPos.allTimeWithdrawals?.tokenX?.usd || 0) + Number(meteoraPos.allTimeWithdrawals?.tokenY?.usd || 0))
-    );
-    const metFeeUsd = parseMonetaryString(
-        meteoraPos.allTimeFees?.total?.usd ??
-        (Number(meteoraPos.allTimeFees?.tokenX?.usd || 0) + Number(meteoraPos.allTimeFees?.tokenY?.usd || 0))
-    );
+    const metDepUsd = resolvePairTotalUsd(meteoraPos.allTimeDeposits);
+    const metWithUsd = resolvePairTotalUsd(meteoraPos.allTimeWithdrawals);
+    const metFeeUsd = resolvePairTotalUsd(meteoraPos.allTimeFees);
     const metPnlUsd = parseMonetaryString(meteoraPos.pnlUsd);
 
     const compDepUsd = compareUsdMetric("deposits", localPos.totalDepositsUsd, metDepUsd, tolerances);
@@ -609,14 +739,13 @@ export function comparePositionRecord(
 
 export interface VerifyPositionAnalyticsOptions {
     datasetOrBundle: PositionAnalyticsDataset | PositionAnalyticsBundle;
-    clientOptions?: MeteoraFetchOptions & {
-        maxPages?: number;
-        pageSize?: number;
+    clientOptions?: FetchPoolClosedPositionsOptions & {
         targetPositionIds?: string[];
         tolerances?: ComparisonTolerances;
     };
     mockApiData?: {
         poolPositions?: Record<string, MeteoraApiPositionPnLData[]>;
+        incompletePools?: Record<string, boolean>;
     };
 }
 
@@ -674,17 +803,29 @@ export async function verifyPositionAnalyticsWithMeteora(
     let notComparableCount = 0;
     let tokenFlowExactMatches = 0;
     let closedTimestampMatches = 0;
+    let anyIncompletePagination = false;
 
     for (const [poolAddress, positionsInPool] of poolsMap.entries()) {
         let meteoraPositions: MeteoraApiPositionPnLData[] = [];
+        let poolPaginationComplete = true;
 
         if (options.mockApiData?.poolPositions?.[poolAddress]) {
             meteoraPositions = options.mockApiData.poolPositions[poolAddress];
+            if (options.mockApiData.incompletePools?.[poolAddress]) {
+                poolPaginationComplete = false;
+                anyIncompletePagination = true;
+            }
         } else {
+            const paginationState: PaginationState = { isComplete: true, pagesFetched: 0 };
             meteoraPositions = await fetchPoolClosedPositions(poolAddress, wallet, {
                 ...clientOptions,
                 endpointsCalled,
+                paginationState,
             });
+            poolPaginationComplete = paginationState.isComplete;
+            if (!poolPaginationComplete) {
+                anyIncompletePagination = true;
+            }
         }
 
         // Exact match by position address
@@ -701,16 +842,25 @@ export async function verifyPositionAnalyticsWithMeteora(
             const candidates = meteoraPosByAddress.get(localPos.positionId) || [];
 
             if (candidates.length === 0) {
-                missingCount++;
-                missingOrAmbiguousRecords.push({
-                    positionAddress: localPos.positionId,
-                    poolAddress,
-                    issue: "MISSING_IN_METEORA",
-                    details: `Position ${localPos.positionId} not returned by Meteora pool ${poolAddress} closed positions.`,
-                });
+                if (!poolPaginationComplete) {
+                    notComparableCount++;
+                    missingOrAmbiguousRecords.push({
+                        positionAddress: localPos.positionId,
+                        poolAddress,
+                        issue: "INSUFFICIENT_DATA",
+                        details: `Position ${localPos.positionId} not observed; pool closed positions pagination was incomplete.`,
+                    });
+                } else {
+                    missingCount++;
+                    missingOrAmbiguousRecords.push({
+                        positionAddress: localPos.positionId,
+                        poolAddress,
+                        issue: "MISSING_IN_METEORA",
+                        details: `Position ${localPos.positionId} not returned by Meteora pool ${poolAddress} closed positions.`,
+                    });
+                }
                 continue;
             }
-
             if (candidates.length > 1) {
                 notComparableCount++;
                 missingOrAmbiguousRecords.push({
@@ -767,11 +917,18 @@ export async function verifyPositionAnalyticsWithMeteora(
         }
     }
 
-    const totalEvaluated = verifiedPositions.length + missingCount;
+    const totalEvaluated =
+        matchedCount +
+        usdValuationDifferenceCount +
+        signMismatchCount +
+        missingCount +
+        notComparableCount;
     const tokenFlowExactMatchRatePct =
         verifiedPositions.length > 0 ? (tokenFlowExactMatches / verifiedPositions.length) * 100 : 0;
     const closedTimestampMatchRatePct =
         verifiedPositions.length > 0 ? (closedTimestampMatches / verifiedPositions.length) * 100 : 0;
+
+    provenance.incompletePagination = anyIncompletePagination;
 
     const summary: MeteoraVerificationSummary = {
         totalPositionsEvaluated: totalEvaluated,
@@ -794,6 +951,7 @@ export async function verifyPositionAnalyticsWithMeteora(
         positions: verifiedPositions,
         missingOrAmbiguousRecords,
         nonDestructiveNotice: "Verification results do not mutate or replace Fabriq-derived published metrics.",
+        incompletePagination: anyIncompletePagination,
     };
 }
 

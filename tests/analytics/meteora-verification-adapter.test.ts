@@ -13,6 +13,7 @@ import {
     loadMeteoraVerificationReport,
     fetchPoolClosedPositions,
     fetchMeteoraJson,
+    MeteoraTerminalError,
     type MeteoraApiPositionPnLData,
 } from "../../scripts/analytics/meteora-verification-adapter.ts";
 import type {
@@ -855,8 +856,10 @@ describe("Meteora Verification Layer MVP Suite", () => {
         const mockFetch = async (url: string) => {
             pagesQueried++;
             const u = new URL(url);
+            assert.equal(u.searchParams.has("limit"), false, "Deprecated 'limit' parameter must not be used");
+            assert.ok(u.searchParams.has("page_size"), "Documented 'page_size' parameter must be used");
             const page = parseInt(u.searchParams.get("page") || "1", 10);
-            const limit = parseInt(u.searchParams.get("limit") || "2", 10);
+            const pageSize = parseInt(u.searchParams.get("page_size") || "2", 10);
 
             if (page === 1) {
                 return new Response(JSON.stringify({
@@ -869,7 +872,7 @@ describe("Meteora Verification Layer MVP Suite", () => {
                 return new Response(JSON.stringify({
                     positions: [
                         { positionAddress: "pos-page-3", isClosed: true },
-                    ], // 1 position < limit 2 => halts pagination
+                    ], // 1 position < pageSize 2 => halts pagination
                 }), { status: 200, headers: { "Content-Type": "application/json" } });
             }
 
@@ -990,5 +993,187 @@ describe("Meteora Verification Layer MVP Suite", () => {
         if (fs.existsSync(TEST_STORAGE_BASE)) {
             fs.rmSync(TEST_STORAGE_BASE, { recursive: true, force: true });
         }
+    });
+
+    // -------------------------------------------------------------------------
+    // 11. MULTI-PAGE PAGINATION WITH HASNEXT
+    // -------------------------------------------------------------------------
+    it("11. Multi-page pagination: obeys hasNext flag and terminates accurately", async () => {
+        let pagesQueried = 0;
+        const mockFetch = async (url: string) => {
+            pagesQueried++;
+            const u = new URL(url);
+            const page = parseInt(u.searchParams.get("page") || "1", 10);
+
+            if (page === 1) {
+                return new Response(JSON.stringify({
+                    positions: [{ positionAddress: "pos-page-1", isClosed: true }],
+                    hasNext: true,
+                }), { status: 200, headers: { "Content-Type": "application/json" } });
+            } else if (page === 2) {
+                return new Response(JSON.stringify({
+                    positions: [{ positionAddress: "pos-page-2", isClosed: true }],
+                    hasNext: false, // Explicit false halts even if positions returned
+                }), { status: 200, headers: { "Content-Type": "application/json" } });
+            }
+            return new Response(JSON.stringify({ positions: [], hasNext: false }), { status: 200 });
+        };
+
+        const paginationState = { isComplete: false, pagesFetched: 0 };
+        const positions = await fetchPoolClosedPositions(
+            "Pool111111111111111111111111111111111111111",
+            "Wallet11111111111111111111111111111111111111",
+            {
+                fetchFn: mockFetch,
+                pageSize: 1,
+                maxPages: 10,
+                paginationState,
+            }
+        );
+
+        assert.equal(pagesQueried, 2);
+        assert.equal(positions.length, 2);
+        assert.equal(paginationState.isComplete, true);
+    });
+
+    // -------------------------------------------------------------------------
+    // 12. INCOMPLETE PAGINATION: NEVER CLASSIFIES MISSING ON PAGE CAP
+    // -------------------------------------------------------------------------
+    it("12. Incomplete pagination: positions not observed are marked NOT_COMPARABLE, never MISSING", async () => {
+        const targetPos = createMockPosition({
+            positionId: "TargetPosNotFetchedDueToCap11111111111111",
+        });
+        const dataset = createMockDataset([targetPos]);
+
+        // Simulate pagination halting due to page cap with hasNext=true
+        const mockFetch = async () => {
+            return new Response(JSON.stringify({
+                positions: [{ positionAddress: "other-pos", isClosed: true }],
+                hasNext: true,
+            }), { status: 200, headers: { "Content-Type": "application/json" } });
+        };
+
+        const report = await verifyPositionAnalyticsWithMeteora({
+            datasetOrBundle: dataset,
+            clientOptions: {
+                fetchFn: mockFetch,
+                maxPages: 1, // Cap at 1 page
+            },
+        });
+
+        assert.equal(report.incompletePagination, true);
+        assert.equal(report.summary.missingCount, 0, "Must NEVER classify as MISSING when page cap reached");
+        assert.equal(report.summary.notComparableCount, 1);
+        assert.equal(report.summary.totalPositionsEvaluated, 1);
+        assert.equal(report.missingOrAmbiguousRecords.length, 1);
+        assert.equal(report.missingOrAmbiguousRecords[0].issue, "INSUFFICIENT_DATA");
+    });
+
+    // -------------------------------------------------------------------------
+    // 13. TERMINAL HTTP 400/401/403/404 BEHAVIOR: HALTS ON ATTEMPT 1 WITHOUT RETRY
+    // -------------------------------------------------------------------------
+    it("13. Terminal client errors: 403 and 404 reject immediately without retrying", async () => {
+        for (const statusCode of [400, 401, 403, 404]) {
+            let attempts = 0;
+            const mockFetch = async () => {
+                attempts++;
+                return new Response(JSON.stringify({ message: "Forbidden or Not Found" }), {
+                    status: statusCode,
+                    statusText: "Client Error",
+                });
+            };
+
+            await assert.rejects(
+                async () => {
+                    await fetchMeteoraJson("/test-terminal", {
+                        fetchFn: mockFetch,
+                        maxRetries: 3,
+                    });
+                },
+                (err: unknown) => {
+                    assert.ok(err instanceof MeteoraTerminalError);
+                    assert.equal(err.statusCode, statusCode);
+                    return true;
+                }
+            );
+
+            assert.equal(attempts, 1, `HTTP ${statusCode} must halt on attempt 1 without retries`);
+        }
+    });
+
+    // -------------------------------------------------------------------------
+    // 14. REQUEST BUDGET ENFORCEMENT
+    // -------------------------------------------------------------------------
+    it("14. Request budget enforcement: halts immediately when budget exhausted", async () => {
+        let fetchAttempts = 0;
+        const mockFetch = async () => {
+            fetchAttempts++;
+            return new Response(JSON.stringify({
+                positions: [{ positionAddress: "pos-page", isClosed: true }],
+                hasNext: true,
+            }), { status: 200, headers: { "Content-Type": "application/json" } });
+        };
+
+        const tracker = { attempts: 0, maxAttempts: 3 };
+
+        await assert.rejects(
+            async () => {
+                await fetchPoolClosedPositions(
+                    "Pool111111111111111111111111111111111111111",
+                    "Wallet11111111111111111111111111111111111111",
+                    {
+                        fetchFn: mockFetch,
+                        maxPages: 10,
+                        requestBudgetTracker: tracker,
+                    }
+                );
+            },
+            /Hard network budget of 3 HTTP attempts exceeded/
+        );
+
+        assert.equal(tracker.attempts, 3);
+        assert.equal(fetchAttempts, 3);
+    });
+
+    // -------------------------------------------------------------------------
+    // 15. MISSING MONETARY & TOKEN FLOW VALUES PRESERVED AS UNKNOWN
+    // -------------------------------------------------------------------------
+    it("15. Missing data safety: missing token flows and USD values are preserved as unknown, never 0", () => {
+        // Token flow with nulls
+        const posWithNullEvents = createMockPosition({
+            lifecycle: {
+                openingEventObserved: true,
+                closingEventObserved: true,
+                eventCount: 1,
+                events: [
+                    {
+                        rawId: "add-1",
+                        rawType: "ADD_LIQUIDITY",
+                        category: "add",
+                        createdAt: "2026-09-15T21:30:41.000Z",
+                        signature: "sig-add",
+                        source: "wallet",
+                        tokenXAmount: null, // UNAVAILABLE
+                        tokenYAmount: 100,
+                        tokenXAmountUsd: null,
+                        tokenYAmountUsd: null,
+                        totalInUsd: null,
+                    },
+                ],
+            },
+        });
+
+        const flows = extractLocalTokenFlows(posWithNullEvents);
+        assert.equal(flows.depositedTokenX, null, "Missing tokenX amount must be null, not 0");
+        assert.equal(flows.depositedTokenY, 100);
+
+        // compareTokenFlow with null
+        const compNull = compareTokenFlow("tokenX", null, null);
+        assert.equal(compNull.isExactMatch, false, "Two unknown flows cannot be claimed as an exact match");
+        assert.equal(compNull.amountDelta, null);
+
+        // compareUsdMetric with null
+        const compUsdNull = compareUsdMetric("pnlUsd", null, null);
+        assert.equal(compUsdNull.isWithinTolerance, false, "Unknown USD cannot be claimed within tolerance");
     });
 });

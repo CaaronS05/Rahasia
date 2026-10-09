@@ -463,12 +463,18 @@ export type MeteoraVerificationClassification =
     | "MISSING"
     | "NOT_COMPARABLE";
 
+export interface RequestBudgetTracker {
+    attempts: number;
+    maxAttempts: number;
+}
+
 export interface MeteoraVerificationSourceProvenance {
     source: "meteora_official_api";
     baseUrl: string;
     endpointsCalled: string[];
     fetchedAt: string;
     clientVersion: string;
+    incompletePagination?: boolean;
 }
 
 export interface MonetaryPrecisionValue {
@@ -579,4 +585,5 @@ export interface MeteoraVerificationReport {
     positions: PositionVerificationDetail[];
     missingOrAmbiguousRecords: MeteoraMissingOrAmbiguousRecord[];
     nonDestructiveNotice: "Verification results do not mutate or replace Fabriq-derived published metrics.";
+    incompletePagination?: boolean;
 }
