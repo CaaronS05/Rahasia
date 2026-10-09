@@ -37,6 +37,15 @@ Meteora DLMM LP Intelligence on Solana: wallet discovery, pool analytics, and po
 - Scope discipline: implement assigned requirements without inventing unrequested features or abstractions.
 - Report status, blockers, and results with factual precision.
 
+
+## Subagent Architecture & Routing
+See `.omp/AGENT_ROUTING.md` for full routing policies and `.omp/agents/` for specialized agent definitions:
+- `dllm-network-auditor`: Read-only external API and rate-limit auditor
+- `dllm-data-integrity-auditor`: Read-only persistence and metric isolation auditor
+- `dllm-analytics-specialist`: Isolated DLMM analytics and mathematical formulas specialist
+- `dllm-frontend-specialist`: Isolated React 19/Vite UI and contract integration specialist
+- `dllm-qa-specialist`: Read-only regression analysis and test design specialist
+Hard maximum 2 concurrent subagents (`task.maxConcurrency: 2`). Centralized integration and verification owned by Main Agent; manual approval required for GitHub push.
 ## Verified Commands
 - `npm test`: Run position analytics tests via Node test runner
 - `npm --prefix frontend run build`: Build production frontend bundle with Vite
