@@ -13,7 +13,7 @@
     "publish:wallets": "node --experimental-strip-types scripts/pipeline/publish-wallets.ts",
     "pipeline": "node scripts/pipeline/run-pipeline.mjs",
     "waldisc:test-one-pool": "node --experimental-strip-types --env-file=.env scripts/discovery/waldisc-1-test-one-pool.ts",
-    "test": "node --experimental-strip-types --test tests/analytics/position-analytics.test.ts tests/analytics/position-metrics.test.ts tests/analytics/position-analytics-control-api.test.ts tests/analytics/monitoring-assessment.test.ts",
+    "test": "node --experimental-strip-types --test tests/analytics/position-analytics.test.ts tests/analytics/position-metrics.test.ts tests/analytics/position-analytics-control-api.test.ts tests/analytics/monitoring-assessment.test.ts tests/control/worker-defaults.test.ts",
     "test:analytics": "node --experimental-strip-types --test tests/analytics/position-analytics.test.ts tests/analytics/position-metrics.test.ts tests/analytics/position-analytics-control-api.test.ts tests/analytics/monitoring-assessment.test.ts"
   },
   "engines": {

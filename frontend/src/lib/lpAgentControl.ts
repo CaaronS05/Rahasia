@@ -73,14 +73,14 @@ export async function getLpAgentStatus(): Promise<LpAgentState> {
   return response.json();
 }
 
-export async function startLpAgentRefresh(params: {
-  concurrency: number;
-  fabriqConcurrency: number;
+export async function startLpAgentRefresh(params?: {
+  concurrency?: number;
+  fabriqConcurrency?: number;
   historyMode?: FabriqHistoryMode;
   startMonth?: string | null;
 }): Promise<LpAgentState> {
-  const historyMode = params.historyMode ?? "90d";
-  const startMonth = historyMode === "custom" ? (params.startMonth ?? null) : null;
+  const historyMode = params?.historyMode ?? "90d";
+  const startMonth = historyMode === "custom" ? (params?.startMonth ?? null) : null;
 
   const response = await fetch(`${LPAGENT_API_BASE}/api/lpagent/refresh`, {
     method: "POST",
@@ -88,8 +88,8 @@ export async function startLpAgentRefresh(params: {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      concurrency: Math.max(1, Math.floor(params.concurrency)),
-      fabriqConcurrency: Math.max(1, Math.floor(params.fabriqConcurrency)),
+      concurrency: Math.max(1, Math.floor(params?.concurrency ?? 8)),
+      fabriqConcurrency: Math.max(1, Math.floor(params?.fabriqConcurrency ?? 8)),
       historyMode,
       startMonth,
     }),

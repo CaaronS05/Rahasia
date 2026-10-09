@@ -97,12 +97,12 @@ export function WalletDataControlPanel({
   // Fabriq State
   const [state, setState] = useState<FabriqState | null>(null);
   const [mode, setMode] = useState<FabriqMode>("stale");
-  const [concurrency, setConcurrency] = useState<number>(10);
+  const [concurrency, setConcurrency] = useState<number>(8);
 
   // LP Agent State
   const [lpAgentState, setLpAgentState] = useState<LpAgentState | null>(null);
   const [lpConcurrency, setLpConcurrency] = useState<number>(8);
-  const [lpFabriqConcurrency, setLpFabriqConcurrency] = useState<number>(10);
+  const [lpFabriqConcurrency, setLpFabriqConcurrency] = useState<number>(8);
 
   // Shared Fabriq History State
   const [historyMode, setHistoryMode] = useState<FabriqHistoryMode>("90d");
@@ -1154,7 +1154,7 @@ export function WalletDataControlPanel({
                 </div>
                 <div className="fabriq-stat-card">
                   <div className="stat-label">Workers</div>
-                  <div className="stat-val text-amber">{state?.concurrency ?? 10}</div>
+                  <div className="stat-val text-amber">{state?.concurrency ?? 8}</div>
                 </div>
                 <div className="fabriq-stat-card">
                   <div className="stat-label">Runtime</div>

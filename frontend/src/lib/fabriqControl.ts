@@ -81,7 +81,7 @@ export async function startFabriqRefresh(params: {
     },
     body: JSON.stringify({
       mode: params.mode,
-      concurrency: params.concurrency ?? 10,
+      concurrency: params.concurrency ?? 8,
       resume: false,
       historyMode,
       startMonth,
@@ -134,7 +134,7 @@ export async function resumeFabriqRefresh(params?: {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      concurrency: params?.concurrency ?? 10,
+      concurrency: params?.concurrency ?? 8,
     }),
   });
 

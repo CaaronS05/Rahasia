@@ -125,12 +125,21 @@ function validateHistoryConfig(historyMode, startMonth) {
     };
 }
 
+function parseWorkerConfig(envVal, fallback = 8) {
+    if (envVal === undefined || envVal === null) return fallback;
+    const parsed = Number.parseInt(String(envVal), 10);
+    return Number.isFinite(parsed) && parsed >= 1 ? parsed : fallback;
+}
+
+const DEFAULT_FABRIQ_CONCURRENCY = parseWorkerConfig(process.env.FABRIQ_CONCURRENCY, 8);
+const DEFAULT_LPAGENT_CONCURRENCY = parseWorkerConfig(process.env.LPAGENT_CONCURRENCY, 8);
+
 let state = {
     status: "idle", // "idle" | "running" | "stopping" | "stopped" | "completed" | "error"
     stage: "idle",  // "idle" | "enrich" | "merge" | "publish" | "completed" | "error"
 
     mode: null,     // "stale" | "full" | null
-    concurrency: 10,
+    concurrency: DEFAULT_FABRIQ_CONCURRENCY,
     historyMode: "90d", // "90d" | "custom"
     startMonth: null,   // string | null
     refreshBefore: null,
@@ -156,8 +165,8 @@ let state = {
 let lpAgentState = {
     status: "idle",
     stage: "idle",
-    concurrency: 5,
-    fabriqConcurrency: 10,
+    concurrency: DEFAULT_LPAGENT_CONCURRENCY,
+    fabriqConcurrency: DEFAULT_FABRIQ_CONCURRENCY,
     historyMode: "90d", // "90d" | "custom"
     startMonth: null,   // string | null
 
@@ -734,7 +743,7 @@ function syncEnrichProgress() {
     );
 }
 
-function sanitizeConcurrency(value) {
+function sanitizeConcurrency(value, fallback = DEFAULT_FABRIQ_CONCURRENCY) {
     const parsed =
         Number.parseInt(
             String(value),
@@ -742,15 +751,12 @@ function sanitizeConcurrency(value) {
         );
 
     if (
-        !Number.isFinite(parsed)
+        !Number.isFinite(parsed) || parsed < 1
     ) {
-        return 10;
+        return fallback;
     }
 
-    return Math.max(
-        1,
-        parsed,
-    );
+    return parsed;
 }
 
 function publicState() {
@@ -1215,7 +1221,7 @@ async function startPipeline({ mode, concurrency, resume, historyMode, startMont
     assertDataPipelineAvailable();
 
     const isResume = Boolean(resume);
-    const safeConcurrency = sanitizeConcurrency(concurrency ?? state.concurrency);
+    const safeConcurrency = sanitizeConcurrency(concurrency ?? state.concurrency, DEFAULT_FABRIQ_CONCURRENCY);
 
     let safeMode = mode;
     if (!safeMode) {
@@ -1568,8 +1574,8 @@ async function startLpAgentRefresh({
 } = {}) {
     assertDataPipelineAvailable();
 
-    const safeConcurrency = sanitizeConcurrency(concurrency ?? 8);
-    const safeFabriqConcurrency = sanitizeConcurrency(fabriqConcurrency ?? 10);
+    const safeConcurrency = sanitizeConcurrency(concurrency ?? DEFAULT_LPAGENT_CONCURRENCY, DEFAULT_LPAGENT_CONCURRENCY);
+    const safeFabriqConcurrency = sanitizeConcurrency(fabriqConcurrency ?? DEFAULT_FABRIQ_CONCURRENCY, DEFAULT_FABRIQ_CONCURRENCY);
     const validatedHistory = validateHistoryConfig(historyMode, startMonth);
 
     lpAgentBaseCompletedPages = 0;
