@@ -13,7 +13,7 @@ export type FilterState = {
 
 export const defaultFilters: FilterState = {
   search: "",
-  firstActivityFrom: "2026-09-06",
+  firstActivityFrom: "",
   firstActivityTo: "",
   minPnl: "",
   minLp: "",
@@ -25,9 +25,10 @@ type Props = {
   draft: FilterState;
   setDraft: Dispatch<SetStateAction<FilterState>>;
   onApply: () => void;
+  timeframe?: "7d" | "30d" | "all";
 };
 
-export function Filters({ draft, setDraft, onApply }: Props) {
+export function Filters({ draft, setDraft, onApply, timeframe = "7d" }: Props) {
   function set<K extends keyof FilterState>(key: K, value: FilterState[K]) {
     setDraft((current) => ({ ...current, [key]: value }));
   }
@@ -64,7 +65,7 @@ export function Filters({ draft, setDraft, onApply }: Props) {
       </label>
 
       <label className="filter-control">
-        <span>MIN 7D PNL (SOL)</span>
+        <span>MIN {timeframe === "all" ? "ALL-TIME" : timeframe.toUpperCase()} PNL (SOL)</span>
         <input
           inputMode="decimal"
           placeholder="Any"

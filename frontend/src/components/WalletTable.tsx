@@ -5,7 +5,7 @@ import {
   SlidersHorizontal,
   Star,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { fmt, shortWallet, timeAgo, walletAge } from "../lib/format";
 import type { Wallet } from "../types";
 import { Sparkline } from "./Sparkline";
@@ -16,6 +16,7 @@ import {
   walletPnl7d,
   walletSparkline7d,
   walletWinRatePercent,
+  walletEffectiveLastActivity,
 } from "../lib/walletMetrics";
 
 export type WalletSortKey =
@@ -153,8 +154,8 @@ function signed(value: number, digits = 2) {
   return `${value >= 0 ? "+" : ""}${fmt(value, digits)}`;
 }
 
-function duration(hours: number) {
-  if (!Number.isFinite(hours)) return "—";
+function duration(hours: number | null | undefined) {
+  if (hours === null || hours === undefined || !Number.isFinite(hours)) return "—";
   if (hours < 1) return `${Math.max(1, Math.round(hours * 60))}m`;
   if (hours < 24) return `${fmt(hours, 1)}h`;
   return `${fmt(hours / 24, 1)}d`;
@@ -194,6 +195,11 @@ export function WalletTable({
 
   const pageCount = Math.max(1, Math.ceil(wallets.length / pageSize));
   const safePage = Math.min(page, pageCount);
+  useEffect(() => {
+    if (page > pageCount) {
+      setPage(1);
+    }
+  }, [page, pageCount]);
   const rows = useMemo(
     () => wallets.slice((safePage - 1) * pageSize, safePage * pageSize),
     [safePage, wallets],
@@ -599,7 +605,7 @@ export function WalletTable({
                   ) : null}
 
                   {visible.last ? (
-                    <td className="numeric">{timeAgo(wallet.last_activity)}</td>
+                    <td className="numeric">{timeAgo(walletEffectiveLastActivity(wallet))}</td>
                   ) : null}
                 </tr>
               );

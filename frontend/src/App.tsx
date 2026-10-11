@@ -20,9 +20,14 @@ import { DataPage, resolveDataTab, type DataTab } from "./pages/DataPage";
 import { PortfolioPage } from "./pages/PortfolioPage";
 import { TrackPage } from "./pages/TrackPage";
 import { ActivityLogsPage } from "./pages/ActivityLogsPage";
-import type { Wallet } from "./types";
+import type { Wallet, WalletDataset } from "./types";
 import {
+  countUnknownActivityWallets,
+  isWalletTimeframeEligible,
+  resolveReferenceDate,
   walletAllTimePnl,
+  walletEffectiveFirstActivity,
+  walletEffectiveLastActivity,
   walletMonthlyPnl,
   walletPnl30d,
   walletPnl7d,
@@ -150,6 +155,7 @@ export default function App() {
     () => new Set(loadTrackedWallets()),
   );
   const [intelligenceUpdatedAt, setIntelligenceUpdatedAt] = useState<string | null>(null);
+  const [datasetMeta, setDatasetMeta] = useState<WalletDataset["meta"] | null>(null);
 
   const refreshDataset = useCallback(() => {
     return Promise.all([
@@ -167,6 +173,7 @@ export default function App() {
         setWallets(joined);
         setIntelligenceUpdatedAt(intelData?.generatedAt ?? null);
         setDataUpdatedAt(dataset.meta?.publishedAt ?? null);
+        setDatasetMeta(dataset.meta ?? null);
       })
       .catch((err) => {
         console.error("Failed to load wallet dataset:", err);
@@ -196,6 +203,8 @@ export default function App() {
     if (!route.address) return undefined;
     return wallets.find((wallet) => wallet.owner === route.address);
   }, [route.address, wallets]);
+  const referenceDate = useMemo(() => resolveReferenceDate(datasetMeta), [datasetMeta]);
+  const unknownCoverageCount = useMemo(() => countUnknownActivityWallets(wallets), [wallets]);
 
   const filtered = useMemo(() => {
     const search = filters.search.trim().toLowerCase();
@@ -211,15 +220,17 @@ export default function App() {
       : null;
 
     return wallets.filter((wallet) => {
+      if (!isWalletTimeframeEligible(wallet, timeframe, referenceDate)) {
+        return false;
+      }
       if (search && !wallet.owner.toLowerCase().includes(search)) return false;
       if (
         minPnl !== null &&
-        walletPnl7d(wallet) <
-        minPnl
+        walletPnl(wallet, timeframe) < minPnl
       ) {
         return false;
       }
-      if (minLp !== null && wallet.total_lp_7d < minLp) return false;
+      if (minLp !== null && (wallet.total_lp_7d ?? 0) < minLp) return false;
       if (
         minWin !== null &&
         walletWinRatePercent(
@@ -228,15 +239,20 @@ export default function App() {
       ) {
         return false;
       }
-      if (minPools !== null && wallet.total_pool < minPools) return false;
+      if (minPools !== null && (wallet.total_pool ?? 0) < minPools) return false;
 
-      const firstActivity = new Date(wallet.first_activity).getTime();
-      if (firstFrom !== null && firstActivity < firstFrom) return false;
-      if (firstTo !== null && firstActivity > firstTo) return false;
+      const firstActivityIso = walletEffectiveFirstActivity(wallet);
+      const firstActivity = firstActivityIso ? new Date(firstActivityIso).getTime() : NaN;
+      if (firstFrom !== null) {
+        if (!Number.isFinite(firstActivity) || firstActivity < firstFrom) return false;
+      }
+      if (firstTo !== null) {
+        if (!Number.isFinite(firstActivity) || firstActivity > firstTo) return false;
+      }
 
       return true;
     });
-  }, [wallets, filters]);
+  }, [wallets, timeframe, referenceDate, filters]);
 
   const sorted = useMemo(() => {
     const rows = [...filtered];
@@ -255,32 +271,20 @@ export default function App() {
           return wallet.intelligenceV1?.confidenceScore ?? -1;
         case "style":
           return wallet.intelligenceV1?.style ?? "";
-        case "pnl7":
-          return wallet.total_pnl_native_7d;
         case "win":
-          return walletWinRatePercent(
-            wallet,
-          );
+          return walletWinRatePercent(wallet);
         case "winDays": {
           const dayStats =
             wallet.fabriq?.stats?.dayWinUsd ??
             wallet.fabriq?.stats?.dayWinSol;
-
-          return Number(
-            dayStats?.wins ?? 0,
-          );
+          return Number(dayStats?.wins ?? 0);
         }
-
         case "loseDays": {
           const dayStats =
             wallet.fabriq?.stats?.dayWinUsd ??
             wallet.fabriq?.stats?.dayWinSol;
-
-          return Number(
-            dayStats?.losses ?? 0,
-          );
+          return Number(dayStats?.losses ?? 0);
         }
-
         case "pnl7":
           return walletPnl7d(wallet);
         case "pnl30":
@@ -288,24 +292,27 @@ export default function App() {
         case "pnlAll":
           return walletAllTimePnl(wallet);
         case "positions":
-          return wallet.total_lp;
-        case "walletAge":
-          return Date.now() - new Date(wallet.first_activity).getTime();
+          return wallet.total_lp ?? 0;
+        case "walletAge": {
+          const firstIso = walletEffectiveFirstActivity(wallet);
+          return firstIso ? Date.now() - new Date(firstIso).getTime() : 0;
+        }
         case "age":
-          return wallet.avg_age_hour;
+          return wallet.avg_age_hour ?? 0;
         case "ev":
-          return wallet.expected_value_native;
+          return wallet.expected_value_native ?? 0;
         case "invested":
-          return wallet.avg_inflow_native;
+          return wallet.avg_inflow_native ?? 0;
         case "monthly":
           return walletMonthlyPnl(wallet);
         case "fees":
-          return wallet.total_fee_native;
-        case "last":
-          return new Date(wallet.last_activity).getTime();
+          return Number(wallet.total_fee_native) || 0;
+        case "last": {
+          const lastIso = walletEffectiveLastActivity(wallet);
+          return lastIso ? new Date(lastIso).getTime() : 0;
+        }
       }
     };
-
     rows.sort((a, b) => {
       const av = value(a, sortKey);
       const bv = value(b, sortKey);
@@ -324,7 +331,7 @@ export default function App() {
 
   const stats = useMemo(() => {
     const pnl = filtered.reduce((sum, wallet) => sum + walletPnl(wallet, timeframe), 0);
-    const fees = filtered.reduce((sum, wallet) => sum + wallet.total_fee_native, 0);
+    const fees = filtered.reduce((sum, wallet) => sum + (Number(wallet.total_fee_native) || 0), 0);
     const avgWin =
       filtered.length > 0
         ? filtered.reduce(
@@ -349,6 +356,14 @@ export default function App() {
 
     setSortKey(key);
     setSortDir("desc");
+  }
+  function handleTimeframeChange(item: Timeframe) {
+    setTimeframe(item);
+    if (sortKey === "pnl7" || sortKey === "pnl30" || sortKey === "pnlAll") {
+      if (item === "7d") setSortKey("pnl7");
+      else if (item === "30d") setSortKey("pnl30");
+      else if (item === "all") setSortKey("pnlAll");
+    }
   }
 
   function toggleTrackedWallet(owner: string) {
@@ -512,7 +527,7 @@ export default function App() {
                     <button
                       key={item}
                       className={timeframe === item ? "active" : ""}
-                      onClick={() => setTimeframe(item)}
+                      onClick={() => handleTimeframeChange(item)}
                     >
                       {item.toUpperCase()}
                     </button>
@@ -522,8 +537,8 @@ export default function App() {
                 <div className="dataset-status">
                   <span className="wallet-count">
                     {filtered.length} wallets found
+                    {unknownCoverageCount > 0 ? ` · ${unknownCoverageCount} unknown coverage` : ""}
                   </span>
-
                   <span className="data-updated">
                     Data updated{" "}
                     {formatUpdatedAt(dataUpdatedAt)}
@@ -546,11 +561,11 @@ export default function App() {
                       ...sorted.map((wallet) =>
                         [
                           wallet.owner,
-                          wallet.total_pnl_native_7d,
-                          wallet.win_rate_native,
-                          wallet.total_pnl_native_30d,
-                          wallet.total_pnl_native,
-                          wallet.total_lp,
+                          walletPnl7d(wallet),
+                          walletWinRatePercent(wallet),
+                          walletPnl30d(wallet),
+                          walletAllTimePnl(wallet),
+                          wallet.total_lp ?? "",
                         ].join(","),
                       ),
                     ].join("\n");
@@ -579,7 +594,10 @@ export default function App() {
                   <div className="metric-card">
                     <span className="metric-label">TOTAL WALLETS</span>
                     <strong>{filtered.length.toLocaleString()}</strong>
-                    <small>{wallets.length.toLocaleString()} wallets in current snapshot</small>
+                    <small>
+                      {wallets.length.toLocaleString()} wallets in current snapshot
+                      {unknownCoverageCount > 0 ? ` (${unknownCoverageCount} unknown coverage)` : ""}
+                    </small>
                   </div>
 
                   <div className="metric-card">
@@ -609,10 +627,12 @@ export default function App() {
                     draft={draftFilters}
                     setDraft={setDraftFilters}
                     onApply={() => setFilters(draftFilters)}
+                    timeframe={timeframe}
                   />
                 ) : null}
 
                 <WalletTable
+                  key={timeframe}
                   wallets={sorted}
                   sortKey={sortKey}
                   sortDir={sortDir}
