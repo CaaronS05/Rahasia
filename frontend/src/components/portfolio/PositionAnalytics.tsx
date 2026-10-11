@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback, Fragment } from "react";
 import {
   Play,
   RotateCw,
@@ -1514,7 +1514,7 @@ export function PositionAnalytics({ walletAddress }: Props) {
                         );
 
                         return (
-                          <div key={pair.pairKey} style={{ display: "contents" }}>
+                          <Fragment key={pair.pairKey}>
                             <tr
                               onClick={() => handleTogglePair(pair.pairKey)}
                               style={{ cursor: "pointer" }}
@@ -1600,7 +1600,7 @@ export function PositionAnalytics({ walletAddress }: Props) {
                                 </td>
                               </tr>
                             ) : null}
-                          </div>
+                          </Fragment>
                         );
                       })
                     ) : (
@@ -1946,7 +1946,7 @@ export function PositionAnalytics({ walletAddress }: Props) {
                         const verifDetail = verificationPositionsMap.get(posKey) || verificationPositionsMap.get(pos.positionId) || null;
                         const verifStatus = deriveVerificationPresentationStatus(verifDetail);
                         return (
-                          <div key={posKey} style={{ display: "contents" }}>
+                          <Fragment key={posKey}>
                             <tr
                               onClick={() => handleToggleExpandPosition(pos)}
                               style={{ cursor: "pointer" }}
@@ -2305,7 +2305,7 @@ export function PositionAnalytics({ walletAddress }: Props) {
                                 </td>
                               </tr>
                             ) : null}
-                          </div>
+                          </Fragment>
                         );
                       })
                     ) : (
