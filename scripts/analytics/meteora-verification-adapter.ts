@@ -15,6 +15,7 @@ import type {
     PositionAnalyticsDataset,
     PositionVerificationDetail,
     RequestBudgetTracker,
+    VerificationPresentationStatus,
 } from "./position-analytics-types.ts";
 
 export const DEFAULT_METEORA_API_BASE = "https://dlmm.datapi.meteora.ag";
@@ -982,14 +983,77 @@ export function saveMeteoraVerificationReport(
 }
 
 /**
+ * Derive user presentation status without destructively replacing existing raw classifications:
+ * - TOKEN_FLOW_MATCHED
+ * - TOKEN_FLOW_DISCREPANCY
+ * - USD_VALUATION_DIFFERENCE
+ * - USD_SIGN_DIFFERENCE
+ * - NOT_COMPARABLE
+ * - NOT_VERIFIED
+ */
+export function deriveVerificationPresentationStatus(
+    detail?: PositionVerificationDetail | null
+): VerificationPresentationStatus {
+    if (!detail) {
+        return "NOT_VERIFIED";
+    }
+
+    if (detail.classification === "NOT_COMPARABLE" || detail.classification === "MISSING") {
+        return "NOT_COMPARABLE";
+    }
+
+    if (!detail.tokenFlows?.allTokensMatch) {
+        return "TOKEN_FLOW_DISCREPANCY";
+    }
+
+    if (detail.usdValuations?.pnlSignFlip || detail.classification === "SIGN_MISMATCH") {
+        return "USD_SIGN_DIFFERENCE";
+    }
+
+    if (
+        detail.classification === "USD_VALUATION_DIFFERENCE" ||
+        (detail.usdValuations?.pnlUsd && !detail.usdValuations.pnlUsd.isWithinTolerance)
+    ) {
+        return "USD_VALUATION_DIFFERENCE";
+    }
+
+    if (detail.tokenFlows?.allTokensMatch) {
+        return "TOKEN_FLOW_MATCHED";
+    }
+
+    return "NOT_COMPARABLE";
+}
+
+/**
  * Load verification report from disk if present.
+ * Strictly validates input and prevents path traversal.
  */
 export function loadMeteoraVerificationReport(
     wallet: string,
     period: AnalyticsPeriod,
     baseDir: string = DEFAULT_VERIFICATION_STORAGE_BASE
 ): MeteoraVerificationReport | null {
-    const filePath = path.resolve(baseDir, wallet.trim(), `${period}.json`);
+    if (!wallet || typeof wallet !== "string") {
+        return null;
+    }
+    const trimmedWallet = wallet.trim();
+    if (
+        trimmedWallet.includes("..") ||
+        trimmedWallet.includes("/") ||
+        trimmedWallet.includes("\\") ||
+        period.includes("..") ||
+        period.includes("/") ||
+        period.includes("\\")
+    ) {
+        return null;
+    }
+
+    const resolvedBase = path.resolve(baseDir);
+    const filePath = path.resolve(resolvedBase, trimmedWallet, `${period}.json`);
+    if (!filePath.startsWith(resolvedBase + path.sep)) {
+        return null;
+    }
+
     if (!fs.existsSync(filePath)) {
         return null;
     }

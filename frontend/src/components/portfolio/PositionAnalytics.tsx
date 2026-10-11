@@ -29,11 +29,16 @@ import {
   type MonitoringAssessmentResult,
   type MonitoringVerdict,
   type ManualFollowability,
+  type MeteoraVerificationReport,
+  type PositionVerificationDetail,
+  type VerificationPresentationStatus,
   getPositionAnalyticsStatus,
   getPositionMetrics,
   getPositions,
   getPositionDetail,
   getPositionAssessment,
+  getMeteoraVerificationReport,
+  deriveVerificationPresentationStatus,
   startPositionAnalytics,
   stopPositionAnalytics,
 } from "../../lib/positionAnalyticsApi";
@@ -103,6 +108,90 @@ function shortAddress(addr: string | null | undefined): string {
   return `${addr.slice(0, 4)}…${addr.slice(-4)}`;
 }
 
+function formatVerifUsd(val: number | null | undefined, prefixSign = false): string {
+  if (val === null || val === undefined || !Number.isFinite(val)) return "Unknown";
+  const abs = Math.abs(val);
+  const formatted = new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(abs);
+
+  if (val > 0) return prefixSign ? `+${formatted}` : formatted;
+  if (val < 0) return `-${formatted}`;
+  return formatted;
+}
+
+function formatVerifDeltaPct(val: number | null | undefined): string {
+  if (val === null || val === undefined || !Number.isFinite(val)) return "Unknown";
+  const sign = val > 0 ? "+" : val < 0 ? "-" : "";
+  return `${sign}${Math.abs(val).toFixed(1)}%`;
+}
+
+function formatVerifAmount(val: number | string | null | undefined, suffix = ""): string {
+  if (val === null || val === undefined) return "Unknown";
+  if (typeof val === "string") {
+    if (val.trim() === "") return "Unknown";
+    return `${val}${suffix}`;
+  }
+  if (!Number.isFinite(val)) return "Unknown";
+  return `${val.toLocaleString("en-US", { maximumFractionDigits: 6 })}${suffix}`;
+}
+
+function formatVerifTimestamp(isoString: string | null | undefined): string {
+  if (!isoString) return "Unknown";
+  try {
+    const d = new Date(isoString);
+    if (Number.isNaN(d.getTime())) return "Unknown";
+    return d.toISOString().replace("T", " ").replace(/\.\d+Z$/, " UTC");
+  } catch {
+    return "Unknown";
+  }
+}
+
+function renderVerificationBadge(status: VerificationPresentationStatus) {
+  switch (status) {
+    case "TOKEN_FLOW_MATCHED":
+      return (
+        <span className="pa-badge pa-verif-badge-flow-matched" title="Token flows match exactly within tolerance">
+          TOKEN_FLOW_MATCHED
+        </span>
+      );
+    case "TOKEN_FLOW_DISCREPANCY":
+      return (
+        <span className="pa-badge pa-verif-badge-flow-discrepancy" title="On-chain token flows do not match">
+          TOKEN_FLOW_DISCREPANCY
+        </span>
+      );
+    case "USD_VALUATION_DIFFERENCE":
+      return (
+        <span className="pa-badge pa-verif-badge-usd-diff" title="Token flows match, but USD valuation difference exceeds tolerance">
+          USD_VALUATION_DIFFERENCE
+        </span>
+      );
+    case "USD_SIGN_DIFFERENCE":
+      return (
+        <span className="pa-badge pa-verif-badge-sign-diff" title="Opposing USD PnL signs between Fabriq and Meteora">
+          USD_SIGN_DIFFERENCE
+        </span>
+      );
+    case "NOT_COMPARABLE":
+      return (
+        <span className="pa-badge pa-verif-badge-not-comparable" title="Insufficient data or ambiguous record in Meteora API">
+          NOT_COMPARABLE
+        </span>
+      );
+    case "NOT_VERIFIED":
+    default:
+      return (
+        <span className="pa-badge pa-verif-badge-not-verified" title="Position not evaluated in verification sample">
+          NOT_VERIFIED
+        </span>
+      );
+  }
+}
+
 export function PositionAnalytics({ walletAddress }: Props) {
   const [loading, setLoading] = useState(true);
   const [period, setPeriod] = useState<AnalyticsPeriod>("30D");
@@ -110,6 +199,7 @@ export function PositionAnalytics({ walletAddress }: Props) {
   const [metrics, setMetrics] = useState<PositionMetricsResult | null>(null);
   const [positionsData, setPositionsData] = useState<PositionsResponse | null>(null);
   const [assessment, setAssessment] = useState<MonitoringAssessmentResult | null>(null);
+  const [verificationReport, setVerificationReport] = useState<MeteoraVerificationReport | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
@@ -148,11 +238,12 @@ export function PositionAnalytics({ walletAddress }: Props) {
     setActionError(null);
 
     try {
-      const [st, m, pos, assess] = await Promise.all([
+      const [st, m, pos, assess, verif] = await Promise.all([
         getPositionAnalyticsStatus(wallet, p).catch(() => null),
         getPositionMetrics(wallet, p).catch(() => null),
         getPositions(wallet, p).catch(() => null),
         getPositionAssessment(wallet, p).catch(() => null),
+        getMeteoraVerificationReport(wallet, p).catch(() => null),
       ]);
 
       if (activeWalletRef.current === wallet && activePeriodRef.current === p) {
@@ -189,6 +280,7 @@ export function PositionAnalytics({ walletAddress }: Props) {
         setMetrics(m);
         setPositionsData(pos);
         setAssessment(assess);
+        setVerificationReport(verif);
       }
     } catch (err: unknown) {
       if (activeWalletRef.current === wallet && activePeriodRef.current === p) {
@@ -208,9 +300,29 @@ export function PositionAnalytics({ walletAddress }: Props) {
     setExpandedPairs(new Set());
     setPositionDetails({});
     setAssessment(null);
+    setVerificationReport(null);
     currentDatasetVersionRef.current = null;
     loadData(walletAddress, period);
   }, [walletAddress, period, loadData]);
+
+  const verificationPositionsMap = useMemo(() => {
+    const map = new Map<string, PositionVerificationDetail>();
+    if (verificationReport?.positions) {
+      for (const p of verificationReport.positions) {
+        if (p.positionAddress) {
+          map.set(p.positionAddress, p);
+          map.set(`${p.poolAddress}:${p.positionAddress}`, p);
+        }
+      }
+    }
+    return map;
+  }, [verificationReport]);
+
+  const totalWalletSampleCount = positionsData?.positions?.length || metrics?.sampling?.analyzedPositions || 0;
+  const testedPositionsCount = verificationReport?.summary?.totalPositionsEvaluated ?? verificationReport?.positions?.length ?? 0;
+  const walletCoveragePct = totalWalletSampleCount > 0
+    ? ((testedPositionsCount / totalWalletSampleCount) * 100).toFixed(1)
+    : "0.0";
 
   // Polling for active runs
   useEffect(() => {
@@ -1505,6 +1617,210 @@ export function PositionAnalytics({ walletAddress }: Props) {
           </section>
 
           {/* ---------------------------------------------------- */}
+          {/* SECTION: METEORA VERIFICATION (ADVISORY OVERLAY) */}
+          {/* ---------------------------------------------------- */}
+          <section className="pa-section">
+            <div className="pa-section-header">
+              <div>
+                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                  <h4 className="pa-section-title">Meteora Official Verification</h4>
+                  <span className="pa-badge" style={{ background: "rgba(59, 130, 246, 0.15)", color: "#60a5fa" }}>
+                    Read-Only Advisory Overlay
+                  </span>
+                </div>
+                <p className="pa-section-subtitle">
+                  Advisory comparison of token flows and USD valuations against official Meteora DLMM API data — Does not mutate Fabriq PnL or scoring
+                </p>
+              </div>
+              {verificationReport ? (
+                <div className="pa-verif-provenance-badge">
+                  <span>Source: <strong>{verificationReport.provenance.source}</strong> ({verificationReport.provenance.baseUrl})</span>
+                  <span>Verified: <strong>{formatVerifTimestamp(verificationReport.verifiedAt)}</strong></span>
+                </div>
+              ) : null}
+            </div>
+
+            {/* Advisory Disclaimers */}
+            <div className="pa-verif-callout pa-verif-callout-warning">
+              <div className="pa-verif-callout-title">
+                <AlertTriangle size={16} />
+                <span>Advisory Numeraire Notice</span>
+              </div>
+              <p>
+                USD and SOL profitability are denominated in different numeraires and may legitimately have opposing signs. For example, a position can realize positive SOL returns through fee and token accumulation while exhibiting negative USD PnL due to token price depreciation during the holding period (or vice versa). Differing USD vs SOL signs do not invalidate underlying token flow consistency.
+              </p>
+            </div>
+
+            <div className="pa-verif-callout pa-verif-callout-info">
+              <div className="pa-verif-callout-title">
+                <Info size={16} />
+                <span>Sample Coverage & Oracle Methodology Disclosure</span>
+              </div>
+              <p>
+                {verificationReport ? (
+                  <>
+                    <strong>Sample Coverage:</strong> Tested {testedPositionsCount} positions out of {totalWalletSampleCount} closed positions in this wallet's sample ({walletCoveragePct}% wallet sample coverage). Agreement in this tested subset does not imply 100% wallet-wide verification.
+                    <br />
+                    <strong>Pricing Methodology:</strong> Provider pricing differences are explanatory hypotheses. They are <em>not marked as verified</em> unless provider pricing methodology is independently documented or confirmed.
+                  </>
+                ) : (
+                  <>
+                    No stored Meteora verification report is available for this wallet and timeframe. Live requests are not triggered by the UI. Stored reports are loaded strictly read-only.
+                  </>
+                )}
+              </p>
+            </div>
+
+            {verificationReport ? (
+              <>
+                {/* 4-KPI Summary Grid */}
+                <div className="pa-grid-4" style={{ marginBottom: "20px" }}>
+                  <div className="pa-card">
+                    <div className="pa-card-title">Tested Sample Size</div>
+                    <div className="pa-card-value">{testedPositionsCount} / {totalWalletSampleCount}</div>
+                    <div className="pa-card-sub">{walletCoveragePct}% wallet sample coverage</div>
+                  </div>
+
+                  <div className="pa-card">
+                    <div className="pa-card-title">Token Flow Match Rate</div>
+                    <div className="pa-card-value positive">
+                      {verificationReport.summary.tokenFlowExactMatchRatePct !== null && verificationReport.summary.tokenFlowExactMatchRatePct !== undefined
+                        ? `${verificationReport.summary.tokenFlowExactMatchRatePct.toFixed(0)}%`
+                        : "Unknown"}
+                    </div>
+                    <div className="pa-card-sub">
+                      {verificationReport.summary.matchedCount + verificationReport.summary.usdValuationDifferenceCount + verificationReport.summary.signMismatchCount} / {testedPositionsCount} positions match on-chain flows
+                    </div>
+                  </div>
+
+                  <div className="pa-card">
+                    <div className="pa-card-title">USD Valuation Differences</div>
+                    <div className="pa-card-value" style={{ color: verificationReport.summary.usdValuationDifferenceCount > 0 ? "var(--amber)" : "var(--text)" }}>
+                      {verificationReport.summary.usdValuationDifferenceCount}
+                    </div>
+                    <div className="pa-card-sub">Valuation divergence on matching flows</div>
+                  </div>
+
+                  <div className="pa-card">
+                    <div className="pa-card-title">USD Sign Disagreements</div>
+                    <div className="pa-card-value" style={{ color: verificationReport.summary.signMismatchCount > 0 ? "#c084fc" : "var(--text)" }}>
+                      {verificationReport.summary.signMismatchCount}
+                    </div>
+                    <div className="pa-card-sub">Opposing Fabriq vs Meteora USD signs</div>
+                  </div>
+                </div>
+
+                {/* Tested Positions Quick Table */}
+                <div className="pa-table-card">
+                  <div style={{ padding: "14px 18px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span style={{ fontSize: "0.88rem", fontWeight: 700 }}>
+                      Tested Positions Overview ({verificationReport.positions.length})
+                    </span>
+                    <span style={{ fontSize: "0.78rem", color: "var(--muted)" }}>
+                      Advisory comparison against official Meteora API
+                    </span>
+                  </div>
+                  <div className="pa-table-responsive">
+                    <table className="pa-table">
+                      <thead>
+                        <tr>
+                          <th>Position Address</th>
+                          <th>Pool</th>
+                          <th>Status</th>
+                          <th>Token Flows</th>
+                          <th>Timestamps</th>
+                          <th>Fabriq USD PnL</th>
+                          <th>Meteora USD PnL</th>
+                          <th>USD Delta</th>
+                          <th>Meteora SOL PnL</th>
+                          <th>Sign Match</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {verificationReport.positions.map((vPos) => {
+                          const presStatus = deriveVerificationPresentationStatus(vPos);
+                          return (
+                            <tr key={vPos.positionAddress}>
+                              <td>
+                                <span className="pa-mono" style={{ fontSize: "0.78rem" }}>
+                                  {vPos.positionAddress.slice(0, 6)}...{vPos.positionAddress.slice(-4)}
+                                </span>
+                              </td>
+                              <td>
+                                <span className="pa-mono" style={{ fontSize: "0.78rem" }}>
+                                  {vPos.poolAddress.slice(0, 6)}...{vPos.poolAddress.slice(-4)}
+                                </span>
+                              </td>
+                              <td>{renderVerificationBadge(presStatus)}</td>
+                              <td>
+                                {vPos.tokenFlows.allTokensMatch ? (
+                                  <span className="pa-badge positive" style={{ fontSize: "0.72rem" }}>
+                                    ✓ Exact Match
+                                  </span>
+                                ) : (
+                                  <span className="pa-badge negative" style={{ fontSize: "0.72rem" }}>
+                                    Discrepancy
+                                  </span>
+                                )}
+                              </td>
+                              <td>
+                                {vPos.timestamps.timestampsMatch ? (
+                                  <span style={{ fontSize: "0.78rem", color: "var(--green)" }}>
+                                    ✓ Match ({vPos.timestamps.closedTimestampDeltaSeconds ?? 0}s)
+                                  </span>
+                                ) : (
+                                  <span style={{ fontSize: "0.78rem", color: "var(--amber)" }}>
+                                    Mismatch ({vPos.timestamps.closedTimestampDeltaSeconds ?? "Unknown"}s)
+                                  </span>
+                                )}
+                              </td>
+                              <td className="pa-mono" style={{ fontSize: "0.82rem" }}>
+                                {formatVerifUsd(vPos.usdValuations.pnlUsd.localUsd, true)}
+                              </td>
+                              <td className="pa-mono" style={{ fontSize: "0.82rem" }}>
+                                {formatVerifUsd(vPos.usdValuations.pnlUsd.meteoraUsd?.numeric, true)}
+                              </td>
+                              <td className="pa-mono" style={{ fontSize: "0.82rem" }}>
+                                {formatVerifUsd(vPos.usdValuations.pnlUsd.usdDelta, true)}
+                                <span style={{ fontSize: "0.72rem", color: "var(--muted)", marginLeft: "4px" }}>
+                                  ({formatVerifDeltaPct(vPos.usdValuations.pnlUsd.usdDeltaPct)})
+                                </span>
+                              </td>
+                              <td className="pa-mono" style={{ fontSize: "0.82rem" }}>
+                                {formatVerifAmount(vPos.solValuations?.meteoraPnlSol?.rawString, " SOL")}
+                              </td>
+                              <td>
+                                {vPos.usdValuations.pnlSignFlip ? (
+                                  <span className="pa-badge" style={{ background: "rgba(168, 85, 247, 0.15)", color: "#c084fc", fontSize: "0.72rem" }}>
+                                    ⚠️ Sign Flip
+                                  </span>
+                                ) : (
+                                  <span className="pa-badge positive" style={{ fontSize: "0.72rem" }}>
+                                    ✓ Agrees
+                                  </span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="pa-empty-state" style={{ padding: "30px 20px" }}>
+                <Info size={32} color="var(--muted)" />
+                <h4>No Stored Meteora Verification Report</h4>
+                <p style={{ maxWidth: "540px", margin: "8px auto 0" }}>
+                  No historical verification artifact exists for wallet <span className="pa-mono">{shortAddress(walletAddress)}</span> ({period}).
+                  Verification reports are loaded strictly read-only from storage and are never fetched live from the UI.
+                </p>
+              </div>
+            )}
+          </section>
+
+          {/* ---------------------------------------------------- */}
           {/* SECTION G: POSITIONS EXPLORER */}
           {/* ---------------------------------------------------- */}
           <section className="pa-section">
@@ -1593,6 +1909,7 @@ export function PositionAnalytics({ walletAddress }: Props) {
                       <th onClick={() => handleSort("pairName")}>
                         Pool / Pair {sortField === "pairName" ? (sortAsc ? "↑" : "↓") : ""}
                       </th>
+                      <th>Verification</th>
                       <th onClick={() => handleSort("openedAt")}>
                         Opened At {sortField === "openedAt" ? (sortAsc ? "↑" : "↓") : ""}
                       </th>
@@ -1626,7 +1943,8 @@ export function PositionAnalytics({ walletAddress }: Props) {
                         const isExpanded = expandedPositionKey === posKey;
                         const detail = positionDetails[posKey];
                         const isLoadingDetail = loadingDetailKey === posKey;
-
+                        const verifDetail = verificationPositionsMap.get(posKey) || verificationPositionsMap.get(pos.positionId) || null;
+                        const verifStatus = deriveVerificationPresentationStatus(verifDetail);
                         return (
                           <div key={posKey} style={{ display: "contents" }}>
                             <tr
@@ -1643,6 +1961,7 @@ export function PositionAnalytics({ walletAddress }: Props) {
                               <td>
                                 <strong>{pos.pairName || "Unknown"}</strong>
                               </td>
+                              <td>{renderVerificationBadge(verifStatus)}</td>
                               <td style={{ color: "var(--muted)", fontSize: "0.78rem" }}>
                                 {formatWibDate(pos.openedAt)}
                               </td>
@@ -1678,7 +1997,7 @@ export function PositionAnalytics({ walletAddress }: Props) {
                             {/* Expanded Lifecycle Details Row */}
                             {isExpanded ? (
                               <tr>
-                                <td colSpan={11} style={{ padding: 0 }}>
+                                <td colSpan={12} style={{ padding: 0 }}>
                                   <div className="pa-expanded-content">
                                     {isLoadingDetail ? (
                                       <div style={{ padding: "16px", color: "var(--muted)" }}>
@@ -1803,6 +2122,183 @@ export function PositionAnalytics({ walletAddress }: Props) {
                                             </div>
                                           )}
                                         </div>
+
+                                        {/* Official Meteora Verification Overlay */}
+                                        <div className="pa-verif-detail-container">
+                                          <div className="pa-verif-detail-header">
+                                            <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+                                              <span style={{ fontSize: "0.88rem", fontWeight: 700, color: "var(--text)" }}>
+                                                Official Meteora Verification
+                                              </span>
+                                              {renderVerificationBadge(verifStatus)}
+                                              {verifDetail ? (
+                                                <span className="pa-badge" style={{ background: "rgba(255,255,255,0.04)", color: "var(--muted)", fontSize: "0.72rem" }}>
+                                                  Raw: {verifDetail.classification}
+                                                </span>
+                                              ) : null}
+                                            </div>
+                                            <span style={{ fontSize: "0.76rem", color: "var(--muted)" }}>
+                                              Advisory Overlay · Does not mutate Fabriq PnL
+                                            </span>
+                                          </div>
+
+                                          {verifDetail ? (
+                                            <>
+                                              {verifDetail.usdValuations.pnlSignFlip ? (
+                                                <div className="pa-verif-sign-flip-alert">
+                                                  <AlertTriangle size={15} />
+                                                  <span>
+                                                    <strong>Explicit USD Sign Disagreement:</strong> Local Fabriq PnL is{" "}
+                                                    <strong>{formatVerifUsd(verifDetail.usdValuations.pnlUsd.localUsd, true)}</strong>, while official Meteora API reports{" "}
+                                                    <strong>{formatVerifUsd(verifDetail.usdValuations.pnlUsd.meteoraUsd?.numeric, true)}</strong>.
+                                                    USD and SOL use different numeraires; oracle pricing methodology differences are explanatory hypotheses.
+                                                  </span>
+                                                </div>
+                                              ) : null}
+
+                                              {/* Comparisons Grid: Valuations & Timestamps */}
+                                              <div className="pa-detail-grid" style={{ marginBottom: "14px" }}>
+                                                <div className="pa-detail-item">
+                                                  <span className="pa-detail-label">Fabriq USD PnL</span>
+                                                  <span className="pa-detail-val" style={{ color: (verifDetail.usdValuations.pnlUsd.localUsd ?? 0) >= 0 ? "var(--green)" : "var(--red)" }}>
+                                                    {formatVerifUsd(verifDetail.usdValuations.pnlUsd.localUsd, true)}
+                                                  </span>
+                                                </div>
+
+                                                <div className="pa-detail-item">
+                                                  <span className="pa-detail-label">Meteora Official USD PnL</span>
+                                                  <span className="pa-detail-val" style={{ color: (verifDetail.usdValuations.pnlUsd.meteoraUsd?.numeric ?? 0) >= 0 ? "var(--green)" : "var(--red)" }}>
+                                                    {formatVerifUsd(verifDetail.usdValuations.pnlUsd.meteoraUsd?.numeric, true)}
+                                                  </span>
+                                                </div>
+
+                                                <div className="pa-detail-item">
+                                                  <span className="pa-detail-label">USD Delta (Difference)</span>
+                                                  <span className="pa-detail-val">
+                                                    {formatVerifUsd(verifDetail.usdValuations.pnlUsd.usdDelta, true)}{" "}
+                                                    <span style={{ fontSize: "0.74rem", color: "var(--muted)" }}>
+                                                      ({formatVerifDeltaPct(verifDetail.usdValuations.pnlUsd.usdDeltaPct)})
+                                                    </span>
+                                                  </span>
+                                                </div>
+
+                                                <div className="pa-detail-item">
+                                                  <span className="pa-detail-label">Native SOL PnL (Meteora)</span>
+                                                  <span className="pa-detail-val">
+                                                    {formatVerifAmount(verifDetail.solValuations?.meteoraPnlSol?.rawString, " SOL")}
+                                                  </span>
+                                                </div>
+
+                                                <div className="pa-detail-item">
+                                                  <span className="pa-detail-label">Open Timestamp</span>
+                                                  <span className="pa-detail-val" style={{ fontSize: "0.76rem" }}>
+                                                    Local: {formatVerifTimestamp(verifDetail.timestamps.localOpenedAt)}
+                                                    <br />
+                                                    Meteora: {formatVerifTimestamp(verifDetail.timestamps.meteoraCreatedAt)}
+                                                  </span>
+                                                </div>
+
+                                                <div className="pa-detail-item">
+                                                  <span className="pa-detail-label">Close Timestamp & Delta</span>
+                                                  <span className="pa-detail-val" style={{ fontSize: "0.76rem" }}>
+                                                    Delta: {verifDetail.timestamps.closedTimestampDeltaSeconds !== null ? `${verifDetail.timestamps.closedTimestampDeltaSeconds}s` : "Unknown"} ·{" "}
+                                                    {verifDetail.timestamps.timestampsMatch ? "✓ Matched" : "Mismatch"}
+                                                  </span>
+                                                </div>
+                                              </div>
+
+                                              {/* Side-by-side Token Flows Table */}
+                                              <div style={{ fontSize: "0.78rem", fontWeight: 600, color: "var(--muted)", marginBottom: "6px" }}>
+                                                Token Flows Exact Verification ({verifDetail.tokenFlows.allTokensMatch ? "✓ All Flows Match" : "Discrepancy"}):
+                                              </div>
+                                              <div className="pa-table-responsive" style={{ marginBottom: "14px" }}>
+                                                <table className="pa-events-table">
+                                                  <thead>
+                                                    <tr>
+                                                      <th>Flow Type</th>
+                                                      <th>Local (Fabriq)</th>
+                                                      <th>Meteora Official</th>
+                                                      <th>Amount Delta</th>
+                                                      <th>Status</th>
+                                                    </tr>
+                                                  </thead>
+                                                  <tbody>
+                                                    <tr>
+                                                      <td>Deposited Token X</td>
+                                                      <td className="pa-mono">{formatVerifAmount(verifDetail.tokenFlows.depositedTokenX.localAmount)}</td>
+                                                      <td className="pa-mono">{formatVerifAmount(verifDetail.tokenFlows.depositedTokenX.meteoraAmount?.rawString)}</td>
+                                                      <td className="pa-mono">{formatVerifAmount(verifDetail.tokenFlows.depositedTokenX.amountDelta)}</td>
+                                                      <td>{verifDetail.tokenFlows.depositedTokenX.isExactMatch ? <span className="pa-badge positive" style={{ fontSize: "0.7rem" }}>✓ Match</span> : <span className="pa-badge negative" style={{ fontSize: "0.7rem" }}>Diff</span>}</td>
+                                                    </tr>
+                                                    <tr>
+                                                      <td>Deposited Token Y</td>
+                                                      <td className="pa-mono">{formatVerifAmount(verifDetail.tokenFlows.depositedTokenY.localAmount)}</td>
+                                                      <td className="pa-mono">{formatVerifAmount(verifDetail.tokenFlows.depositedTokenY.meteoraAmount?.rawString)}</td>
+                                                      <td className="pa-mono">{formatVerifAmount(verifDetail.tokenFlows.depositedTokenY.amountDelta)}</td>
+                                                      <td>{verifDetail.tokenFlows.depositedTokenY.isExactMatch ? <span className="pa-badge positive" style={{ fontSize: "0.7rem" }}>✓ Match</span> : <span className="pa-badge negative" style={{ fontSize: "0.7rem" }}>Diff</span>}</td>
+                                                    </tr>
+                                                    <tr>
+                                                      <td>Withdrawn Token X</td>
+                                                      <td className="pa-mono">{formatVerifAmount(verifDetail.tokenFlows.withdrawnTokenX.localAmount)}</td>
+                                                      <td className="pa-mono">{formatVerifAmount(verifDetail.tokenFlows.withdrawnTokenX.meteoraAmount?.rawString)}</td>
+                                                      <td className="pa-mono">{formatVerifAmount(verifDetail.tokenFlows.withdrawnTokenX.amountDelta)}</td>
+                                                      <td>{verifDetail.tokenFlows.withdrawnTokenX.isExactMatch ? <span className="pa-badge positive" style={{ fontSize: "0.7rem" }}>✓ Match</span> : <span className="pa-badge negative" style={{ fontSize: "0.7rem" }}>Diff</span>}</td>
+                                                    </tr>
+                                                    <tr>
+                                                      <td>Withdrawn Token Y</td>
+                                                      <td className="pa-mono">{formatVerifAmount(verifDetail.tokenFlows.withdrawnTokenY.localAmount)}</td>
+                                                      <td className="pa-mono">{formatVerifAmount(verifDetail.tokenFlows.withdrawnTokenY.meteoraAmount?.rawString)}</td>
+                                                      <td className="pa-mono">{formatVerifAmount(verifDetail.tokenFlows.withdrawnTokenY.amountDelta)}</td>
+                                                      <td>{verifDetail.tokenFlows.withdrawnTokenY.isExactMatch ? <span className="pa-badge positive" style={{ fontSize: "0.7rem" }}>✓ Match</span> : <span className="pa-badge negative" style={{ fontSize: "0.7rem" }}>Diff</span>}</td>
+                                                    </tr>
+                                                    <tr>
+                                                      <td>Claimed Fees Token X</td>
+                                                      <td className="pa-mono">{formatVerifAmount(verifDetail.tokenFlows.claimedFeesTokenX.localAmount)}</td>
+                                                      <td className="pa-mono">{formatVerifAmount(verifDetail.tokenFlows.claimedFeesTokenX.meteoraAmount?.rawString)}</td>
+                                                      <td className="pa-mono">{formatVerifAmount(verifDetail.tokenFlows.claimedFeesTokenX.amountDelta)}</td>
+                                                      <td>{verifDetail.tokenFlows.claimedFeesTokenX.isExactMatch ? <span className="pa-badge positive" style={{ fontSize: "0.7rem" }}>✓ Match</span> : <span className="pa-badge negative" style={{ fontSize: "0.7rem" }}>Diff</span>}</td>
+                                                    </tr>
+                                                    <tr>
+                                                      <td>Claimed Fees Token Y</td>
+                                                      <td className="pa-mono">{formatVerifAmount(verifDetail.tokenFlows.claimedFeesTokenY.localAmount)}</td>
+                                                      <td className="pa-mono">{formatVerifAmount(verifDetail.tokenFlows.claimedFeesTokenY.meteoraAmount?.rawString)}</td>
+                                                      <td className="pa-mono">{formatVerifAmount(verifDetail.tokenFlows.claimedFeesTokenY.amountDelta)}</td>
+                                                      <td>{verifDetail.tokenFlows.claimedFeesTokenY.isExactMatch ? <span className="pa-badge positive" style={{ fontSize: "0.7rem" }}>✓ Match</span> : <span className="pa-badge negative" style={{ fontSize: "0.7rem" }}>Diff</span>}</td>
+                                                    </tr>
+                                                  </tbody>
+                                                </table>
+                                              </div>
+
+                                              {/* Match & Divergence Notes */}
+                                              {verifDetail.matchReasons.length > 0 || verifDetail.divergenceReasons.length > 0 ? (
+                                                <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginTop: "10px" }}>
+                                                  {verifDetail.matchReasons.map((mReason, rIdx) => (
+                                                    <div key={rIdx} style={{ fontSize: "0.78rem", color: "var(--green)" }}>
+                                                      ✓ {mReason}
+                                                    </div>
+                                                  ))}
+                                                  {verifDetail.divergenceReasons.map((dReason, dIdx) => (
+                                                    <div key={dIdx} className="pa-verif-oracle-notice">
+                                                      <span className="pa-badge" style={{ background: "rgba(245, 158, 11, 0.15)", color: "var(--amber)", fontSize: "0.7rem" }}>
+                                                        UNCONFIRMED ORACLE HYPOTHESIS
+                                                      </span>
+                                                      <div style={{ fontSize: "0.78rem", color: "var(--text)", marginTop: "4px" }}>
+                                                        {dReason}
+                                                      </div>
+                                                      <div style={{ fontSize: "0.72rem", color: "var(--muted)", marginTop: "2px" }}>
+                                                        Notice: Provider pricing methodology is not independently confirmed. This explanation is an unverified advisory hypothesis.
+                                                      </div>
+                                                    </div>
+                                                  ))}
+                                                </div>
+                                              ) : null}
+                                            </>
+                                          ) : (
+                                            <div style={{ padding: "12px 14px", background: "rgba(255, 255, 255, 0.02)", borderRadius: "6px", fontSize: "0.8rem", color: "var(--muted)" }}>
+                                              <strong>Not Verified:</strong> This position was not evaluated in the tested verification sample ({testedPositionsCount} of {totalWalletSampleCount} positions tested, {walletCoveragePct}% coverage).
+                                            </div>
+                                          )}
+                                        </div>
                                       </>
                                     )}
                                   </div>
@@ -1814,7 +2310,7 @@ export function PositionAnalytics({ walletAddress }: Props) {
                       })
                     ) : (
                       <tr>
-                        <td colSpan={11} style={{ textAlign: "center", color: "var(--muted)", padding: "32px" }}>
+                        <td colSpan={12} style={{ textAlign: "center", color: "var(--muted)", padding: "32px" }}>
                           No positions match the current filter or search criteria.
                         </td>
                       </tr>

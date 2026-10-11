@@ -549,3 +549,180 @@ export async function getPositionAssessment(
   if (!res.ok) throw new Error(data.error || `Failed to fetch assessment (${res.status})`);
   return (data.assessment || data) as MonitoringAssessmentResult;
 }
+
+// ===========================================================================
+// METEORA VERIFICATION ADVISORY OVERLAY TYPES & API
+// ===========================================================================
+
+export type MeteoraVerificationClassification =
+  | "MATCH"
+  | "USD_VALUATION_DIFFERENCE"
+  | "SIGN_MISMATCH"
+  | "MISSING"
+  | "NOT_COMPARABLE";
+
+export type VerificationPresentationStatus =
+  | "TOKEN_FLOW_MATCHED"
+  | "TOKEN_FLOW_DISCREPANCY"
+  | "USD_VALUATION_DIFFERENCE"
+  | "USD_SIGN_DIFFERENCE"
+  | "NOT_COMPARABLE"
+  | "NOT_VERIFIED";
+
+export interface MonetaryPrecisionValue {
+  rawString: string;
+  numeric: number;
+  decimalPlaces: number;
+}
+
+export interface MeteoraTokenFlowComparison {
+  token: string;
+  localAmount: number | null;
+  meteoraAmount: MonetaryPrecisionValue | null;
+  amountDelta: number | null;
+  isExactMatch: boolean;
+}
+
+export interface MeteoraUsdComparison {
+  metric: string;
+  localUsd: number | null;
+  meteoraUsd: MonetaryPrecisionValue | null;
+  usdDelta: number | null;
+  usdDeltaPct: number | null;
+  isWithinTolerance: boolean;
+}
+
+export interface MeteoraVerificationSourceProvenance {
+  source: "meteora_official_api";
+  baseUrl: string;
+  endpointsCalled: string[];
+  fetchedAt: string;
+  clientVersion: string;
+  incompletePagination?: boolean;
+}
+
+export interface PositionVerificationDetail {
+  wallet: string;
+  poolAddress: string;
+  positionAddress: string;
+  classification: MeteoraVerificationClassification;
+  isMatched: boolean;
+  matchReasons: string[];
+  divergenceReasons: string[];
+  timestamps: {
+    localOpenedAt: string | null;
+    meteoraCreatedAt: string | null;
+    localClosedAt: string | null;
+    meteoraClosedAt: string | null;
+    closedTimestampDeltaSeconds: number | null;
+    timestampsMatch: boolean;
+  };
+  tokenFlows: {
+    depositedTokenX: MeteoraTokenFlowComparison;
+    depositedTokenY: MeteoraTokenFlowComparison;
+    withdrawnTokenX: MeteoraTokenFlowComparison;
+    withdrawnTokenY: MeteoraTokenFlowComparison;
+    claimedFeesTokenX: MeteoraTokenFlowComparison;
+    claimedFeesTokenY: MeteoraTokenFlowComparison;
+    allTokensMatch: boolean;
+  };
+  usdValuations: {
+    deposits: MeteoraUsdComparison;
+    withdrawals: MeteoraUsdComparison;
+    claimedFees: MeteoraUsdComparison;
+    pnlUsd: MeteoraUsdComparison;
+    pnlSignFlip: boolean;
+  };
+  solValuations?: {
+    meteoraPnlSol: MonetaryPrecisionValue | null;
+  };
+  metadataEnrichment?: {
+    tokenXMint: string | null;
+    tokenYMint: string | null;
+    minPrice: string | null;
+    maxPrice: string | null;
+    lowerBinId: number | null;
+    upperBinId: number | null;
+  };
+  provenance: MeteoraVerificationSourceProvenance;
+}
+
+export interface MeteoraVerificationSummary {
+  totalPositionsEvaluated: number;
+  matchedCount: number;
+  usdValuationDifferenceCount: number;
+  signMismatchCount: number;
+  missingCount: number;
+  notComparableCount: number;
+  tokenFlowExactMatchRatePct: number;
+  closedTimestampMatchRatePct: number;
+}
+
+export interface MeteoraMissingOrAmbiguousRecord {
+  positionAddress?: string;
+  poolAddress?: string;
+  issue:
+    | "MISSING_IN_METEORA"
+    | "MISSING_IN_LOCAL"
+    | "AMBIGUOUS_DUPLICATE"
+    | "NOT_CLOSED"
+    | "INSUFFICIENT_DATA";
+  details: string;
+}
+
+export interface MeteoraVerificationReport {
+  version: "v1";
+  targetWallet: string;
+  period: AnalyticsPeriod;
+  verifiedAt: string;
+  provenance: MeteoraVerificationSourceProvenance;
+  summary: MeteoraVerificationSummary;
+  positions: PositionVerificationDetail[];
+  missingOrAmbiguousRecords: MeteoraMissingOrAmbiguousRecord[];
+  nonDestructiveNotice: string;
+  incompletePagination?: boolean;
+}
+
+export function deriveVerificationPresentationStatus(
+  detail?: PositionVerificationDetail | null
+): VerificationPresentationStatus {
+  if (!detail) {
+    return "NOT_VERIFIED";
+  }
+  if (detail.classification === "NOT_COMPARABLE" || detail.classification === "MISSING") {
+    return "NOT_COMPARABLE";
+  }
+  if (!detail.tokenFlows?.allTokensMatch) {
+    return "TOKEN_FLOW_DISCREPANCY";
+  }
+  if (detail.usdValuations?.pnlSignFlip || detail.classification === "SIGN_MISMATCH") {
+    return "USD_SIGN_DIFFERENCE";
+  }
+  if (
+    detail.classification === "USD_VALUATION_DIFFERENCE" ||
+    (detail.usdValuations?.pnlUsd && !detail.usdValuations.pnlUsd.isWithinTolerance)
+  ) {
+    return "USD_VALUATION_DIFFERENCE";
+  }
+  if (detail.tokenFlows?.allTokensMatch) {
+    return "TOKEN_FLOW_MATCHED";
+  }
+  return "NOT_COMPARABLE";
+}
+
+export async function getMeteoraVerificationReport(
+  wallet: string,
+  period: AnalyticsPeriod = "30D"
+): Promise<MeteoraVerificationReport | null> {
+  const params = new URLSearchParams({ wallet, period });
+  const url = `${API_BASE}/api/position-analytics/verification?${params.toString()}`;
+  try {
+    const res = await fetch(url, { cache: "no-store" });
+    if (res.status === 404) return null;
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `Failed to fetch verification report (${res.status})`);
+    return (data.report || data) as MeteoraVerificationReport;
+  } catch {
+    return null;
+  }
+}

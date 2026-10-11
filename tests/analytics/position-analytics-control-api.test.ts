@@ -458,6 +458,35 @@ describe("Position Analytics Backend Control API", () => {
             poolBreakdown: [],
         };
         fs.writeFileSync(path.join(MULTI_METRICS_DIR, "30D.json"), JSON.stringify(mockMultiMetrics));
+        const VERIF_TEST_DIR = path.join(ROOT, "data/analytics/verification", TEST_WALLET);
+        fs.mkdirSync(VERIF_TEST_DIR, { recursive: true });
+        const mockVerif30D = {
+            version: "v1",
+            targetWallet: TEST_WALLET,
+            period: "30D",
+            verifiedAt: "2026-10-11T00:00:00.000Z",
+            provenance: {
+                source: "meteora_official_api",
+                baseUrl: "https://dlmm.datapi.meteora.ag",
+                endpointsCalled: ["/test"],
+                fetchedAt: "2026-10-11T00:00:00.000Z",
+                clientVersion: "1.0.0",
+            },
+            summary: {
+                totalPositionsEvaluated: 1,
+                matchedCount: 1,
+                usdValuationDifferenceCount: 0,
+                signMismatchCount: 0,
+                missingCount: 0,
+                notComparableCount: 0,
+                tokenFlowExactMatchRatePct: 100,
+                closedTimestampMatchRatePct: 100,
+            },
+            positions: [],
+            missingOrAmbiguousRecords: [],
+            nonDestructiveNotice: "Verification results do not mutate or replace Fabriq-derived published metrics.",
+        };
+        fs.writeFileSync(path.join(VERIF_TEST_DIR, "30D.json"), JSON.stringify(mockVerif30D));
         // Start local control server on TEST_PORT
         serverProcess = spawn(process.execPath, ["scripts/control/server.mjs"], {
             cwd: ROOT,
@@ -486,6 +515,7 @@ describe("Position Analytics Backend Control API", () => {
             fs.rmSync(path.join(ROOT, "data/analytics/positions", TEST_WALLET), { recursive: true, force: true });
             fs.rmSync(path.join(ROOT, "data/analytics/metrics", TEST_WALLET), { recursive: true, force: true });
             fs.rmSync(path.join(ROOT, "data/analytics/bundles", TEST_WALLET), { recursive: true, force: true });
+            fs.rmSync(path.join(ROOT, "data/analytics/verification", TEST_WALLET), { recursive: true, force: true });
             fs.rmSync(MULTI_POSITIONS_DIR, { recursive: true, force: true });
             fs.rmSync(MULTI_METRICS_DIR, { recursive: true, force: true });
             fs.rmSync(path.join(ROOT, "data/analytics/bundles", TEST_WALLET_MULTI), { recursive: true, force: true });
@@ -917,5 +947,43 @@ describe("Position Analytics Backend Control API", () => {
             }
         }
         assert.equal(finalStatus, "stopped");
+    });
+
+    it("15. Control API Verification Report: Successfully retrieves stored report for valid wallet and period (200)", async () => {
+        const res = await fetch(`${BASE_URL}/api/position-analytics/verification?wallet=${TEST_WALLET}&period=30D`);
+        assert.equal(res.status, 200);
+        const data = await res.json();
+        assert.ok(data.report);
+        assert.equal(data.report.targetWallet, TEST_WALLET);
+        assert.equal(data.report.period, "30D");
+        assert.equal(data.report.summary.totalPositionsEvaluated, 1);
+    });
+
+    it("16. Control API Verification Report: Gracefully handles missing report returning 404 with report: null", async () => {
+        const res = await fetch(`${BASE_URL}/api/position-analytics/verification?wallet=${TEST_WALLET_ALT}&period=30D`);
+        assert.equal(res.status, 404);
+        const data = await res.json();
+        assert.equal(data.report, null);
+        assert.ok(data.error.includes("not found"));
+    });
+
+    it("17. Control API Verification Report: Validates Solana address returning 400 for invalid wallet", async () => {
+        const res = await fetch(`${BASE_URL}/api/position-analytics/verification?wallet=invalid-address&period=30D`);
+        assert.equal(res.status, 400);
+        const data = await res.json();
+        assert.ok(data.error.includes("Invalid Solana wallet address"));
+    });
+
+    it("18. Control API Verification Report: Validates period returning 400 for invalid period", async () => {
+        const res = await fetch(`${BASE_URL}/api/position-analytics/verification?wallet=${TEST_WALLET}&period=1YEAR`);
+        assert.equal(res.status, 400);
+        const data = await res.json();
+        assert.ok(data.error.includes("Invalid period"));
+    });
+
+    it("19. Control API Verification Report: Strictly rejects path traversal attempts returning 400", async () => {
+        const traversalWallet = encodeURIComponent("../../../etc/passwd");
+        const res = await fetch(`${BASE_URL}/api/position-analytics/verification?wallet=${traversalWallet}&period=30D`);
+        assert.equal(res.status, 400);
     });
 });

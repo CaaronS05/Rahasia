@@ -969,3 +969,125 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* Meteora Verification Advisory Overlay Styles */
+.pa-verif-badge-flow-matched {
+  background: rgba(34, 197, 94, 0.15) !important;
+  color: var(--green) !important;
+  border: 1px solid rgba(34, 197, 94, 0.3) !important;
+}
+
+.pa-verif-badge-flow-discrepancy {
+  background: rgba(239, 68, 68, 0.15) !important;
+  color: var(--red) !important;
+  border: 1px solid rgba(239, 68, 68, 0.3) !important;
+}
+
+.pa-verif-badge-usd-diff {
+  background: rgba(245, 158, 11, 0.15) !important;
+  color: var(--amber) !important;
+  border: 1px solid rgba(245, 158, 11, 0.3) !important;
+}
+
+.pa-verif-badge-sign-diff {
+  background: rgba(168, 85, 247, 0.15) !important;
+  color: #c084fc !important;
+  border: 1px solid rgba(168, 85, 247, 0.3) !important;
+}
+
+.pa-verif-badge-not-comparable {
+  background: rgba(156, 163, 175, 0.15) !important;
+  color: var(--muted) !important;
+  border: 1px solid rgba(156, 163, 175, 0.3) !important;
+}
+
+.pa-verif-badge-not-verified {
+  background: rgba(255, 255, 255, 0.04) !important;
+  color: var(--muted) !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+}
+
+.pa-verif-provenance-badge {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 0.74rem;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.03);
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border-soft);
+  text-align: right;
+}
+
+.pa-verif-callout {
+  border-radius: 8px;
+  padding: 12px 16px;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  margin-bottom: 14px;
+}
+
+.pa-verif-callout-warning {
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.25);
+  color: #fbbf24;
+}
+
+.pa-verif-callout-info {
+  background: rgba(59, 130, 246, 0.08);
+  border: 1px solid rgba(59, 130, 246, 0.25);
+  color: #93c5fd;
+}
+
+.pa-verif-callout-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+.pa-verif-callout p {
+  margin: 0;
+  color: var(--text);
+  opacity: 0.92;
+}
+
+.pa-verif-detail-container {
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px 16px;
+  margin-top: 14px;
+}
+
+.pa-verif-detail-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.pa-verif-sign-flip-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  background: rgba(168, 85, 247, 0.12);
+  border: 1px solid rgba(168, 85, 247, 0.3);
+  padding: 10px 12px;
+  border-radius: 6px;
+  color: #e9d5ff;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  margin-bottom: 12px;
+}
+
+.pa-verif-oracle-notice {
+  background: rgba(245, 158, 11, 0.06);
+  border: 1px solid rgba(245, 158, 11, 0.2);
+  padding: 8px 12px;
+  border-radius: 6px;
+}

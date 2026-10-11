@@ -463,6 +463,14 @@ export type MeteoraVerificationClassification =
     | "MISSING"
     | "NOT_COMPARABLE";
 
+export type VerificationPresentationStatus =
+    | "TOKEN_FLOW_MATCHED"
+    | "TOKEN_FLOW_DISCREPANCY"
+    | "USD_VALUATION_DIFFERENCE"
+    | "USD_SIGN_DIFFERENCE"
+    | "NOT_COMPARABLE"
+    | "NOT_VERIFIED";
+
 export interface RequestBudgetTracker {
     attempts: number;
     maxAttempts: number;

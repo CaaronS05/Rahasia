@@ -5531,6 +5531,61 @@ const server = http.createServer(async (request, response) => {
         return;
     }
 
+    if (url.pathname === "/api/position-analytics/verification" && request.method === "GET") {
+        const wallet = url.searchParams.get("wallet");
+        const period = url.searchParams.get("period") || "30D";
+        if (!isValidSolanaAddress(wallet)) {
+            json(request, response, 400, { error: "Invalid Solana wallet address" });
+            return;
+        }
+        if (!isValidAnalyticsPeriod(period)) {
+            json(request, response, 400, { error: 'Invalid period. Must be "30D", "90D", or "ALL_AVAILABLE"' });
+            return;
+        }
+
+        const normWallet = wallet.trim();
+        const normPeriod = period.trim();
+        if (
+            normWallet.includes("..") ||
+            normWallet.includes("/") ||
+            normWallet.includes("\\") ||
+            normPeriod.includes("..") ||
+            normPeriod.includes("/") ||
+            normPeriod.includes("\\")
+        ) {
+            json(request, response, 400, { error: "Invalid path: traversal detected" });
+            return;
+        }
+
+        const verificationBaseDir = path.resolve(ROOT, "data/analytics/verification");
+        const targetDir = path.resolve(verificationBaseDir, normWallet);
+        const targetFile = path.resolve(targetDir, `${normPeriod}.json`);
+
+        if (!targetFile.startsWith(verificationBaseDir + path.sep)) {
+            json(request, response, 400, { error: "Invalid path: traversal detected" });
+            return;
+        }
+
+        if (!fs.existsSync(targetFile)) {
+            json(request, response, 404, {
+                error: "Verification report not found for this wallet and period",
+                report: null,
+            });
+            return;
+        }
+
+        try {
+            const content = JSON.parse(fs.readFileSync(targetFile, "utf8"));
+            json(request, response, 200, {
+                report: content,
+                ...content,
+            });
+        } catch (err) {
+            json(request, response, 500, { error: "Failed to read verification report" });
+        }
+        return;
+    }
+
     if (url.pathname === "/api/position-analytics/start" && request.method === "POST") {
         try {
             const body = await readJson(request).catch(() => ({}));
