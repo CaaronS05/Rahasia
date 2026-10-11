@@ -631,8 +631,15 @@ export function WalletDataControlPanel({
   // Fabriq progress calculation
   const fabriqTotal = state?.total ?? walletCount;
   const fabriqCompleted = state?.completed || 0;
-  const fabriqProgressPercent = fabriqTotal !== null && fabriqTotal > 0 ? Math.min(100, Math.round((fabriqCompleted / fabriqTotal) * 100)) : 0;
-
+  const fabriqProgressPercent = state?.progressPercent !== undefined
+    ? state.progressPercent
+    : (fabriqTotal !== null && fabriqTotal > 0 ? Math.min(100, Math.floor((fabriqCompleted / fabriqTotal) * 100)) : 0);
+  const fabriqRemaining = state?.remaining !== undefined
+    ? state.remaining
+    : (fabriqTotal !== null ? Math.max(0, fabriqTotal - fabriqCompleted) : 0);
+  const walletTargetDisplay = state?.total || walletCount || 4153;
+  const lpCountDisplay = state?.lpAgentCount || 1557;
+  const poolCountDisplay = state?.poolScannerCount || 2596;
   return (
     <section className="wallet-data-panel fabriq-modal-dialog modal-wide" aria-label="Wallet Data controls">
         {/* Modal Header */}
@@ -1132,14 +1139,23 @@ export function WalletDataControlPanel({
                   <span className="step-label">Publish Wallets</span>
                 </div>
               </div>
+              <div className="fabriq-target-breakdown" style={{ display: "flex", flexWrap: "wrap", gap: "1.25rem", margin: "0.75rem 0", fontSize: "0.82rem", color: "var(--muted)" }}>
+                <span>Target: <strong style={{ color: "var(--text)" }}>{walletTargetDisplay.toLocaleString()}</strong> unique wallets</span>
+                <span>LP Agent: <strong style={{ color: "var(--text)" }}>{lpCountDisplay.toLocaleString()}</strong></span>
+                <span>Pool Scanner: <strong style={{ color: "var(--text)" }}>{poolCountDisplay.toLocaleString()}</strong></span>
+              </div>
 
               <div className="fabriq-stats-grid">
                 <div className="fabriq-stat-card">
-                  <div className="stat-label">Success</div>
-                  <div className="stat-val text-green">{(state?.success ?? 0).toLocaleString()}</div>
+                  <div className="stat-label">API Refreshed</div>
+                  <div className="stat-val text-green">{(state?.refreshed ?? 0).toLocaleString()}</div>
                 </div>
                 <div className="fabriq-stat-card">
-                  <div className="stat-label">Skipped</div>
+                  <div className="stat-label">Already Fresh</div>
+                  <div className="stat-val text-text">{(state?.fresh ?? 0).toLocaleString()}</div>
+                </div>
+                <div className="fabriq-stat-card">
+                  <div className="stat-label">Skipped / Reused</div>
                   <div className="stat-val text-muted">{(state?.skipped ?? 0).toLocaleString()}</div>
                 </div>
                 <div className="fabriq-stat-card">
@@ -1149,8 +1165,8 @@ export function WalletDataControlPanel({
                   </div>
                 </div>
                 <div className="fabriq-stat-card">
-                  <div className="stat-label">History</div>
-                  <div className="stat-val text-text">{historyRangeText}</div>
+                  <div className="stat-label">Remaining</div>
+                  <div className="stat-val text-text">{fabriqRemaining.toLocaleString()}</div>
                 </div>
                 <div className="fabriq-stat-card">
                   <div className="stat-label">Workers</div>
@@ -1221,22 +1237,34 @@ export function WalletDataControlPanel({
                 </div>
               )}
 
+              <div className="fabriq-target-breakdown" style={{ display: "flex", flexWrap: "wrap", gap: "1.25rem", margin: "0.75rem 0", fontSize: "0.82rem", color: "var(--muted)" }}>
+                <span>Target: <strong style={{ color: "var(--text)" }}>{walletTargetDisplay.toLocaleString()}</strong> unique wallets</span>
+                <span>LP Agent: <strong style={{ color: "var(--text)" }}>{lpCountDisplay.toLocaleString()}</strong></span>
+                <span>Pool Scanner: <strong style={{ color: "var(--text)" }}>{poolCountDisplay.toLocaleString()}</strong></span>
+              </div>
+
               <div className="fabriq-stats-grid">
                 <div className="fabriq-stat-card">
-                  <div className="stat-label">Completed</div>
-                  <div className="stat-val text-text">{(state?.completed ?? 0).toLocaleString()}</div>
+                  <div className="stat-label">API Refreshed</div>
+                  <div className="stat-val text-green">{(state?.refreshed ?? 0).toLocaleString()}</div>
                 </div>
                 <div className="fabriq-stat-card">
-                  <div className="stat-label">Success</div>
-                  <div className="stat-val text-green">{(state?.success ?? 0).toLocaleString()}</div>
+                  <div className="stat-label">Already Fresh</div>
+                  <div className="stat-val text-text">{(state?.fresh ?? 0).toLocaleString()}</div>
                 </div>
                 <div className="fabriq-stat-card">
-                  <div className="stat-label">Skipped</div>
+                  <div className="stat-label">Skipped / Reused</div>
                   <div className="stat-val text-muted">{(state?.skipped ?? 0).toLocaleString()}</div>
                 </div>
                 <div className="fabriq-stat-card">
-                  <div className="stat-label">History</div>
-                  <div className="stat-val text-text">{historyRangeText}</div>
+                  <div className="stat-label">Failed</div>
+                  <div className={`stat-val ${state?.failed ? "text-red" : "text-muted"}`}>
+                    {(state?.failed ?? 0).toLocaleString()}
+                  </div>
+                </div>
+                <div className="fabriq-stat-card">
+                  <div className="stat-label">Remaining</div>
+                  <div className="stat-val text-text">{fabriqRemaining.toLocaleString()}</div>
                 </div>
                 <div className="fabriq-stat-card">
                   <div className="stat-label">Runtime</div>
@@ -1316,20 +1344,30 @@ export function WalletDataControlPanel({
                 </div>
               </div>
 
+              <div className="fabriq-target-breakdown" style={{ display: "flex", flexWrap: "wrap", gap: "1.25rem", margin: "0.75rem 0", fontSize: "0.82rem", color: "var(--muted)" }}>
+                <span>Target: <strong style={{ color: "var(--text)" }}>{walletTargetDisplay.toLocaleString()}</strong> unique wallets</span>
+                <span>LP Agent: <strong style={{ color: "var(--text)" }}>{lpCountDisplay.toLocaleString()}</strong></span>
+                <span>Pool Scanner: <strong style={{ color: "var(--text)" }}>{poolCountDisplay.toLocaleString()}</strong></span>
+              </div>
+
               <div className="fabriq-stats-grid">
                 <div className="fabriq-stat-card">
-                  <div className="stat-label">Total Wallets</div>
-                  <div className="stat-val text-text">
-                    {(state?.total ?? walletCount)?.toLocaleString() ?? "—"}
-                  </div>
+                  <div className="stat-label">API Refreshed</div>
+                  <div className="stat-val text-green">{(state?.refreshed ?? 0).toLocaleString()}</div>
                 </div>
                 <div className="fabriq-stat-card">
-                  <div className="stat-label">Success</div>
-                  <div className="stat-val text-green">{(state?.success ?? 0).toLocaleString()}</div>
+                  <div className="stat-label">Already Fresh</div>
+                  <div className="stat-val text-text">{(state?.fresh ?? 0).toLocaleString()}</div>
                 </div>
                 <div className="fabriq-stat-card">
-                  <div className="stat-label">Skipped</div>
+                  <div className="stat-label">Skipped / Reused</div>
                   <div className="stat-val text-muted">{(state?.skipped ?? 0).toLocaleString()}</div>
+                </div>
+                <div className="fabriq-stat-card">
+                  <div className="stat-label">Failed</div>
+                  <div className={`stat-val ${state?.failed ? "text-red" : "text-muted"}`}>
+                    {(state?.failed ?? 0).toLocaleString()}
+                  </div>
                 </div>
                 <div className="fabriq-stat-card">
                   <div className="stat-label">History</div>
@@ -1548,7 +1586,7 @@ export function WalletDataControlPanel({
 
                   <div className="update-card-desc">
                     Refresh portfolio performance metrics, PnL calendars, token holdings and trading stats
-                    for all registered wallets in master database.
+                    for all {walletTargetDisplay.toLocaleString()} unique wallets in published snapshot ({lpCountDisplay.toLocaleString()} LP Agent, {poolCountDisplay.toLocaleString()} Pool Scanner).
                   </div>
 
                   <div className="mode-options compact">
@@ -1561,7 +1599,7 @@ export function WalletDataControlPanel({
                       </div>
                       <div className="mode-text">
                         <div className="mode-title">Refresh Stale Wallets</div>
-                        <div className="mode-desc">Only wallets missing Fabriq or older than 24h.</div>
+                        <div className="mode-desc">Evaluates all {walletTargetDisplay.toLocaleString()} snapshot wallets; only fetches missing or &gt;24h stale records.</div>
                       </div>
                     </label>
 
@@ -1574,7 +1612,7 @@ export function WalletDataControlPanel({
                       </div>
                       <div className="mode-text">
                         <div className="mode-title">Refresh All Wallets</div>
-                        <div className="mode-desc">Forces full fresh scrape for all {walletCount?.toLocaleString() ?? "—"} wallets.</div>
+                        <div className="mode-desc">Forces full fresh Fabriq retrieval for all {walletTargetDisplay.toLocaleString()} snapshot wallets (LP Agent and Pool Scanner).</div>
                       </div>
                     </label>
                   </div>

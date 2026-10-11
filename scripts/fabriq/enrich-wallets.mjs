@@ -1,6 +1,10 @@
 import fs from "node:fs/promises";
 import { chromium } from "playwright-core";
 import path from "node:path";
+import {
+    getOrFreezeSnapshotTargets,
+    extractSnapshotTargets,
+} from "./snapshot-targets.mjs";
 
 // ======================================================
 // CONFIG
@@ -30,6 +34,28 @@ const CHECKPOINT =
         : path.resolve(
             "data/checkpoints/fabriq.jsonl"
         );
+
+const IS_SNAPSHOT_MODE =
+    process.env.FABRIQ_TARGET_MODE === "snapshot" ||
+    Boolean(process.env.FABRIQ_SNAPSHOT_PATH) ||
+    process.argv.includes("--snapshot") ||
+    (process.env.FABRIQ_DATASET &&
+        path.basename(process.env.FABRIQ_DATASET) === "wallets-14d.json");
+
+const SNAPSHOT_PATH =
+    process.env.FABRIQ_SNAPSHOT_PATH
+        ? path.resolve(process.env.FABRIQ_SNAPSHOT_PATH)
+        : path.resolve("frontend/public/data/wallets-14d.json");
+
+const TARGET_MANIFEST =
+    process.env.FABRIQ_TARGET_MANIFEST
+        ? path.resolve(process.env.FABRIQ_TARGET_MANIFEST)
+        : path.resolve("data/checkpoints/fabriq-targets.json");
+
+const IS_RESUME =
+    process.env.FABRIQ_IS_RESUME === "1" ||
+    process.env.FABRIQ_IS_RESUME === "true" ||
+    process.argv.includes("--resume");
 
 const CDP_URL = "http://127.0.0.1:9222";
 
@@ -1085,34 +1111,92 @@ async function fetchWallet(wallet) {
 }
 
 // ======================================================
-// LOAD LP AGENT DATASET
+// LOAD WALLET TARGET POPULATION
 // ======================================================
 
-const raw = JSON.parse(
-    await fs.readFile(
-        DATASET,
-        "utf8"
-    )
-);
+let allWallets = [];
+let lpAgentCount = 0;
+let poolScannerCount = 0;
+let rows = [];
 
-const rows =
-    extractWalletRows(raw);
+if (IS_SNAPSHOT_MODE) {
+    const targetData = await getOrFreezeSnapshotTargets({
+        snapshotPath: SNAPSHOT_PATH,
+        manifestPath: TARGET_MANIFEST,
+        isResume: IS_RESUME,
+        mode: REFRESH_BEFORE ? "full" : "stale",
+    });
 
-const allWallets = [
-    ...new Set(
-        rows
-            .map(getWalletOwner)
-            .filter(Boolean)
-    ),
-];
+    allWallets = targetData.targets;
+    lpAgentCount = targetData.lpAgentCount;
+    poolScannerCount = targetData.poolScannerCount;
 
-if (!allWallets.length) {
-    throw new Error(
-        "No wallets found in dataset"
+    if (targetData.isResumed && targetData.hashChanged) {
+        console.log(
+            `[RESUME] Detected modified snapshot file on disk; safely preserved frozen target population (${allWallets.length} wallets)`
+        );
+    }
+
+    console.log(`[SNAPSHOT] ${SNAPSHOT_PATH} loaded`);
+    console.log(
+        `[TARGETS] total=${allWallets.length} lpagent=${lpAgentCount} pool_scanner=${poolScannerCount}`
     );
+} else {
+    const raw = JSON.parse(
+        await fs.readFile(
+            DATASET,
+            "utf8"
+        )
+    );
+
+    rows = extractWalletRows(raw);
+    allWallets = [
+        ...new Set(
+            rows
+                .map(getWalletOwner)
+                .filter(Boolean)
+        ),
+    ];
+
+    if (!allWallets.length) {
+        throw new Error(
+            "No wallets found in dataset"
+        );
+    }
 }
-let stateByOwner = null;
-if (STATE_DATASET !== DATASET) {
+
+let stateByOwner = new Map();
+
+const canonicalFabriqPath = path.resolve("data/master/wallets-fabriq.json");
+try {
+    const canonText = await fs.readFile(canonicalFabriqPath, "utf8");
+    const canonJson = JSON.parse(canonText);
+    const canonRows = extractWalletRows(canonJson);
+    for (const r of canonRows) {
+        const owner = getWalletOwner(r);
+        if (owner && r?.fabriq) {
+            stateByOwner.set(owner, r.fabriq);
+        }
+    }
+} catch {
+    // Canonical master dataset absent or empty; proceed to row fallbacks
+}
+
+if (IS_SNAPSHOT_MODE) {
+    try {
+        const snapText = await fs.readFile(SNAPSHOT_PATH, "utf8");
+        const snapJson = JSON.parse(snapText);
+        const snapRows = extractWalletRows(snapJson);
+        for (const r of snapRows) {
+            const owner = getWalletOwner(r);
+            if (owner && r?.fabriq && !stateByOwner.has(owner)) {
+                stateByOwner.set(owner, r.fabriq);
+            }
+        }
+    } catch {
+        // Fallback silently if snapshot file read fails
+    }
+} else if (STATE_DATASET !== DATASET) {
     const stateRaw = JSON.parse(
         await fs.readFile(
             STATE_DATASET,
@@ -1120,7 +1204,6 @@ if (STATE_DATASET !== DATASET) {
         )
     );
     const stateRows = extractWalletRows(stateRaw);
-    stateByOwner = new Map();
     for (const r of stateRows) {
         const owner = getWalletOwner(r);
         if (owner && r?.fabriq) {
@@ -1128,7 +1211,6 @@ if (STATE_DATASET !== DATASET) {
         }
     }
 } else {
-    stateByOwner = new Map();
     for (const r of rows) {
         const owner = getWalletOwner(r);
         if (owner && r?.fabriq && !stateByOwner.has(owner)) {
@@ -1462,6 +1544,12 @@ console.log(
 console.log(
     `Skipped : ${skipped}`
 );
+if (IS_SNAPSHOT_MODE) {
+    console.log(`LP Agent: ${lpAgentCount}`);
+    console.log(`Pool    : ${poolScannerCount}`);
+    console.log(`Fresh   : ${freshWallets}`);
+    console.log(`Refreshed: ${Math.max(0, successfulResults.length - skipped)}`);
+}
 
 console.log(
     `Runtime : ${runtimeSeconds.toFixed(

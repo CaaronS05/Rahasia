@@ -47,6 +47,12 @@ export interface FabriqState {
   checkpointPreserved?: boolean;
   logs: string[];
   running: boolean;
+  lpAgentCount?: number;
+  poolScannerCount?: number;
+  fresh?: number;
+  refreshed?: number;
+  remaining?: number;
+  progressPercent?: number;
 }
 
 export interface FabriqEvent {

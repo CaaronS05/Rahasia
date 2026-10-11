@@ -11,6 +11,10 @@ import {
     getBundleFilePath,
 } from "../analytics/position-analytics-storage.ts";
 import { computeMonitoringAssessment } from "../analytics/monitoring-assessment.mjs";
+import {
+    getSnapshotTargetSummary,
+    discardFrozenTargets,
+} from "../fabriq/snapshot-targets.mjs";
 
 const HOST = "127.0.0.1";
 const PORT = Number.parseInt(process.env.CONTROL_SERVER_PORT || process.env.PORT || "8787", 10);
@@ -150,6 +154,12 @@ let state = {
     error: null,
 
     total: 0,
+    lpAgentCount: 0,
+    poolScannerCount: 0,
+    fresh: 0,
+    refreshed: 0,
+    remaining: 0,
+    progressPercent: 0,
     completed: 0,
     success: 0,
     failed: 0,
@@ -699,48 +709,38 @@ function resetEnrichProgress() {
 }
 
 function syncEnrichProgress() {
-    // RESUME dan worker SKIP adalah wallet yang sama.
-    // Gunakan nilai terbesar, jangan dijumlahkan.
-    const skipped =
-        Math.max(
-            enrichProgress.resumed,
-            enrichProgress.workerSkips,
-        );
-
-    const successful =
-        enrichProgress.fresh +
-        skipped +
-        enrichProgress.ok;
-
-    const completed =
-        successful +
-        enrichProgress.failed;
-
-    state.skipped =
-        skipped;
-
-    state.success =
-        state.total > 0
-            ? Math.min(
-                state.total,
-                successful,
-            )
-            : successful;
-
-    state.failed =
-        enrichProgress.failed;
-
-    state.completed =
-        state.total > 0
-            ? Math.min(
-                state.total,
-                completed,
-            )
-            : completed;
-
-    broadcastState(
-        "progress",
+    // RESUME and worker SKIP represent the same wallet.
+    // Use the maximum value, never sum them.
+    const skipped = Math.max(
+        enrichProgress.resumed,
+        enrichProgress.workerSkips
     );
+
+    const fresh = enrichProgress.fresh;
+    const refreshed = enrichProgress.ok;
+    const failed = enrichProgress.failed;
+
+    const successful = fresh + skipped + refreshed;
+    const completed = successful + failed;
+    const remaining = state.total > 0 ? Math.max(0, state.total - completed) : 0;
+    const progressPercent = state.total > 0
+        ? Math.min(100, Math.floor((completed / state.total) * 100))
+        : 0;
+
+    state.fresh = fresh;
+    state.refreshed = refreshed;
+    state.skipped = skipped;
+    state.failed = failed;
+    state.success = state.total > 0
+        ? Math.min(state.total, successful)
+        : successful;
+    state.completed = state.total > 0
+        ? Math.min(state.total, completed)
+        : completed;
+    state.remaining = remaining;
+    state.progressPercent = progressPercent;
+
+    broadcastState("progress");
 }
 
 function sanitizeConcurrency(value, fallback = DEFAULT_FABRIQ_CONCURRENCY) {
@@ -845,10 +845,31 @@ function stopRuntimeTicker() {
 
 function parseEnrichLine(line) {
     // ---------------------------------------
+    // Snapshot targets population & breakdown
+    // [TARGETS] total=4153 lpagent=1557 pool_scanner=2596
+    // ---------------------------------------
+
+    const targetsMatch =
+        line.match(
+            /\[TARGETS\]\s+total=(\d+)\s+lpagent=(\d+)\s+pool_scanner=(\d+)/i,
+        );
+
+    if (targetsMatch) {
+        state.total =
+            Number.parseInt(targetsMatch[1], 10);
+        state.lpAgentCount =
+            Number.parseInt(targetsMatch[2], 10);
+        state.poolScannerCount =
+            Number.parseInt(targetsMatch[3], 10);
+
+        syncEnrichProgress();
+        return;
+    }
+
+    // ---------------------------------------
     // Total dataset
     // [DATASET] 1458 total wallets
     // ---------------------------------------
-
     const datasetMatch =
         line.match(
             /\[DATASET\]\s+(\d+)\s+total wallets/i,
@@ -1061,6 +1082,33 @@ function parseEnrichLine(line) {
 
         return;
     }
+    const lpMatch = line.match(/^LP Agent\s*:\s*(\d+)$/i);
+    if (lpMatch) {
+        state.lpAgentCount = Number.parseInt(lpMatch[1], 10);
+        broadcastState("progress");
+        return;
+    }
+
+    const poolMatch = line.match(/^Pool\s*:\s*(\d+)$/i);
+    if (poolMatch) {
+        state.poolScannerCount = Number.parseInt(poolMatch[1], 10);
+        broadcastState("progress");
+        return;
+    }
+
+    const freshSummaryMatch = line.match(/^Fresh\s*:\s*(\d+)$/i);
+    if (freshSummaryMatch) {
+        state.fresh = Number.parseInt(freshSummaryMatch[1], 10);
+        broadcastState("progress");
+        return;
+    }
+
+    const refreshedSummaryMatch = line.match(/^Refreshed\s*:\s*(\d+)$/i);
+    if (refreshedSummaryMatch) {
+        state.refreshed = Number.parseInt(refreshedSummaryMatch[1], 10);
+        broadcastState("progress");
+        return;
+    }
 
     const runtimeMatch =
         line.match(
@@ -1264,6 +1312,12 @@ async function startPipeline({ mode, concurrency, resume, historyMode, startMont
 
     if (!isResume) {
         state.total = 0;
+        state.lpAgentCount = 0;
+        state.poolScannerCount = 0;
+        state.fresh = 0;
+        state.refreshed = 0;
+        state.remaining = 0;
+        state.progressPercent = 0;
         state.completed = 0;
         state.success = 0;
         state.failed = 0;
@@ -1301,6 +1355,9 @@ async function startPipeline({ mode, concurrency, resume, historyMode, startMont
 
         const enrichEnv = {
             FABRIQ_CONCURRENCY: String(safeConcurrency),
+            FABRIQ_TARGET_MODE: "snapshot",
+            FABRIQ_SNAPSHOT_PATH: path.resolve(ROOT, "frontend/public/data/wallets-14d.json"),
+            FABRIQ_IS_RESUME: isResume ? "1" : "0",
         };
         if (state.historyMode === "custom" && state.startMonth) {
             enrichEnv.FABRIQ_START_MONTH = state.startMonth;
@@ -1364,8 +1421,10 @@ async function startPipeline({ mode, concurrency, resume, historyMode, startMont
             return;
         }
 
-        if (state.total > 0) {
+        if (state.total > 0 && state.failed === 0) {
             state.completed = state.total;
+            state.remaining = 0;
+            state.progressPercent = 100;
         }
 
         // ----------------------------------------------------
@@ -1478,6 +1537,7 @@ async function startPipeline({ mode, concurrency, resume, historyMode, startMont
             activityLogger.finishRun(fabriqRunId, { status: "completed", stage: "completed", exitCode: 0 });
             fabriqRunId = null;
         }
+        discardFabriqCheckpoint();
         stopRuntimeTicker();
         broadcastState("finish");
     } catch (error) {
@@ -3174,6 +3234,7 @@ function discardFabriqCheckpoint() {
             fs.unlinkSync(fabriqCheckpointPath);
             addLog("[CONTROL] Discarded checkpoint: data/checkpoints/fabriq.jsonl");
         }
+        discardFrozenTargets(path.join(ROOT, "data/checkpoints/fabriq-targets.json"));
     } catch (err) {
         console.error("Failed to delete fabriq checkpoint:", err);
     }
@@ -7594,6 +7655,23 @@ setInterval(() => {
         }
     }
 }, 15000);
+function initSnapshotTargets() {
+    try {
+        const snapshotFile = path.resolve(ROOT, "frontend/public/data/wallets-14d.json");
+        const summary = getSnapshotTargetSummary(snapshotFile);
+        if (summary) {
+            state.total = summary.total;
+            state.lpAgentCount = summary.lpAgentCount;
+            state.poolScannerCount = summary.poolScannerCount;
+            state.remaining = summary.total;
+        }
+    } catch {
+        // Fallback silently if snapshot file does not exist
+    }
+}
+
+initSnapshotTargets();
+
 
 server.listen(PORT, HOST, () => {
     console.log(`Fabriq Control Server running at http://${HOST}:${PORT}`);
