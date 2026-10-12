@@ -7,6 +7,7 @@ import {
   BASE58_REGEX,
   calculateDryRunReport,
   computeLegacyScanFingerprint,
+  DEFAULT_PATHS,
   EXCLUDED_AMBIGUOUS_OWNERS,
   EXCLUDED_AMBIGUOUS_RECORD,
   extractCandidateWallets,
@@ -16,6 +17,7 @@ import {
   runLegacyBackfill,
   type ExtractedCandidateMapEntry,
   type LegacyTokenScanArtifacts,
+  type PoolWalletsRegistryFile,
 } from "../../scripts/pipeline/backfill-legacy-pool-wallets.ts";
 
 describe("Safe Legacy Pool Scanner Backfill Suite", () => {
@@ -351,20 +353,110 @@ describe("Safe Legacy Pool Scanner Backfill Suite", () => {
   // =========================================================================
   // 11. EXPECTED POPULATION CALCULATION
   // =========================================================================
-  it("11. Expected population calculation: matches the exact 199 eligible wallet reconciliation", async () => {
-    const res = await runLegacyBackfill({ dryRun: true });
-    assert.equal(res.report.existingLpAgentWallets, 1557);
-    assert.equal(res.report.existingPoolRegistryWallets, 2982);
-    assert.equal(res.report.newEligibleWallets, 199);
-    assert.equal(res.report.newRegistryTotal, 3181);
-    assert.equal(res.report.predictedPublishedWallets, 4352);
-    assert.equal(res.report.canonicalFabriqWallets, 4354);
-    assert.equal(res.report.excludedAmbiguousWallets, 2);
-    assert.equal(res.report.missingCanonicalRecords, 446);
-    assert.equal(res.report.invalidAddresses, 0);
-    assert.equal(res.report.missingOrAmbiguousProvenance, 2);
-    assert.equal(res.report.matchesExpectations, true);
-    assert.deepEqual(res.report.mismatches, []);
+  it("11. Expected population calculation: verifies pre-migration (199 eligible) and post-migration (0 eligible idempotent) states", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "backfill-reconciliation-"));
+    try {
+      // A. Pre-migration state fixture: reconstruct pre-migration registry (2,982 wallets)
+      const liveRegistryRaw = await readFile(DEFAULT_PATHS.registryPath, "utf8");
+      const liveRegistry = JSON.parse(liveRegistryRaw) as PoolWalletsRegistryFile;
+      const preMigrationWallets = liveRegistry.wallets.filter(
+        (w) => w.legacyProvenance?.evidenceLevel !== "TOKEN_SCAN_CANDIDATE"
+      );
+      assert.equal(preMigrationWallets.length, 2982, "Pre-migration fixture must have exactly 2,982 wallets");
+
+      const preMigrationRegistryPath = path.join(tmpDir, "pre-migration-registry.json");
+      await writeFile(
+        preMigrationRegistryPath,
+        JSON.stringify(
+          {
+            ...liveRegistry,
+            totalUniqueWallets: preMigrationWallets.length,
+            wallets: preMigrationWallets,
+          },
+          null,
+          2
+        ),
+        "utf8"
+      );
+
+      // Verify pre-migration state: exactly 199 additions eligible
+      const preRes = await runLegacyBackfill({
+        dryRun: true,
+        basePaths: {
+          ...DEFAULT_PATHS,
+          registryPath: preMigrationRegistryPath,
+        },
+      });
+      assert.equal(preRes.report.existingLpAgentWallets, 1557);
+      assert.equal(preRes.report.existingPoolRegistryWallets, 2982);
+      assert.equal(preRes.report.newEligibleWallets, 199);
+      assert.equal(preRes.report.newRegistryTotal, 3181);
+      assert.equal(preRes.report.predictedPublishedWallets, 4352);
+      assert.equal(preRes.report.canonicalFabriqWallets, 4354);
+      assert.equal(preRes.report.excludedAmbiguousWallets, 2);
+      assert.equal(preRes.report.missingCanonicalRecords, 446);
+      assert.equal(preRes.report.invalidAddresses, 0);
+      assert.equal(preRes.report.missingOrAmbiguousProvenance, 2);
+      assert.equal(preRes.report.matchesExpectations, true);
+      assert.deepEqual(preRes.report.mismatches, []);
+
+      // B. Post-migration state: exactly 0 additions eligible, repeated migration is idempotent
+      const postRes = await runLegacyBackfill({ dryRun: true });
+      assert.equal(postRes.report.existingLpAgentWallets, 1557);
+      assert.equal(postRes.report.existingPoolRegistryWallets, 3181);
+      assert.equal(postRes.report.newEligibleWallets, 0);
+      assert.equal(postRes.report.newRegistryTotal, 3181);
+      assert.equal(postRes.report.predictedPublishedWallets, 4352);
+      assert.equal(postRes.report.canonicalFabriqWallets, 4354);
+      assert.equal(postRes.report.excludedAmbiguousWallets, 2);
+      assert.equal(postRes.report.missingCanonicalRecords, 446);
+      assert.equal(postRes.report.invalidAddresses, 0);
+      assert.equal(postRes.report.missingOrAmbiguousProvenance, 2);
+      assert.equal(postRes.report.matchesExpectations, true);
+      assert.deepEqual(postRes.report.mismatches, []);
+
+      // C. Idempotency & metadata integrity assertions
+      const registryWallets = liveRegistry.wallets;
+      assert.equal(registryWallets.length, 3181);
+
+      // Verify the two ambiguous BLUEPRINT wallets remain strictly excluded
+      for (const excludedKey of EXCLUDED_AMBIGUOUS_OWNERS) {
+        assert.equal(
+          registryWallets.some((w) => w.owner === excludedKey),
+          false,
+          `Ambiguous wallet ${excludedKey} must NOT be present in registry`
+        );
+      }
+
+      // Verify all 199 migrated wallets have candidate pools kept strictly in legacyProvenance, never confirmed pools
+      const migratedWallets = registryWallets.filter(
+        (w) => w.legacyProvenance?.evidenceLevel === "TOKEN_SCAN_CANDIDATE"
+      );
+      assert.equal(migratedWallets.length, 199);
+      for (const mw of migratedWallets) {
+        assert.deepEqual(
+          mw.pools,
+          [],
+          `Migrated wallet ${mw.owner} confirmed pools array must remain empty`
+        );
+        assert.ok(
+          Array.isArray(mw.legacyProvenance?.candidatePools) && mw.legacyProvenance.candidatePools.length > 0,
+          `Migrated wallet ${mw.owner} must retain candidatePools in legacyProvenance`
+        );
+      }
+
+      // Verify pre-existing wallets retained their existing confirmed pools and metadata
+      for (const preWallet of preMigrationWallets) {
+        const liveWallet = registryWallets.find((w) => w.owner === preWallet.owner);
+        assert.ok(liveWallet, `Pre-existing wallet ${preWallet.owner} must exist in registry`);
+        assert.deepEqual(liveWallet.pools, preWallet.pools);
+        assert.deepEqual(liveWallet.tokens, preWallet.tokens);
+        assert.equal(liveWallet.firstSeenAt, preWallet.firstSeenAt);
+        assert.equal(liveWallet.lastSeenAt, preWallet.lastSeenAt);
+      }
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
   });
 
   // =========================================================================

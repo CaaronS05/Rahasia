@@ -427,8 +427,13 @@ export function calculateDryRunReport(
 
   const mismatches: string[] = [];
   if (masterCount !== 1557) mismatches.push(`LP Agent wallets: actual ${masterCount} !== expected 1,557`);
-  if (registryCount !== 2982) mismatches.push(`Pool Registry: actual ${registryCount} !== expected 2,982`);
-  if (newEligibleWallets !== 199) mismatches.push(`New eligible wallets: actual ${newEligibleWallets} !== expected 199`);
+  if (registryCount === 2982) {
+    if (newEligibleWallets !== 199) mismatches.push(`New eligible wallets: actual ${newEligibleWallets} !== expected 199`);
+  } else if (registryCount === 3181) {
+    if (newEligibleWallets !== 0) mismatches.push(`New eligible wallets: actual ${newEligibleWallets} !== expected 0`);
+  } else {
+    mismatches.push(`Pool Registry: actual ${registryCount} !== expected 2,982 (pre-migration) or 3,181 (post-migration)`);
+  }
   if (newRegistryTotal !== 3181) mismatches.push(`New Registry total: actual ${newRegistryTotal} !== expected 3,181`);
   if (predictedPublishedWallets !== 4352) mismatches.push(`Predicted published wallets: actual ${predictedPublishedWallets} !== expected 4,352`);
   if (canonicalFabriqWallets !== 4354) mismatches.push(`Canonical Fabriq wallets: actual ${canonicalFabriqWallets} !== expected 4,354`);
@@ -455,9 +460,11 @@ export function printDryRunReport(report: DryRunReport): void {
   console.log("==================================================");
   console.log("SAFE LEGACY POOL SCANNER BACKFILL — DRY-RUN REPORT");
   console.log("==================================================");
+  const expectedRegistryLabel = report.existingPoolRegistryWallets === 3181 ? "3,181 (post-migration)" : "2,982 (pre-migration)";
+  const expectedEligibleLabel = report.existingPoolRegistryWallets === 3181 ? "0 (post-migration)" : "199 (pre-migration)";
   console.log(`Existing LP Agent wallets        : ${report.existingLpAgentWallets} (expected: 1,557)`);
-  console.log(`Existing Pool Registry           : ${report.existingPoolRegistryWallets} (expected: 2,982)`);
-  console.log(`New eligible wallets             : ${report.newEligibleWallets} (expected: 199)`);
+  console.log(`Existing Pool Registry           : ${report.existingPoolRegistryWallets} (expected: ${expectedRegistryLabel})`);
+  console.log(`New eligible wallets             : ${report.newEligibleWallets} (expected: ${expectedEligibleLabel})`);
   console.log(`New Registry total               : ${report.newRegistryTotal} (expected: 3,181)`);
   console.log(`Predicted published wallets      : ${report.predictedPublishedWallets} (expected: 4,352)`);
   console.log(`Canonical Fabriq wallets         : ${report.canonicalFabriqWallets} (expected: unchanged at 4,354)`);

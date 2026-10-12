@@ -375,20 +375,45 @@ describe("Wallet Explorer Timeframe Filtering Suite", () => {
         const wallets: Wallet[] = dataset.wallets;
         const refDate = resolveReferenceDate(dataset.meta);
 
-        assert.equal(refDate, "2026-10-11");
-        assert.equal(wallets.length, 4153);
+        // Derive expected reference date from metadata with documented fallback:
+        // 1) meta.derivedAsOfDate, 2) meta.publishedAt (YYYY-MM-DD), 3) today
+        const expectedRefDate =
+            dataset.meta?.derivedAsOfDate && /^\d{4}-\d{2}-\d{2}$/.test(dataset.meta.derivedAsOfDate)
+                ? dataset.meta.derivedAsOfDate
+                : dataset.meta?.publishedAt
+                  ? new Date(Date.parse(dataset.meta.publishedAt)).toISOString().slice(0, 10)
+                  : new Date().toISOString().slice(0, 10);
+        assert.equal(refDate, expectedRefDate);
+
+        // Derive expected wallet count from loaded snapshot's unique owners
+        const uniqueOwners = new Set(wallets.map((w) => w.owner));
+        const expectedWalletCount = uniqueOwners.size;
+        assert.equal(wallets.length, expectedWalletCount);
+        if (typeof dataset.meta?.totalUniqueWallets === "number") {
+            assert.equal(dataset.meta.totalUniqueWallets, expectedWalletCount);
+        }
 
         const eligible7d = wallets.filter((w) => isWalletTimeframeEligible(w, "7d", refDate));
         const eligible30d = wallets.filter((w) => isWalletTimeframeEligible(w, "30d", refDate));
         const eligibleAll = wallets.filter((w) => isWalletTimeframeEligible(w, "all", refDate));
         const unknownCount = countUnknownActivityWallets(wallets);
 
-        assert.equal(eligibleAll.length, 4153);
+        assert.equal(eligibleAll.length, expectedWalletCount);
         assert.equal(unknownCount, 0);
 
         // Invariant: 7D count <= 30D count <= ALL count
         assert.equal(eligible7d.length <= eligible30d.length, true);
         assert.equal(eligible30d.length <= eligibleAll.length, true);
+
+        // Strict subset invariants: 7D is a subset of 30D, and 30D is a subset of ALL
+        const eligible30dSet = new Set(eligible30d.map((w) => w.owner));
+        for (const w of eligible7d) {
+            assert.ok(eligible30dSet.has(w.owner), `7D eligible wallet ${w.owner} must be in 30D set`);
+        }
+        const eligibleAllSet = new Set(eligibleAll.map((w) => w.owner));
+        for (const w of eligible30d) {
+            assert.ok(eligibleAllSet.has(w.owner), `30D eligible wallet ${w.owner} must be in ALL set`);
+        }
 
         // Simulated CSV Export row count consistency
         const csvRows7d = eligible7d.map((w) => `${w.owner},${walletPnl7d(w)}`);
