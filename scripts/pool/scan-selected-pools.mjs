@@ -227,7 +227,7 @@ async function main() {
   for (const addr of uniqueSelectedAddresses) {
     if (!discoveredMap.has(addr)) {
       throw new Error(
-        `Selected pool ${addr} is not an authoritative TOKEN/SOL pool for token ${tokenCA}`
+        `Selected pool ${addr} is not an authoritative TOKEN/SOL or TOKEN/USDC pool for token ${tokenCA}`
       );
     }
   }

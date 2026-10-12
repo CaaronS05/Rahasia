@@ -6799,7 +6799,7 @@ const server = http.createServer(async (request, response) => {
                     response,
                     400,
                     {
-                        error: `Invalid pool address: ${addr} does not belong to discovered TOKEN/SOL pools for token ${tokenCa}`,
+                        error: `Invalid pool address: ${addr} does not belong to discovered TOKEN/SOL or TOKEN/USDC pools for token ${tokenCa}`,
                     },
                 );
 

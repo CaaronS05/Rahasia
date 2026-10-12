@@ -1,39 +1,91 @@
 export const SOL_MINT = "So11111111111111111111111111111111111111112";
+export const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 export const METEORA_API = "https://dlmm.datapi.meteora.ag/pools";
 
-export async function discoverTokenPools(rawTokenMint) {
+export async function discoverTokenPools(rawTokenMint, options = {}) {
   if (typeof rawTokenMint !== "string" || !rawTokenMint.trim()) {
     throw new Error("Token CA must be a non-empty string");
   }
 
   const tokenMint = rawTokenMint.trim();
-  const url = new URL(METEORA_API);
-  url.searchParams.set("page", "1");
-  url.searchParams.set("page_size", "1000");
-  url.searchParams.set("query", tokenMint);
+  const fetchFn = typeof options?.fetchFn === "function" ? options.fetchFn : fetch;
+  const pageSize = Number.isInteger(options?.pageSize) && options.pageSize > 0 ? options.pageSize : 1000;
+  const maxPages = Number.isInteger(options?.maxPages) && options.maxPages > 0 ? options.maxPages : 20;
 
-  const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error(`Meteora API HTTP ${response.status}: ${response.statusText || "Request failed"}`);
-  }
+  let page = 1;
+  let totalPages = 1;
+  const rawPools = [];
 
-  const json = await response.json();
-  const rawPools = Array.isArray(json?.data) ? json.data : [];
+  do {
+    const url = new URL(METEORA_API);
+    url.searchParams.set("page", String(page));
+    url.searchParams.set("page_size", String(pageSize));
+    url.searchParams.set("query", tokenMint);
+
+    const response = await fetchFn(url);
+    if (!response.ok) {
+      throw new Error(`Meteora API HTTP ${response.status}: ${response.statusText || "Request failed"}`);
+    }
+
+    const json = await response.json();
+    const data = Array.isArray(json?.data) ? json.data : [];
+    rawPools.push(...data);
+
+    const reportedPages =
+      Number(json?.pages) ||
+      Number(json?.total_pages) ||
+      Number(json?.pagination?.totalPages) ||
+      Number(json?.pagination?.pages) ||
+      (Number(json?.total) ? Math.ceil(Number(json.total) / pageSize) : 0);
+
+    if (reportedPages > 0) {
+      totalPages = Math.min(reportedPages, maxPages);
+    } else if (data.length < pageSize) {
+      totalPages = page;
+    } else {
+      totalPages = Math.min(page + 1, maxPages);
+    }
+
+    if (data.length === 0) {
+      break;
+    }
+
+    page++;
+  } while (page <= totalPages);
+
+  const seenPoolAddresses = new Set();
   const pools = [];
 
   for (const pool of rawPools) {
     if (!pool?.address) continue;
+    const poolAddress = String(pool.address).trim();
+    if (!poolAddress || seenPoolAddresses.has(poolAddress)) continue;
 
     const tokenX = pool.token_x ?? {};
     const tokenY = pool.token_y ?? {};
     const xAddress = typeof tokenX.address === "string" ? tokenX.address.trim() : "";
     const yAddress = typeof tokenY.address === "string" ? tokenY.address.trim() : "";
 
-    const isExactTokenSol =
-      (xAddress === tokenMint && yAddress === SOL_MINT) ||
-      (xAddress === SOL_MINT && yAddress === tokenMint);
+    let quoteMint = null;
+    let quoteSymbol = null;
 
-    if (!isExactTokenSol) continue;
+    if (xAddress === tokenMint && yAddress === SOL_MINT) {
+      quoteMint = SOL_MINT;
+      quoteSymbol = "SOL";
+    } else if (xAddress === SOL_MINT && yAddress === tokenMint) {
+      quoteMint = SOL_MINT;
+      quoteSymbol = "SOL";
+    } else if (xAddress === tokenMint && yAddress === USDC_MINT) {
+      quoteMint = USDC_MINT;
+      quoteSymbol = "USDC";
+    } else if (xAddress === USDC_MINT && yAddress === tokenMint) {
+      quoteMint = USDC_MINT;
+      quoteSymbol = "USDC";
+    } else {
+      continue;
+    }
+
+    seenPoolAddresses.add(poolAddress);
 
     const rawBinStep = pool.pool_config?.bin_step;
     const binStep =
@@ -52,10 +104,12 @@ export async function discoverTokenPools(rawTokenMint) {
         : null;
 
     pools.push({
-      poolAddress: pool.address,
+      poolAddress,
       pair: `${tokenX.symbol ?? "?"}/${tokenY.symbol ?? "?"}`,
       tokenMint,
       solMint: SOL_MINT,
+      quoteMint,
+      quoteSymbol,
       tokenX: xAddress,
       tokenY: yAddress,
       binStep,
@@ -77,7 +131,8 @@ export async function discoverTokenPools(rawTokenMint) {
   return {
     tokenMint,
     solMint: SOL_MINT,
-    pairRule: "TOKEN_SOL_EXACT",
+    usdcMint: USDC_MINT,
+    pairRule: "TOKEN_SOL_OR_USDC_EXACT",
     discoveredAt: new Date().toISOString(),
     poolCount: pools.length,
     pools,

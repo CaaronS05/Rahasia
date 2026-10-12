@@ -90,7 +90,9 @@ export interface PoolDiscoveryItem {
   poolAddress: string;
   pair: string;
   tokenMint: string;
-  solMint: string;
+  solMint?: string;
+  quoteMint: string;
+  quoteSymbol: "SOL" | "USDC" | string;
   tokenX: string;
   tokenY: string;
   binStep: number | null;
@@ -99,7 +101,8 @@ export interface PoolDiscoveryItem {
 
 export interface PoolDiscoveryResponse {
   tokenMint: string;
-  solMint: string;
+  solMint?: string;
+  usdcMint?: string;
   pairRule: string;
   discoveredAt: string;
   poolCount: number;

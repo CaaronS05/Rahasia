@@ -97,7 +97,7 @@ function computePipelineProgress(
     {
       num: "01",
       name: "Discover Pools",
-      description: "Meteora Data API · TOKEN/SOL",
+      description: "Meteora Data API · TOKEN/SOL + TOKEN/USDC",
     },
     {
       num: "02",
@@ -632,7 +632,7 @@ export function PoolScannerPage({ onDatasetRefreshed, embedded = false, startDis
           </div>
           <h1>Pool Scanner</h1>
           <p>
-            Discover every TOKEN/SOL Meteora pool, collect Top LPers, enrich
+            Discover every TOKEN/SOL and TOKEN/USDC Meteora pool, collect Top LPers, enrich
             wallets, and prepare them for the main scanner dataset.
           </p>
         </div>
@@ -777,7 +777,7 @@ export function PoolScannerPage({ onDatasetRefreshed, embedded = false, startDis
               {discoveryResult.pools.length === 0 ? (
                 <div className="pool-discovery-empty">
                   <AlertCircle size={15} />
-                  <span>No TOKEN/SOL DLMM pools found for this token.</span>
+                  <span>No TOKEN/SOL or TOKEN/USDC DLMM pools found for this token.</span>
                 </div>
               ) : (
                 <>
@@ -826,7 +826,12 @@ export function PoolScannerPage({ onDatasetRefreshed, embedded = false, startDis
                           </div>
                           <div className="pool-discovery-item-body">
                             <div className="pool-discovery-item-top">
-                              <span className="pool-discovery-pair">{p.pair}</span>
+                              <div className="pool-discovery-pair-row">
+                                <span className="pool-discovery-pair">{p.pair}</span>
+                                <span className={`pool-discovery-quote-tag quote-${(p.quoteSymbol || "quote").toLowerCase()}`}>
+                                  {p.quoteSymbol || (p.pair.toUpperCase().includes("USDC") ? "USDC" : "SOL")}
+                                </span>
+                              </div>
                               <span className="pool-discovery-address" title={p.poolAddress}>
                                 <span className="pool-discovery-field-label">Pool</span> {shortPool}
                               </span>
