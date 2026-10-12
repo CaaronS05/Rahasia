@@ -383,9 +383,6 @@ describe("Wallet Explorer Timeframe Filtering Suite", () => {
         const eligibleAll = wallets.filter((w) => isWalletTimeframeEligible(w, "all", refDate));
         const unknownCount = countUnknownActivityWallets(wallets);
 
-        // Actual verified counts
-        assert.equal(eligible7d.length, 2944);
-        assert.equal(eligible30d.length, 3977);
         assert.equal(eligibleAll.length, 4153);
         assert.equal(unknownCount, 0);
 

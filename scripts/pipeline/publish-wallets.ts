@@ -526,6 +526,9 @@ export async function publishWallets(): Promise<PublishResult> {
                 lastSeenAt: poolWallet.lastSeenAt,
                 pools: poolWallet.pools,
                 tokens: poolWallet.tokens,
+                ...(isObject(poolWallet.legacyProvenance)
+                    ? { legacyProvenance: poolWallet.legacyProvenance }
+                    : {}),
             },
 
             fabriq: canonicalFabriq ?? undefined,

@@ -7,6 +7,12 @@ import { withCanonicalLock } from "./canonical-lock.ts";
 // DOMAIN TYPES
 // ======================================================
 
+export interface LegacyProvenanceMetadata {
+  evidenceLevel: "TOKEN_SCAN_CANDIDATE";
+  candidatePools: string[];
+  sourceArtifactPaths: string[];
+}
+
 export interface PoolDiscoveredWallet {
   owner: string;
   firstSeenAt: string;
@@ -15,6 +21,7 @@ export interface PoolDiscoveredWallet {
   pools: string[];
   scans: string[];
   source: "pool-scanner";
+  legacyProvenance?: LegacyProvenanceMetadata;
 }
 
 export interface PoolWalletsRegistryFile {
