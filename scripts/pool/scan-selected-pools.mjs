@@ -16,13 +16,13 @@ const __dirname = path.dirname(__filename);
 const ROOT = path.resolve(__dirname, "../..");
 
 export const DEFAULT_CLOAK_CDP_URL = `http://127.0.0.1:${DEFAULT_CDP_PORT}`;
-export const DEFAULT_BRAVE_CDP_URL = `http://127.0.0.1:${FORBIDDEN_PORT}`;
 
 export const MIN_PAGE_DELAY = 350;
 export const MAX_PAGE_DELAY = 800;
 export const MIN_POOL_DELAY = 2000;
 export const MAX_POOL_DELAY = 4500;
-
+export const DEFAULT_REQUEST_TIMEOUT_MS = 15000;
+export const DEFAULT_NAV_SETTLE_MS = 500;
 export function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -38,8 +38,11 @@ export function parseCliArgs(argv = process.argv.slice(2)) {
   let workers = 1;
   let browserType = "cloak";
   let cdpUrl = null;
+  let outputDir = null;
+  let maxPages = null;
+  let diagnostics = false;
+  let requestTimeoutMs = null;
   const pools = [];
-
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--token") {
@@ -63,9 +66,9 @@ export function parseCliArgs(argv = process.argv.slice(2)) {
       i++;
     } else if (arg === "--browser") {
       const val = argv[i + 1]?.trim().toLowerCase();
-      if (val !== "cloak" && val !== "brave") {
+      if (val !== "cloak") {
         throw new Error(
-          `Invalid browser type "${val}". Only "cloak" or "brave" are supported.`
+          `Invalid browser type "${val}". Only "cloak" (CloakBrowser) is supported.`
         );
       }
       browserType = val;
@@ -73,33 +76,92 @@ export function parseCliArgs(argv = process.argv.slice(2)) {
     } else if (arg === "--cdp-url") {
       cdpUrl = argv[i + 1]?.trim() ?? null;
       i++;
+    } else if (arg === "--output-dir") {
+      outputDir = argv[i + 1]?.trim() ?? null;
+      i++;
+    } else if (arg === "--max-pages") {
+      const val = argv[i + 1]?.trim();
+      const parsed = parseInt(val, 10);
+      if (isNaN(parsed) || parsed < 1 || String(parsed) !== val) {
+        throw new Error(
+          `Invalid max-pages count "${val}". Must be a positive integer.`
+        );
+      }
+      maxPages = parsed;
+      i++;
+    } else if (arg === "--diagnostics" || arg === "--diag") {
+      diagnostics = true;
+    } else if (arg === "--request-timeout") {
+      const val = argv[i + 1]?.trim();
+      const parsed = parseInt(val, 10);
+      if (isNaN(parsed) || parsed < 1000 || String(parsed) !== val) {
+        throw new Error(
+          `Invalid request timeout "${val}". Must be an integer >= 1000ms.`
+        );
+      }
+      requestTimeoutMs = parsed;
+      i++;
     }
   }
-
   if (!tokenCA && process.env.TOKEN_CA) {
     tokenCA = process.env.TOKEN_CA.trim();
   }
 
-  // Fall back to env var for CDP_URL if not explicitly passed
-  if (!cdpUrl && process.env.CDP_URL) {
-    cdpUrl = process.env.CDP_URL.trim();
-  }
-
-  if (browserType === "cloak") {
-    const target = cdpUrl || process.env.CLOAK_CDP_URL || DEFAULT_CLOAK_CDP_URL;
-    try {
-      const u = new URL(target);
-      if (Number(u.port) === FORBIDDEN_PORT) {
-        throw new Error(
-          `Security violation: Refusing to connect to Brave CDP port ${FORBIDDEN_PORT} when browser is set to 'cloak'. Set '--browser brave' if Brave is intended.`
-        );
-      }
-    } catch (err) {
-      if (err.message.includes("Security violation")) throw err;
+  if (!cdpUrl) {
+    const envCdp =
+      process.env.CLOAK_CDP_URL?.trim() ||
+      process.env.LPAGENT_CDP_URL?.trim() ||
+      process.env.CDP_URL?.trim();
+    if (envCdp) {
+      cdpUrl = envCdp;
     }
   }
 
-  return { tokenCA, pools, refresh, workers, browserType, cdpUrl };
+  if (!outputDir && process.env.OUTPUT_DIR) {
+    outputDir = process.env.OUTPUT_DIR.trim();
+  }
+
+  if (!maxPages && process.env.MAX_PAGES) {
+    const parsed = parseInt(process.env.MAX_PAGES.trim(), 10);
+    if (!isNaN(parsed) && parsed >= 1) maxPages = parsed;
+  }
+
+  if (!diagnostics && (process.env.PERF_DIAGNOSTICS === "1" || process.env.DIAGNOSTICS === "1")) {
+    diagnostics = true;
+  }
+
+  if (!requestTimeoutMs && process.env.REQUEST_TIMEOUT_MS) {
+    const parsed = parseInt(process.env.REQUEST_TIMEOUT_MS.trim(), 10);
+    if (!isNaN(parsed) && parsed >= 1000) requestTimeoutMs = parsed;
+  }
+  const target =
+    cdpUrl ||
+    process.env.CLOAK_CDP_URL?.trim() ||
+    process.env.LPAGENT_CDP_URL?.trim() ||
+    DEFAULT_CLOAK_CDP_URL;
+  try {
+    const u = new URL(target);
+    if (Number(u.port) === FORBIDDEN_PORT) {
+      throw new Error(
+        `Security violation: Refusing to connect to Brave CDP port ${FORBIDDEN_PORT}. Only CloakBrowser (default port ${DEFAULT_CDP_PORT}) is supported. Falling back to Brave is strictly forbidden.`
+      );
+    }
+  } catch (err) {
+    if (err.message.includes("Security violation")) throw err;
+  }
+
+  return {
+    tokenCA,
+    pools,
+    refresh,
+    workers,
+    browserType,
+    cdpUrl,
+    outputDir,
+    maxPages,
+    diagnostics,
+    ...(requestTimeoutMs !== null ? { requestTimeoutMs } : {}),
+  };
 }
 
 export function computeSelectionFingerprint(tokenMint, poolAddresses) {
@@ -138,6 +200,143 @@ export class CheckpointWriter {
     const next = this._chain.then(() => fn());
     this._chain = next.catch(() => {});
     return next;
+  }
+}
+
+export class DiagnosticsCollector {
+  constructor() {
+    this.requests = [];
+  }
+
+  recordRequest({
+    poolAddress,
+    pageNumber,
+    workerId,
+    queueWaitMs = 0,
+    networkDurationMs = 0,
+    retryCount = 0,
+    retryDelayMs = 0,
+    status = 0,
+    errorName = null,
+    totalElapsedMs = 0,
+  }) {
+    this.requests.push({
+      poolAddress,
+      pageNumber,
+      workerId,
+      queueWaitMs: Math.round(queueWaitMs),
+      networkDurationMs: Math.round(networkDurationMs),
+      retryCount,
+      retryDelayMs: Math.round(retryDelayMs),
+      status,
+      errorName: errorName ? String(errorName).slice(0, 100) : null,
+      totalElapsedMs: Math.round(totalElapsedMs),
+      timestamp: new Date().toISOString(),
+    });
+  }
+
+  getSummary() {
+    const totalRequests = this.requests.length;
+    let totalQueueWait = 0;
+    let totalNetDuration = 0;
+    let totalRetries = 0;
+    const poolMap = new Map();
+    const workerMap = new Map();
+
+    for (const r of this.requests) {
+      totalQueueWait += r.queueWaitMs;
+      totalNetDuration += r.networkDurationMs;
+      if (r.retryCount > 0) totalRetries++;
+
+      // Pool summary
+      let pSummary = poolMap.get(r.poolAddress);
+      if (!pSummary) {
+        pSummary = {
+          poolAddress: r.poolAddress,
+          totalRequests: 0,
+          successfulRequests: 0,
+          failedRequests: 0,
+          retryCount: 0,
+          totalQueueWaitMs: 0,
+          totalNetworkDurationMs: 0,
+          statusCounts: {},
+        };
+        poolMap.set(r.poolAddress, pSummary);
+      }
+      pSummary.totalRequests++;
+      if (r.status >= 200 && r.status < 300) pSummary.successfulRequests++;
+      else pSummary.failedRequests++;
+      if (r.retryCount > 0) pSummary.retryCount++;
+      pSummary.totalQueueWaitMs += r.queueWaitMs;
+      pSummary.totalNetworkDurationMs += r.networkDurationMs;
+      pSummary.statusCounts[r.status] = (pSummary.statusCounts[r.status] || 0) + 1;
+
+      // Worker summary
+      let wSummary = workerMap.get(r.workerId);
+      if (!wSummary) {
+        wSummary = {
+          workerId: r.workerId,
+          totalRequests: 0,
+          retryCount: 0,
+          totalQueueWaitMs: 0,
+          totalNetworkDurationMs: 0,
+          statusCounts: {},
+        };
+        workerMap.set(r.workerId, wSummary);
+      }
+      wSummary.totalRequests++;
+      if (r.retryCount > 0) wSummary.retryCount++;
+      wSummary.totalQueueWaitMs += r.queueWaitMs;
+      wSummary.totalNetworkDurationMs += r.networkDurationMs;
+      wSummary.statusCounts[r.status] = (wSummary.statusCounts[r.status] || 0) + 1;
+    }
+
+    const pools = Array.from(poolMap.values()).map((p) => ({
+      ...p,
+      avgQueueWaitMs: p.totalRequests > 0 ? Math.round(p.totalQueueWaitMs / p.totalRequests) : 0,
+      avgNetworkDurationMs: p.totalRequests > 0 ? Math.round(p.totalNetworkDurationMs / p.totalRequests) : 0,
+    }));
+
+    const workers = Array.from(workerMap.values()).map((w) => ({
+      ...w,
+      avgQueueWaitMs: w.totalRequests > 0 ? Math.round(w.totalQueueWaitMs / w.totalRequests) : 0,
+      avgNetworkDurationMs: w.totalRequests > 0 ? Math.round(w.totalNetworkDurationMs / w.totalRequests) : 0,
+    }));
+
+    return {
+      version: "v1",
+      totalRequests,
+      totalRetries,
+      avgQueueWaitMs: totalRequests > 0 ? Math.round(totalQueueWait / totalRequests) : 0,
+      avgNetworkDurationMs: totalRequests > 0 ? Math.round(totalNetDuration / totalRequests) : 0,
+      pools,
+      workers,
+      requests: this.requests,
+    };
+  }
+
+  printSummary() {
+    const s = this.getSummary();
+    console.log(`\n======================================`);
+    console.log(`PERFORMANCE DIAGNOSTICS SUMMARY`);
+    console.log(`======================================`);
+    console.log(`Total Requests:    ${s.totalRequests}`);
+    console.log(`Total Retries:     ${s.totalRetries}`);
+    console.log(`Avg Queue Wait:    ${s.avgQueueWaitMs}ms`);
+    console.log(`Avg Net Duration:  ${s.avgNetworkDurationMs}ms`);
+    console.log(`--- Per Pool ---`);
+    for (const p of s.pools) {
+      console.log(
+        `  Pool ${p.poolAddress}: requests=${p.totalRequests}, retries=${p.retryCount}, avgQueue=${p.avgQueueWaitMs}ms, avgNet=${p.avgNetworkDurationMs}ms, statuses=${JSON.stringify(p.statusCounts)}`
+      );
+    }
+    console.log(`--- Per Worker ---`);
+    for (const w of s.workers) {
+      console.log(
+        `  Worker ${w.workerId}: requests=${w.totalRequests}, retries=${w.retryCount}, avgQueue=${w.avgQueueWaitMs}ms, avgNet=${w.avgNetworkDurationMs}ms, statuses=${JSON.stringify(w.statusCounts)}`
+      );
+    }
+    console.log(`======================================\n`);
   }
 }
 
@@ -331,32 +530,35 @@ export async function connectToBrowser({
   chromiumClient = chromium,
   checkEndpointFn = checkCdpEndpoint,
 } = {}) {
+  if (browserType !== "cloak") {
+    throw new Error(
+      `Invalid browser type "${browserType}". Only "cloak" (CloakBrowser) is supported. Silent fallback to Brave is strictly forbidden.`
+    );
+  }
+
   let targetUrl = cdpUrl;
   if (!targetUrl) {
-    if (browserType === "cloak") {
-      targetUrl = process.env.CLOAK_CDP_URL || DEFAULT_CLOAK_CDP_URL;
-    } else {
-      targetUrl = process.env.CDP_URL || DEFAULT_BRAVE_CDP_URL;
-    }
+    targetUrl =
+      process.env.CLOAK_CDP_URL?.trim() ||
+      process.env.LPAGENT_CDP_URL?.trim() ||
+      DEFAULT_CLOAK_CDP_URL;
   }
 
   const parsed = new URL(targetUrl);
   const port = Number(parsed.port) || (parsed.protocol === "https:" ? 443 : 80);
   const host = parsed.hostname || "127.0.0.1";
 
-  if (browserType === "cloak" && port === FORBIDDEN_PORT) {
+  if (port === FORBIDDEN_PORT) {
     throw new Error(
       `Security violation: Refusing to connect to Brave CDP port ${FORBIDDEN_PORT} when browser is set to 'cloak'. Falling back to Brave is strictly forbidden.`
     );
   }
 
-  if (browserType === "cloak") {
-    const isReady = await checkEndpointFn(port, host, 2000);
-    if (!isReady) {
-      throw new Error(
-        `CloakBrowser is not running at ${targetUrl}. Start it first with 'npm run browser:cloak'. Silent fallback to Brave is strictly forbidden.`
-      );
-    }
+  const isReady = await checkEndpointFn(port, host, 2000);
+  if (!isReady) {
+    throw new Error(
+      `CloakBrowser is not running at ${targetUrl}. Start it first with 'npm run browser:cloak'. Silent fallback to Brave is strictly forbidden.`
+    );
   }
 
   console.log(`[Browser] Connecting to ${browserType.toUpperCase()} CDP at ${targetUrl}...`);
@@ -376,15 +578,22 @@ export async function fetchTopLpersPageWithLimiter({
   rateLimiter,
   maxRetries = 3,
   workerId = 1,
+  requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
+  diagnosticsCollector = null,
 }) {
   let attempt = 0;
+  let retryDelayMs = 0;
 
   while (attempt <= maxRetries) {
+    const queueStart = performance.now();
     await rateLimiter.acquireSlot();
+    const queueWaitMs = performance.now() - queueStart;
+
     let res;
+    const netStart = performance.now();
     try {
       res = await page.evaluate(
-        async ({ poolAddress, pageNumber }) => {
+        async ({ poolAddress, pageNumber, timeoutMs }) => {
           const url =
             `https://api.lpagent.io/api/v1/pools/${poolAddress}/top-lpers` +
             `?page=${pageNumber}` +
@@ -392,10 +601,16 @@ export async function fetchTopLpersPageWithLimiter({
             `&order_by=total_pnl_native` +
             `&sort_order=desc`;
 
+          const controller = new AbortController();
+          const timer = setTimeout(() => {
+            controller.abort(new Error(`Request timed out after ${timeoutMs}ms`));
+          }, timeoutMs);
+
           try {
             const response = await fetch(url, {
               credentials: "include",
               headers: { Accept: "application/json" },
+              signal: controller.signal,
             });
 
             const retryAfterHeader = response.headers.get("retry-after");
@@ -406,22 +621,45 @@ export async function fetchTopLpersPageWithLimiter({
               ok: response.ok,
               status: response.status,
               retryAfterSec: Number.isFinite(retryAfterSec) ? retryAfterSec : null,
+              errorName: response.ok ? null : `HTTP_${response.status}`,
               text,
             };
           } catch (networkErr) {
+            const isTimeout =
+              networkErr?.name === "AbortError" ||
+              networkErr?.message?.toLowerCase().includes("timed out") ||
+              networkErr?.message?.toLowerCase().includes("timeout");
             return {
               ok: false,
               status: 0,
+              errorName: isTimeout ? "TimeoutError" : (networkErr?.name || "NetworkError"),
               retryAfterSec: null,
-              text: networkErr?.message || String(networkErr),
+              text: isTimeout ? `Request timed out after ${timeoutMs}ms` : (networkErr?.message || String(networkErr)),
             };
+          } finally {
+            clearTimeout(timer);
           }
         },
-        { poolAddress, pageNumber }
+        { poolAddress, pageNumber, timeoutMs: requestTimeoutMs }
       );
     } finally {
       rateLimiter.releaseSlot();
     }
+    const networkDurationMs = performance.now() - netStart;
+    const totalElapsedMs = queueWaitMs + networkDurationMs;
+
+    diagnosticsCollector?.recordRequest({
+      poolAddress,
+      pageNumber,
+      workerId,
+      queueWaitMs,
+      networkDurationMs,
+      retryCount: attempt,
+      retryDelayMs,
+      status: res.status,
+      errorName: res.errorName ?? (res.ok ? null : `HTTP_${res.status}`),
+      totalElapsedMs,
+    });
 
     if (res.ok) {
       let json;
@@ -456,17 +694,20 @@ export async function fetchTopLpersPageWithLimiter({
       );
       rateLimiter.triggerBackoff(waitMs);
       await sleep(waitMs);
+      retryDelayMs = waitMs;
       attempt++;
       continue;
     }
 
-    // Transient errors (5xx or network status 0)
+    // Transient errors (5xx or network status 0 / timeout)
     if (attempt < maxRetries) {
       const backoffMs = Math.min(5000, 1000 * Math.pow(2, attempt));
       console.warn(
-        `[Worker ${workerId}] HTTP ${res.status} on pool ${poolAddress} page ${pageNumber}. Retrying in ${backoffMs}ms...`
+        `[Worker ${workerId}] HTTP ${res.status} (${res.errorName || "NetworkError"}) on pool ${poolAddress} page ${pageNumber}. Retrying in ${backoffMs}ms...`
       );
+      rateLimiter.triggerBackoff(backoffMs);
       await sleep(backoffMs);
+      retryDelayMs = backoffMs;
       attempt++;
       continue;
     }
@@ -485,6 +726,10 @@ export async function scanPoolDirect({
   minPageDelay = MIN_PAGE_DELAY,
   maxPageDelay = MAX_PAGE_DELAY,
   maxRetries = 3,
+  maxPages = null,
+  requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
+  navSettleMs = 0,
+  diagnosticsCollector = null,
 }) {
   const poolAddress = pool.poolAddress;
   await page.goto(
@@ -494,6 +739,10 @@ export async function scanPoolDirect({
       timeout: 120000,
     }
   );
+
+  if (navSettleMs > 0) {
+    await sleep(navSettleMs);
+  }
 
   const currentUrl = page.url();
   if (currentUrl.includes("/login") || currentUrl.includes("/auth")) {
@@ -509,17 +758,20 @@ export async function scanPoolDirect({
     rateLimiter,
     maxRetries,
     workerId,
+    requestTimeoutMs,
+    diagnosticsCollector,
   });
 
   const totalPages = Number(first?.pagination?.totalPages ?? 1);
+  const targetPages = maxPages && maxPages > 0 ? Math.min(totalPages, maxPages) : totalPages;
   const totalCount = Number(first?.pagination?.totalCount ?? 0);
   const allRows = [...(first.data || [])];
 
   console.log(
-    `    [Worker ${workerId}] Page 1/${totalPages} | rows=${first.data?.length || 0} | reportedTotal=${totalCount}`
+    `    [Worker ${workerId}] Page 1/${targetPages} (total=${totalPages}) | rows=${first.data?.length || 0} | reportedTotal=${totalCount}`
   );
 
-  for (let pageNumber = 2; pageNumber <= totalPages; pageNumber++) {
+  for (let pageNumber = 2; pageNumber <= targetPages; pageNumber++) {
     const delay = randomDelay(minPageDelay, maxPageDelay);
     if (delay > 0) {
       await sleep(delay);
@@ -532,6 +784,8 @@ export async function scanPoolDirect({
       rateLimiter,
       maxRetries,
       workerId,
+      requestTimeoutMs,
+      diagnosticsCollector,
     });
 
     const rows = json.data || [];
@@ -619,6 +873,10 @@ export async function scanSelectedPools(options = {}) {
     browserType = "cloak",
     cdpUrl = null,
     outputDir: customOutputDir = null,
+    maxPages = null,
+    diagnostics = false,
+    requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
+    navSettleMs = null,
     discoverTokenPoolsFn = discoverTokenPools,
     chromiumClient = chromium,
     checkEndpointFn = checkCdpEndpoint,
@@ -630,6 +888,15 @@ export async function scanSelectedPools(options = {}) {
     context: injectedContext = null,
     browser: injectedBrowser = null,
   } = options;
+
+  const effectiveNavSettleMs =
+    navSettleMs !== null && navSettleMs !== undefined
+      ? navSettleMs
+      : minPageDelay === 0
+      ? 0
+      : DEFAULT_NAV_SETTLE_MS;
+
+  const diagnosticsCollector = diagnostics ? new DiagnosticsCollector() : null;
 
   if (!tokenCA) {
     throw new Error("Token CA is required. Use --token <TOKEN_CA>");
@@ -779,6 +1046,12 @@ export async function scanSelectedPools(options = {}) {
       workerError = new Error("Browser CDP session disconnected");
     }
   };
+  const onSignal = () => {
+    console.log("\n[Scan] Interruption received. Gracefully stopping workers...");
+    shouldAbort = true;
+  };
+  process.on("SIGINT", onSignal);
+  process.on("SIGTERM", onSignal);
   browser?.on?.("disconnected", onDisconnect);
   try {
     const page1 = await context.newPage();
@@ -820,6 +1093,10 @@ export async function scanSelectedPools(options = {}) {
             minPageDelay,
             maxPageDelay,
             maxRetries,
+            maxPages,
+            requestTimeoutMs,
+            navSettleMs: effectiveNavSettleMs,
+            diagnosticsCollector,
           });
 
           if (shouldAbort) {
@@ -872,8 +1149,14 @@ export async function scanSelectedPools(options = {}) {
     }
 
     await Promise.all(workerTasks);
-
     if (workerError) {
+      if (diagnosticsCollector) {
+        diagnosticsCollector.printSummary();
+        await atomicWriteJson(
+          path.join(outputDir, "diagnostics.json"),
+          diagnosticsCollector.getSummary()
+        ).catch(() => {});
+      }
       await checkpointWriter.write(async () => {
         await saveCheckpoints({
           outputDir,
@@ -915,14 +1198,25 @@ export async function scanSelectedPools(options = {}) {
       `[SELECTED_SCAN] COMPLETE totalPools=${selectedPools.length} uniqueWallets=${finalGlobalWallets.length}`
     );
 
+    if (diagnosticsCollector) {
+      diagnosticsCollector.printSummary();
+      await atomicWriteJson(
+        path.join(outputDir, "diagnostics.json"),
+        diagnosticsCollector.getSummary()
+      );
+    }
+
     return {
       completedPoolsMap,
       uniqueWallets: finalGlobalWallets.length,
       outputDir,
+      ...(diagnosticsCollector ? { diagnostics: diagnosticsCollector.getSummary() } : {}),
     };
   } finally {
     browser?.off?.("disconnected", onDisconnect);
     rateLimiter.destroy();
+    process.off("SIGINT", onSignal);
+    process.off("SIGTERM", onSignal);
     // Close only scanner-owned tabs; keep CloakBrowser and existing tabs alive
     for (const p of scannerPages) {
       try {

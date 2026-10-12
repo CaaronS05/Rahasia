@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
-
+import { resolveCloakCdpUrl } from "../browser/launch-cloak.mjs";
 function getArg(name) {
     const index = process.argv.indexOf(name);
 
@@ -37,7 +37,7 @@ if (!/^[1-9]\d*$/.test(trimmedWorkers)) {
 }
 
 const FABRIQ_CONCURRENCY = trimmedWorkers;
-
+const CLOAK_CDP_URL = resolveCloakCdpUrl();
 const BASE_DIR = path.join(
     "data",
     "discovery",
@@ -194,7 +194,11 @@ async function main() {
                 "scripts/pool-scanner-v1.mjs",
                 "--token",
                 TOKEN_CA,
-            ]
+            ],
+            {
+                CDP_URL: CLOAK_CDP_URL,
+                CLOAK_CDP_URL,
+            }
         );
 
         await writePipelineState({
@@ -239,6 +243,11 @@ async function main() {
 
             FABRIQ_CONCURRENCY:
                 FABRIQ_CONCURRENCY,
+
+            FABRIQ_CDP_URL:
+                CLOAK_CDP_URL,
+
+            CLOAK_CDP_URL,
         }
     );
 

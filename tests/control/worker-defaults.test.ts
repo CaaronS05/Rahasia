@@ -98,6 +98,22 @@ describe("Worker Defaults and Overrides Regression Suite", () => {
                 /fabriqConcurrency:\s*Math\.max\(1,\s*Math\.floor\(params\?\.fabriqConcurrency\s*\?\?\s*8\)\)/
             );
         });
+
+        it("Frontend PortfolioPage and WalletDataControlPanel reference CloakBrowser, not Brave", () => {
+            const portfolioContent = fs.readFileSync(
+                path.join(ROOT, "frontend/src/pages/PortfolioPage.tsx"),
+                "utf8"
+            );
+            assert.match(portfolioContent, /Unable to connect to CloakBrowser CDP on port 9223/);
+            assert.doesNotMatch(portfolioContent, /Brave/);
+
+            const panelContent = fs.readFileSync(
+                path.join(ROOT, "frontend/src/components/data/WalletDataControlPanel.tsx"),
+                "utf8"
+            );
+            assert.match(panelContent, /Open LP Agent in CloakBrowser/);
+            assert.doesNotMatch(panelContent, /Brave/);
+        });
     });
 
     describe("2. Control Server Default Baseline (No Environment Overrides)", () => {
@@ -137,6 +153,15 @@ describe("Worker Defaults and Overrides Regression Suite", () => {
             const data = await res.json();
             assert.equal(data.concurrency, 8);
             assert.equal(data.fabriqConcurrency, 8);
+        });
+
+        it("GET /api/browser/status reports CloakBrowser default endpoint 127.0.0.1:9223", async () => {
+            const res = await fetch(`http://127.0.0.1:${TEST_PORT}/api/browser/status`);
+            assert.equal(res.status, 200);
+            const data = await res.json();
+            assert.equal(data.browser, "cloak");
+            assert.equal(data.cdpUrl, "http://127.0.0.1:9223");
+            assert.equal(data.port, 9223);
         });
     });
 

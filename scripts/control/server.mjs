@@ -15,7 +15,12 @@ import {
     getSnapshotTargetSummary,
     discardFrozenTargets,
 } from "../fabriq/snapshot-targets.mjs";
-
+import {
+    DEFAULT_CDP_PORT,
+    DEFAULT_CLOAK_CDP_URL,
+    checkCdpEndpoint,
+    resolveCloakCdpUrl,
+} from "../browser/launch-cloak.mjs";
 const HOST = "127.0.0.1";
 const PORT = Number.parseInt(process.env.CONTROL_SERVER_PORT || process.env.PORT || "8787", 10);
 
@@ -66,14 +71,21 @@ function extractCleanErrorMessage(stderr, stdout) {
         l.includes("FABRIQ_TAB_MISSING") ||
         l.includes("AUTH_SESSION_ERROR") ||
         l.includes("FABRIQ_API_ERROR") ||
-        l.includes("RATE_LIMITED")
+        l.includes("RATE_LIMITED") ||
+        l.includes("CloakBrowser is not running") ||
+        l.includes("CloakBrowser remote debugging endpoint is unreachable") ||
+        l.includes("Security violation: Refusing to connect to Brave CDP port") ||
+        l.includes("LP Agent tab not found") ||
+        l.includes("Fabriq tab not found") ||
+        l.includes("No CloakBrowser context found") ||
+        l.includes("No browser context found")
     );
     if (classifiedLine) {
         return classifiedLine;
     }
 
     if (combined.includes("Timeout 120000ms exceeded") || combined.includes("connectOverCDP")) {
-        return "Unable to initialize browser CDP session (connection timed out).";
+        return "Unable to initialize CloakBrowser CDP session (connection timed out).";
     }
 
     const stderrLines = (stderr || "").split("\n").map((l) => stripAnsi(l).trim()).filter(Boolean);
@@ -82,6 +94,43 @@ function extractCleanErrorMessage(stderr, stdout) {
     }
 
     return "Single-wallet analysis failed.";
+}
+
+async function getBrowserStatus() {
+    try {
+        const cdpUrl = resolveCloakCdpUrl();
+        const parsed = new URL(cdpUrl);
+        const port = Number(parsed.port) || DEFAULT_CDP_PORT;
+        const host = parsed.hostname || "127.0.0.1";
+        const version = await checkCdpEndpoint(port, host, 1500);
+        return {
+            statusCode: 200,
+            body: {
+                browser: "cloak",
+                cdpUrl,
+                host,
+                port,
+                reachable: Boolean(version),
+                version: version || null,
+                error: version
+                    ? null
+                    : `CloakBrowser is not running at ${cdpUrl}. Start it with 'npm run browser:cloak'.`,
+            },
+        };
+    } catch (err) {
+        return {
+            statusCode: err?.code === "EFORBIDDEN_PORT" ? 400 : 500,
+            body: {
+                browser: "cloak",
+                cdpUrl: DEFAULT_CLOAK_CDP_URL,
+                host: "127.0.0.1",
+                port: DEFAULT_CDP_PORT,
+                reachable: false,
+                version: null,
+                error: err instanceof Error ? err.message : String(err),
+            },
+        };
+    }
 }
 
 function getCurrentJakartaMonth() {
@@ -1705,6 +1754,7 @@ async function startLpAgentRefresh({
                 LPAGENT_CONCURRENCY: String(safeConcurrency),
                 LPAGENT_MAX_IN_FLIGHT: String(process.env.LPAGENT_MAX_IN_FLIGHT ?? "10"),
             },
+            parseLpAgentLine
         );
 
         if (lpAgentState.status === "stopping" || lpAgentState.status === "stopped") {
@@ -5348,6 +5398,11 @@ const server = http.createServer(async (request, response) => {
 
     const url = new URL(request.url, `http://${HOST}:${PORT}`);
 
+    if (request.method === "GET" && url.pathname === "/api/browser/status") {
+        const result = await getBrowserStatus();
+        json(request, response, result.statusCode, result.body);
+        return;
+    }
     if (request.method === "GET" && url.pathname === "/api/wallet-intelligence/status") {
         json(request, response, 200, walletIntelligencePublicState());
         return;

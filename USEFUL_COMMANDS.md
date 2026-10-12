@@ -39,12 +39,11 @@ LP Agent scrape
 
 Sebelum menjalankan pipeline:
 
-1. Brave sudah berjalan dengan remote debugging.
-2. LP Agent sudah login.
+1. CloakBrowser sudah berjalan (`npm run browser:cloak` pada port 9223).
+2. LP Agent sudah login di CloakBrowser.
 3. Filter Smart LP sudah diatur.
 4. Tabel Solana Smart LP sudah tampil benar.
-5. Fabriq sudah login di Brave.
-
+5. Fabriq sudah login di CloakBrowser.
 ---
 
 ## 3. LP Agent
@@ -264,20 +263,18 @@ node --experimental-strip-types --check scripts/pipeline/publish-wallets.ts
 
 ---
 
-## 10. Brave Remote Debugging
+## 10. CloakBrowser Remote Debugging (Port 9223)
 
-Start Brave di macOS:
+Start CloakBrowser persistent headed instance:
 
 ```bash
-"/Applications/Brave Browser.app/Contents/MacOS/Brave Browser" \
-  --remote-debugging-port=9222 \
-  --user-data-dir="$HOME/Documents/fabriq-playwright-profile"
+npm run browser:cloak
 ```
 
 Cek remote debugging:
 
 ```bash
-curl http://127.0.0.1:9222/json/version
+curl http://127.0.0.1:9223/json/version
 ```
 
 ---
@@ -434,20 +431,7 @@ Wallet shortlist / watchlist
 ```
 
 
-PENTING 
-
-## 10. Brave Remote Debugging
-
-Start Brave di macOS:
-
-```bash
-"/Applications/Brave Browser.app/Contents/MacOS/Brave Browser" \
-  --remote-debugging-port=9222 \
-  --user-data-dir="$HOME/Documents/fabriq-playwright-profile"
-```
-
 ---
-
 ## 11. CloakBrowser Persistent Launcher (Port 9223)
 
 Start CloakBrowser persistent headed instance:

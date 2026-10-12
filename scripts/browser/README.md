@@ -1,8 +1,8 @@
-# CloakBrowser Persistent Launcher (DLLM Stage 1)
+# CloakBrowser Persistent Launcher (DLLM)
 
 Dedicated persistent browser launcher providing loopback-only Chrome DevTools Protocol (CDP) connectivity on port `9223`.
 
-> **Safety Notice**: Production scanners currently use Brave on port `9222`. CloakBrowser runs independently on port `9223` without interfering with Brave.
+> **Safety Notice**: CloakBrowser on port `9223` is the default and only supported browser automation backend across DLLM workflows. Connecting or falling back to legacy Brave port `9222` is strictly forbidden.
 
 ---
 

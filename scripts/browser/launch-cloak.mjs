@@ -18,7 +18,38 @@ const __dirname = path.dirname(__filename);
 export const ROOT_DIR = path.resolve(__dirname, "../..");
 
 export const DEFAULT_CDP_PORT = 9223;
-export const FORBIDDEN_PORT = 9222; // Reserved exclusively for Brave
+export const DEFAULT_CLOAK_CDP_URL = `http://127.0.0.1:${DEFAULT_CDP_PORT}`;
+export const FORBIDDEN_PORT = 9222; // Legacy Brave port (strictly forbidden)
+
+export function resolveCloakCdpUrl(customUrl = null) {
+  const raw =
+    customUrl?.trim() ||
+    process.env.CLOAK_CDP_URL?.trim() ||
+    process.env.FABRIQ_CDP_URL?.trim() ||
+    process.env.LPAGENT_CDP_URL?.trim() ||
+    (process.env.CLOAK_CDP_PORT ? `http://127.0.0.1:${process.env.CLOAK_CDP_PORT.trim()}` : null) ||
+    DEFAULT_CLOAK_CDP_URL;
+
+  let parsed;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    const err = new Error(`Invalid CloakBrowser CDP URL: "${raw}"`);
+    err.code = "EINVALID_CDP_URL";
+    throw err;
+  }
+
+  const port = Number(parsed.port) || (parsed.protocol === "https:" ? 443 : 80);
+  if (port === FORBIDDEN_PORT) {
+    const err = new Error(
+      `Security violation: Refusing to connect to Brave CDP port ${FORBIDDEN_PORT}. Use CloakBrowser on port ${DEFAULT_CDP_PORT}. Silent fallback to Brave is strictly forbidden.`
+    );
+    err.code = "EFORBIDDEN_PORT";
+    throw err;
+  }
+
+  return raw.replace(/\/+$/, "");
+}
 export const DEFAULT_PROFILE_DIR = path.join(
   os.homedir(),
   ".cloakbrowser",
@@ -292,11 +323,27 @@ export async function launchCloakBrowser(options = {}) {
 // CLI Handler
 // -----------------------------------------------------------------------------
 
+export function parseLauncherCliArgs(args = process.argv.slice(2)) {
+  let port = process.env.CLOAK_CDP_PORT ? Number(process.env.CLOAK_CDP_PORT) : DEFAULT_CDP_PORT;
+  let userDataDir = process.env.CLOAK_USER_DATA_DIR || DEFAULT_PROFILE_DIR;
+  const headless = args.includes("--headless") || process.env.CLOAK_HEADLESS === "true";
+
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--port" && args[i + 1]) {
+      port = Number(args[i + 1]);
+      i++;
+    } else if (args[i] === "--profile" && args[i + 1]) {
+      userDataDir = args[i + 1];
+      i++;
+    }
+  }
+
+  return { port, userDataDir, headless };
+}
+
 async function runCli() {
   const args = process.argv.slice(2);
-  const port = process.env.CLOAK_CDP_PORT ? Number(process.env.CLOAK_CDP_PORT) : DEFAULT_CDP_PORT;
-  const userDataDir = process.env.CLOAK_USER_DATA_DIR || DEFAULT_PROFILE_DIR;
-
+  const { port, userDataDir, headless } = parseLauncherCliArgs(args);
   if (args.includes("--help") || args.includes("-h")) {
     console.log(`
 CloakBrowser Persistent Launcher
@@ -382,7 +429,7 @@ Options:
     process.exit(0);
   }
 
-  const headless = args.includes("--headless") || process.env.CLOAK_HEADLESS === "true";
+  // headless already parsed above
 
   console.log("==================================================");
   console.log(" CloakBrowser Persistent Launcher (DLLM)");

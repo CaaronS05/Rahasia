@@ -12,6 +12,9 @@ import {
   connectToBrowser,
   CheckpointWriter,
   computeSelectionFingerprint,
+  DiagnosticsCollector,
+  DEFAULT_REQUEST_TIMEOUT_MS,
+  DEFAULT_NAV_SETTLE_MS,
 } from "../../scripts/pool/scan-selected-pools.mjs";
 import { RateLimiter } from "../../scripts/bench/rate-limiter.mjs";
 
@@ -79,11 +82,20 @@ function createMockDiscoveryResult(pools: DiscoveredPoolItem[]) {
   });
 }
 
+interface StatusOverrideItem {
+  status: number;
+  retryAfter?: number;
+  text?: string;
+  errorName?: string;
+  delayMs?: number;
+  remainingFailures?: number;
+}
+
 interface MockPageOptions {
   id?: string;
   browser?: MockBrowser;
   dataMap?: Record<string, Record<number, TopLperRow[]>>;
-  statusOverrides?: Record<string, { status: number; retryAfter?: number; text?: string }>;
+  statusOverrides?: Record<string, StatusOverrideItem>;
   onGoto?: (url: string, pageId: string) => void;
   onRequest?: (poolAddress: string, pageNumber: number, pageId: string) => void;
 }
@@ -140,16 +152,29 @@ class MockPage {
     if (this.options.browser && !this.options.browser.isConnected()) {
       throw new Error("Browser CDP session disconnected");
     }
-
     const overrideKey = `${poolAddress}:${pageNumber}`;
     const override = this.options.statusOverrides?.[overrideKey];
     if (override) {
-      return {
-        ok: override.status >= 200 && override.status < 300,
-        status: override.status,
-        retryAfterSec: override.retryAfter ?? null,
-        text: override.text || (override.status === 429 ? "Too Many Requests" : "Error"),
-      };
+      if (override.remainingFailures !== undefined) {
+        if (override.remainingFailures > 0) {
+          override.remainingFailures--;
+          return {
+            ok: override.status >= 200 && override.status < 300,
+            status: override.status,
+            retryAfterSec: override.retryAfter ?? null,
+            errorName: override.errorName ?? (override.status === 0 ? "TimeoutError" : `HTTP_${override.status}`),
+            text: override.text || (override.status === 429 ? "Too Many Requests" : "Error"),
+          };
+        }
+      } else {
+        return {
+          ok: override.status >= 200 && override.status < 300,
+          status: override.status,
+          retryAfterSec: override.retryAfter ?? null,
+          errorName: override.errorName ?? (override.status === 0 ? "TimeoutError" : `HTTP_${override.status}`),
+          text: override.text || (override.status === 429 ? "Too Many Requests" : "Error"),
+        };
+      }
     }
 
     const poolRows = this.options.dataMap?.[poolAddress]?.[pageNumber] || [];
@@ -159,6 +184,7 @@ class MockPage {
       ok: true,
       status: 200,
       retryAfterSec: null,
+      errorName: null,
       text: JSON.stringify({
         status: "success",
         data: poolRows,
@@ -993,6 +1019,199 @@ describe("CloakBrowser 2-Tab LP Agent Selected Pool Scanner Suite", () => {
       }
     );
   });
+  // ---------------------------------------------------------------------------
+  // 16. Max pages enforcement
+  // ---------------------------------------------------------------------------
+  it("16. Max pages enforcement: caps extraction at maxPages per pool", async () => {
+    const requestedPages: string[] = [];
+    const dataMap: Record<string, Record<number, TopLperRow[]>> = {
+      [POOL_A]: {
+        1: [{ owner: "W1" }],
+        2: [{ owner: "W2" }],
+        3: [{ owner: "W3" }],
+        4: [{ owner: "W4" }],
+      },
+    };
+
+    const context = new MockBrowserContext({
+      dataMap,
+      onRequest: (pool, pageNum) => {
+        requestedPages.push(`${pool}:${pageNum}`);
+      },
+    });
+    const browser = new MockBrowser(context);
+
+    await scanSelectedPools({
+      tokenCA: TEST_TOKEN,
+      pools: [POOL_A],
+      workers: 1,
+      maxPages: 2,
+      outputDir: tmpDir,
+      discoverTokenPoolsFn: createMockDiscoveryResult([
+        { poolAddress: POOL_A, pair: "TEST/SOL" },
+      ]),
+      context: context as unknown as Parameters<typeof scanSelectedPools>[0]["context"],
+      browser: browser as unknown as Parameters<typeof scanSelectedPools>[0]["browser"],
+      minPageDelay: 0,
+      maxPageDelay: 0,
+      minPoolDelay: 0,
+      maxPoolDelay: 0,
+    });
+
+    assert.deepEqual(requestedPages, [`${POOL_A}:1`, `${POOL_A}:2`]);
+  });
+
+  // ---------------------------------------------------------------------------
+  // 17. Request timeout and HTTP 0 retry recovery
+  // ---------------------------------------------------------------------------
+  it("17. Deterministic request timeout & HTTP 0 retry recovery: handles transient network timeout safely", async () => {
+    const dataMap: Record<string, Record<number, TopLperRow[]>> = {
+      [POOL_A]: {
+        1: [{ owner: "TimeoutRecoveredWallet", total_pnl: 100 }],
+      },
+    };
+
+    // Page 1 fails with status 0 (TimeoutError) on first attempt, then succeeds on retry
+    const statusOverrides: Record<string, StatusOverrideItem> = {
+      [`${POOL_A}:1`]: {
+        status: 0,
+        errorName: "TimeoutError",
+        text: "Request timed out after 5000ms",
+        remainingFailures: 1,
+      },
+    };
+
+    const context = new MockBrowserContext({ dataMap, statusOverrides });
+    const browser = new MockBrowser(context);
+
+    const result = await scanSelectedPools({
+      tokenCA: TEST_TOKEN,
+      pools: [POOL_A],
+      workers: 1,
+      outputDir: tmpDir,
+      requestTimeoutMs: 5000,
+      discoverTokenPoolsFn: createMockDiscoveryResult([
+        { poolAddress: POOL_A, pair: "TEST/SOL" },
+      ]),
+      context: context as unknown as Parameters<typeof scanSelectedPools>[0]["context"],
+      browser: browser as unknown as Parameters<typeof scanSelectedPools>[0]["browser"],
+      minPageDelay: 0,
+      maxPageDelay: 0,
+      minPoolDelay: 0,
+      maxPoolDelay: 0,
+    });
+
+    assert.equal(result.uniqueWallets, 1);
+    const stateRaw = await fs.readFile(path.join(tmpDir, "scan-state.json"), "utf8");
+    const state = JSON.parse(stateRaw);
+    assert.equal(state.status, "completed");
+    assert.equal(state.completedPoolCount, 1);
+
+    const walletsRaw = await fs.readFile(path.join(tmpDir, "wallets.json"), "utf8");
+    assert.deepEqual(JSON.parse(walletsRaw), ["TimeoutRecoveredWallet"]);
+  });
+
+  // ---------------------------------------------------------------------------
+  // 18. Two-worker parallel scheduling with RateLimiter slot release and coordinated backoff
+  // ---------------------------------------------------------------------------
+  it("18. Two-worker parallel scheduling with RateLimiter slot release and coordinated backoff", async () => {
+    const dataMap: Record<string, Record<number, TopLperRow[]>> = {
+      [POOL_A]: {
+        1: [{ owner: "WorkerA_Wallet" }],
+      },
+      [POOL_B]: {
+        1: [{ owner: "WorkerB_Wallet" }],
+      },
+    };
+
+    // Worker 1 encounters transient HTTP 0 network error on pool A, then succeeds on retry
+    const statusOverrides: Record<string, StatusOverrideItem> = {
+      [`${POOL_A}:1`]: {
+        status: 0,
+        errorName: "NetworkError",
+        text: "Failed to fetch",
+        remainingFailures: 1,
+      },
+    };
+
+    const context = new MockBrowserContext({ dataMap, statusOverrides });
+    const browser = new MockBrowser(context);
+
+    const result = await scanSelectedPools({
+      tokenCA: TEST_TOKEN,
+      pools: [POOL_A, POOL_B],
+      workers: 2,
+      outputDir: tmpDir,
+      discoverTokenPoolsFn: createMockDiscoveryResult([
+        { poolAddress: POOL_A, pair: "TEST/SOL" },
+        { poolAddress: POOL_B, pair: "TEST/USDC" },
+      ]),
+      context: context as unknown as Parameters<typeof scanSelectedPools>[0]["context"],
+      browser: browser as unknown as Parameters<typeof scanSelectedPools>[0]["browser"],
+      minPageDelay: 0,
+      maxPageDelay: 0,
+      minPoolDelay: 0,
+      maxPoolDelay: 0,
+    });
+
+    assert.equal(result.uniqueWallets, 2);
+    assert.equal(result.completedPoolsMap.size, 2);
+
+    const walletsRaw = await fs.readFile(path.join(tmpDir, "wallets.json"), "utf8");
+    assert.deepEqual(JSON.parse(walletsRaw), ["WorkerA_Wallet", "WorkerB_Wallet"]);
+  });
+
+  // ---------------------------------------------------------------------------
+  // 19. Performance diagnostics collection and sanitization
+  // ---------------------------------------------------------------------------
+  it("19. Performance diagnostics collection: records per-request latencies and summaries without leaking credentials", async () => {
+    const dataMap: Record<string, Record<number, TopLperRow[]>> = {
+      [POOL_A]: {
+        1: [{ owner: "DiagWalletA" }],
+      },
+      [POOL_B]: {
+        1: [{ owner: "DiagWalletB" }],
+      },
+    };
+
+    const context = new MockBrowserContext({ dataMap });
+    const browser = new MockBrowser(context);
+
+    const result = await scanSelectedPools({
+      tokenCA: TEST_TOKEN,
+      pools: [POOL_A, POOL_B],
+      workers: 2,
+      diagnostics: true,
+      outputDir: tmpDir,
+      discoverTokenPoolsFn: createMockDiscoveryResult([
+        { poolAddress: POOL_A, pair: "TEST/SOL" },
+        { poolAddress: POOL_B, pair: "TEST/USDC" },
+      ]),
+      context: context as unknown as Parameters<typeof scanSelectedPools>[0]["context"],
+      browser: browser as unknown as Parameters<typeof scanSelectedPools>[0]["browser"],
+      minPageDelay: 0,
+      maxPageDelay: 0,
+      minPoolDelay: 0,
+      maxPoolDelay: 0,
+    });
+
+    assert.ok(result.diagnostics);
+    assert.equal(result.diagnostics.totalRequests, 2);
+    assert.equal(result.diagnostics.pools.length, 2);
+    assert.equal(result.diagnostics.workers.length, 2);
+
+    const diagFileRaw = await fs.readFile(path.join(tmpDir, "diagnostics.json"), "utf8");
+    const diagData = JSON.parse(diagFileRaw);
+    assert.equal(diagData.totalRequests, 2);
+    assert.equal(diagData.totalRetries, 0);
+
+    // Verify strict credential sanitization: no cookies or auth tokens
+    const serialized = JSON.stringify(diagData);
+    assert.ok(!serialized.includes("Authorization"));
+    assert.ok(!serialized.includes("Bearer"));
+    assert.ok(!serialized.includes("cookie"));
+  });
+
 
   // ---------------------------------------------------------------------------
   // CLI Arguments Validation
@@ -1018,8 +1237,64 @@ describe("CloakBrowser 2-Tab LP Agent Selected Pool Scanner Suite", () => {
       assert.throws(() => parseCliArgs(["--token", "TOK", "--workers", "abc"]), /Invalid workers count "abc"/);
     });
 
-    it("should reject invalid browser types", () => {
+    it("should reject invalid browser types including brave", async () => {
       assert.throws(() => parseCliArgs(["--token", "TOK", "--browser", "firefox"]), /Invalid browser type "firefox"/);
+      assert.throws(() => parseCliArgs(["--token", "TOK", "--browser", "brave"]), /Invalid browser type "brave"/);
+      await assert.rejects(
+        async () => {
+          await connectToBrowser({ browserType: "brave" });
+        },
+        /Invalid browser type "brave"/
+      );
+    });
+
+    it("should accept --output-dir and --max-pages", () => {
+      const parsed = parseCliArgs([
+        "--token", "TOK",
+        "--output-dir", "/custom/path",
+        "--max-pages", "4",
+      ]);
+      assert.equal(parsed.outputDir, "/custom/path");
+      assert.equal(parsed.maxPages, 4);
+    });
+
+    it("should reject invalid max-pages", () => {
+      assert.throws(() => parseCliArgs(["--token", "TOK", "--max-pages", "0"]), /Invalid max-pages count "0"/);
+      assert.throws(() => parseCliArgs(["--token", "TOK", "--max-pages", "-2"]), /Invalid max-pages count "-2"/);
+      assert.throws(() => parseCliArgs(["--token", "TOK", "--max-pages", "abc"]), /Invalid max-pages count "abc"/);
+    });
+
+    it("should accept --diagnostics and --diag", () => {
+      const p1 = parseCliArgs(["--token", "TOK", "--diagnostics"]);
+      assert.equal(p1.diagnostics, true);
+      const p2 = parseCliArgs(["--token", "TOK", "--diag"]);
+      assert.equal(p2.diagnostics, true);
+    });
+
+    it("should accept --request-timeout and validate minimum value", () => {
+      const p = parseCliArgs(["--token", "TOK", "--request-timeout", "5000"]);
+      assert.equal(p.requestTimeoutMs, 5000);
+      assert.throws(
+        () => parseCliArgs(["--token", "TOK", "--request-timeout", "500"]),
+        /Invalid request timeout "500"/
+      );
+      assert.throws(
+        () => parseCliArgs(["--token", "TOK", "--request-timeout", "abc"]),
+        /Invalid request timeout "abc"/
+      );
+    });
+
+    it("should accept PERF_DIAGNOSTICS and REQUEST_TIMEOUT_MS env vars", () => {
+      process.env.PERF_DIAGNOSTICS = "1";
+      process.env.REQUEST_TIMEOUT_MS = "8000";
+      try {
+        const p = parseCliArgs(["--token", "TOK"]);
+        assert.equal(p.diagnostics, true);
+        assert.equal(p.requestTimeoutMs, 8000);
+      } finally {
+        delete process.env.PERF_DIAGNOSTICS;
+        delete process.env.REQUEST_TIMEOUT_MS;
+      }
     });
   });
 });

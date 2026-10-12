@@ -259,3 +259,38 @@ export function getSnapshotTargetSummary(snapshotPath = DEFAULT_SNAPSHOT_PATH) {
         return null;
     }
 }
+
+/**
+ * Deterministically selects a non-overlapping batch of targets from a snapshot,
+ * excluding previously used wallets.
+ */
+export function selectBatchTargets({
+    snapshotSource = DEFAULT_SNAPSHOT_PATH,
+    batchSize = 250,
+    batchIndex = 0,
+    excludeWallets = [],
+} = {}) {
+    const extracted = extractSnapshotTargets(snapshotSource);
+    const excludeSet = new Set(
+        (Array.isArray(excludeWallets) ? excludeWallets : [])
+            .map((w) => (typeof w === "string" ? w : (w?.owner ?? w?.wallet ?? w?.wallet_address)))
+            .filter(Boolean)
+    );
+
+    const eligible = extracted.targets.filter((owner) => !excludeSet.has(owner));
+    const startIndex = batchIndex * batchSize;
+    const endIndex = startIndex + batchSize;
+    const batchTargets = eligible.slice(startIndex, endIndex);
+
+    return {
+        batchIndex,
+        batchSize,
+        startIndex,
+        endIndex,
+        totalEligible: eligible.length,
+        batchCount: batchTargets.length,
+        targets: batchTargets,
+        snapshotPath: extracted.metadata.snapshotPath,
+        snapshotHash: extracted.metadata.snapshotHash,
+    };
+}

@@ -1,10 +1,14 @@
 import {
+    DEFAULT_FABRIQ_CDP_URL,
+    getFabriqCdpUrl,
     fabriqFetch,
     isFabriqDlmmPool,
     type FabriqFetchOptions,
     type FabriqFetchCooldownCoordinator,
     SharedCooldownCoordinator,
 } from "../discovery/core/fabriq-position-history.ts";
+
+export { DEFAULT_FABRIQ_CDP_URL, getFabriqCdpUrl };
 import {
     loadTransactionCheckpointRecord,
     saveTransactionCheckpointRecord,

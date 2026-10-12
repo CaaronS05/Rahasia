@@ -2,17 +2,47 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
+import {
+  DEFAULT_CDP_PORT,
+  FORBIDDEN_PORT,
+} from "../browser/launch-cloak.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ROOT = path.resolve(__dirname, "../..");
 
-function parseArgs() {
-  const args = process.argv.slice(2);
+export const DEFAULT_FABRIQ_CDP_URL = `http://127.0.0.1:${DEFAULT_CDP_PORT}`;
+
+export function resolveSelectedEnrichCdpUrl(customUrl = null) {
+  const raw =
+    customUrl?.trim() ||
+    process.env.FABRIQ_CDP_URL?.trim() ||
+    process.env.CLOAK_CDP_URL?.trim() ||
+    DEFAULT_FABRIQ_CDP_URL;
+
+  let parsed;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error(`Invalid Fabriq CDP URL: "${raw}"`);
+  }
+
+  const port = Number(parsed.port) || (parsed.protocol === "https:" ? 443 : 80);
+  if (port === FORBIDDEN_PORT) {
+    throw new Error(
+      `Security violation: Refusing to connect to Brave CDP port ${FORBIDDEN_PORT}. Use CloakBrowser on port ${DEFAULT_CDP_PORT}. Silent fallback to Brave is strictly forbidden.`
+    );
+  }
+
+  return raw.replace(/\/+$/, "");
+}
+
+export function parseArgs(args = process.argv.slice(2)) {
   let tokenCA = null;
   let workers = 2;
   let limit = null;
   let refresh = false;
+  let cdpUrl = null;
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -33,6 +63,9 @@ function parseArgs() {
       i++;
     } else if (arg === "--refresh") {
       refresh = true;
+    } else if (arg === "--cdp-url") {
+      cdpUrl = args[i + 1]?.trim() ?? null;
+      i++;
     }
   }
 
@@ -40,7 +73,9 @@ function parseArgs() {
     tokenCA = process.env.TOKEN_CA.trim();
   }
 
-  return { tokenCA, workers, limit, refresh };
+  const resolvedCdpUrl = resolveSelectedEnrichCdpUrl(cdpUrl);
+
+  return { tokenCA, workers, limit, refresh, cdpUrl: resolvedCdpUrl };
 }
 
 async function atomicWriteJson(filePath, data) {
@@ -49,9 +84,8 @@ async function atomicWriteJson(filePath, data) {
   await fs.rename(tmp, filePath);
 }
 
-async function main() {
-  const { tokenCA, workers, limit, refresh } = parseArgs();
-
+export async function main() {
+  const { tokenCA, workers, limit, refresh, cdpUrl } = parseArgs();
   if (!tokenCA) {
     throw new Error("Token CA is required. Use --token <TOKEN_CA>");
   }
@@ -119,6 +153,8 @@ async function main() {
     FABRIQ_OUTPUT: outputPath,
     FABRIQ_CHECKPOINT: checkpointPath,
     FABRIQ_CONCURRENCY: String(workers),
+    FABRIQ_CDP_URL: cdpUrl,
+    CLOAK_CDP_URL: cdpUrl,
   };
   if (limit) {
     env.FABRIQ_LIMIT = String(limit);
@@ -199,7 +235,13 @@ async function main() {
   });
 }
 
-main().catch((err) => {
-  console.error("\n[ENRICH_SELECTED FAILED]", err);
-  process.exit(1);
-});
+const isDirectRun =
+  process.argv[1] &&
+  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+
+if (isDirectRun) {
+  main().catch((err) => {
+    console.error("\n[ENRICH_SELECTED FAILED]", err);
+    process.exit(1);
+  });
+}

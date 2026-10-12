@@ -39,17 +39,22 @@ function isValidSolanaAddress(address: string | undefined | null): boolean {
 }
 function formatHumanErrorSummary(err: string): string {
   if (!err) return "Analysis failed";
-  if (err.includes("CDP_UNREACHABLE") || err.includes("unreachable on port 9222")) {
-    return "Unable to connect to Brave CDP on port 9222.";
+  if (
+    err.includes("CDP_UNREACHABLE") ||
+    err.includes("CloakBrowser is not running") ||
+    err.includes("unreachable at http://127.0.0.1:9223") ||
+    err.includes("unreachable on port 9223")
+  ) {
+    return "Unable to connect to CloakBrowser CDP on port 9223.";
   }
   if (err.includes("CDP_PROTOCOL_TIMEOUT") || err.includes("Timeout 120000ms") || err.includes("connectOverCDP")) {
-    return "Unable to initialize Brave CDP session.";
+    return "Unable to initialize CloakBrowser CDP session.";
   }
-  if (err.includes("FABRIQ_TAB_MISSING")) {
-    return "Fabriq tab not found. Open https://fabriq.trade in Brave.";
+  if (err.includes("FABRIQ_TAB_MISSING") || err.includes("Fabriq tab not found")) {
+    return "Fabriq tab not found. Open https://fabriq.trade in CloakBrowser.";
   }
   if (err.includes("AUTH_SESSION_ERROR")) {
-    return "Fabriq session error. Refresh your session at https://fabriq.trade in Brave.";
+    return "Fabriq session error. Refresh your session at https://fabriq.trade in CloakBrowser.";
   }
   if (err.includes("RATE_LIMITED")) {
     return "Fabriq API rate limit encountered.";

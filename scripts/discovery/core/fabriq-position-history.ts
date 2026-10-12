@@ -4,13 +4,31 @@ import { chromium, type Browser, type Page } from "playwright-core";
 
 export const FABRIQ_API_BASE = "https://apinew.fabriq.trade";
 export const DEFAULT_FABRIQ_CDP_URL = "http://127.0.0.1:9223";
+export const FORBIDDEN_FABRIQ_CDP_PORT = 9222;
 
-export function getFabriqCdpUrl(): string {
-    const configured = process.env.FABRIQ_CDP_URL?.trim() || process.env.CLOAK_CDP_URL?.trim();
-    if (configured) {
-        return configured;
+export function getFabriqCdpUrl(customUrl?: string): string {
+    const configured =
+        customUrl?.trim() ||
+        process.env.FABRIQ_CDP_URL?.trim() ||
+        process.env.CLOAK_CDP_URL?.trim() ||
+        DEFAULT_FABRIQ_CDP_URL;
+
+    try {
+        const parsed = new URL(configured);
+        if (Number(parsed.port) === FORBIDDEN_FABRIQ_CDP_PORT) {
+            throw new FabriqCdpError({
+                code: "CDP_UNREACHABLE",
+                stageNumber: 1,
+                stageName: "CDP HTTP endpoint availability",
+                message: `Security violation: Refusing to connect to Brave CDP port ${FORBIDDEN_FABRIQ_CDP_PORT}. CloakBrowser on port 9223 is required.`,
+                recommendedAction: "Use CloakBrowser on port 9223 ('npm run browser:cloak') and remove any port 9222 override.",
+            });
+        }
+    } catch (err) {
+        if (err instanceof FabriqCdpError) throw err;
     }
-    return DEFAULT_FABRIQ_CDP_URL;
+
+    return configured;
 }
 const MAX_RETRIES = 3;
 const MAX_CDP_RETRIES = 2;
@@ -208,7 +226,7 @@ async function probeWebSocketUrl(wsUrl: string): Promise<void> {
 
 export async function getFabriqPage(log?: (msg: string) => void, customCdpUrl?: string): Promise<Page> {
     const t0 = Date.now();
-    const cdpUrl = customCdpUrl || getFabriqCdpUrl();
+    const cdpUrl = getFabriqCdpUrl(customCdpUrl);
 
     // Reuse existing page if healthy
     if (cdpBrowser && cdpBrowser.isConnected() && fabriqPage && !fabriqPage.isClosed()) {
@@ -962,7 +980,7 @@ export async function fabriqFetch<T>(
         const msg = error instanceof Error ? error.message : String(error ?? "");
         if (
             msg.includes("403 Forbidden") ||
-            msg.includes("No Brave context found") ||
+            msg.includes("No CloakBrowser context found") ||
             msg.includes("No browser context found") ||
             msg.includes("CloakBrowser") ||
             msg.includes("Fabriq tab not found") ||

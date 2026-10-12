@@ -8,8 +8,11 @@ import net from "node:net";
 
 import {
   DEFAULT_CDP_PORT,
+  DEFAULT_CLOAK_CDP_URL,
   FORBIDDEN_PORT,
   DEFAULT_PROFILE_DIR,
+  resolveCloakCdpUrl,
+  parseLauncherCliArgs,
   acquireProfileLock,
   releaseProfileLock,
   isPortInUse,
@@ -17,6 +20,11 @@ import {
   checkCdpEndpoint,
   launchCloakBrowser,
 } from "../../scripts/browser/launch-cloak.mjs";
+import {
+  DEFAULT_LPAGENT_CDP_URL,
+  getLpAgentCdpUrl,
+  connectLpAgentBrowser,
+} from "../../scripts/lpagent/scrape-smart-lp.mjs";
 
 interface CodedError extends Error {
   code?: string;
@@ -303,6 +311,93 @@ describe("CloakBrowser Persistent Launcher Test Suite", () => {
         assert.equal(contextClosed, true);
       } finally {
         await fs.rm(tempDir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  describe("7. CloakBrowser URL Resolver & LP Agent Scraper CDP Integration", () => {
+    it("resolveCloakCdpUrl defaults to 127.0.0.1:9223 and rejects Brave port 9222", () => {
+      const prevCloak = process.env.CLOAK_CDP_URL;
+      const prevFabriq = process.env.FABRIQ_CDP_URL;
+      const prevLp = process.env.LPAGENT_CDP_URL;
+      const prevPort = process.env.CLOAK_CDP_PORT;
+      try {
+        delete process.env.CLOAK_CDP_URL;
+        delete process.env.FABRIQ_CDP_URL;
+        delete process.env.LPAGENT_CDP_URL;
+        delete process.env.CLOAK_CDP_PORT;
+
+        assert.equal(DEFAULT_CLOAK_CDP_URL, "http://127.0.0.1:9223");
+        assert.equal(resolveCloakCdpUrl(), "http://127.0.0.1:9223");
+        assert.equal(resolveCloakCdpUrl("http://127.0.0.1:9229/"), "http://127.0.0.1:9229");
+
+        assert.throws(
+          () => resolveCloakCdpUrl("http://127.0.0.1:9222"),
+          /Security violation: Refusing to connect to Brave CDP port 9222/
+        );
+      } finally {
+        if (prevCloak !== undefined) process.env.CLOAK_CDP_URL = prevCloak;
+        if (prevFabriq !== undefined) process.env.FABRIQ_CDP_URL = prevFabriq;
+        if (prevLp !== undefined) process.env.LPAGENT_CDP_URL = prevLp;
+        if (prevPort !== undefined) process.env.CLOAK_CDP_PORT = prevPort;
+      }
+    });
+
+    it("parseLauncherCliArgs parses --port, --profile, and --headless", () => {
+      const parsed = parseLauncherCliArgs(["--port", "9228", "--profile", "/tmp/custom-cloak", "--headless"]);
+      assert.equal(parsed.port, 9228);
+      assert.equal(parsed.userDataDir, "/tmp/custom-cloak");
+      assert.equal(parsed.headless, true);
+    });
+
+    it("LP Agent scraper defaults to CloakBrowser 9223, supports overrides, and refuses Brave 9222", async () => {
+      const prevLp = process.env.LPAGENT_CDP_URL;
+      const prevCloak = process.env.CLOAK_CDP_URL;
+      try {
+        delete process.env.LPAGENT_CDP_URL;
+        delete process.env.CLOAK_CDP_URL;
+
+        assert.equal(DEFAULT_LPAGENT_CDP_URL, "http://127.0.0.1:9223");
+        assert.equal(getLpAgentCdpUrl(), "http://127.0.0.1:9223");
+
+        process.env.LPAGENT_CDP_URL = "http://127.0.0.1:9227";
+        assert.equal(getLpAgentCdpUrl(), "http://127.0.0.1:9227");
+
+        assert.throws(
+          () => getLpAgentCdpUrl("http://127.0.0.1:9222"),
+          /Security violation: Refusing to connect to Brave CDP port 9222/
+        );
+
+        delete process.env.LPAGENT_CDP_URL;
+
+        await assert.rejects(
+          async () => {
+            await connectLpAgentBrowser({
+              checkEndpointFn: async () => null,
+            });
+          },
+          /CloakBrowser is not running at http:\/\/127\.0\.0\.1:9223/
+        );
+
+        const userTab = { url: () => "https://solscan.io", isClosed: () => false };
+        const lpTab = { url: () => "https://app.lpagent.io/smart-lp", isClosed: () => false };
+        const mockBrowser = {
+          contexts: () => [{ pages: () => [userTab, lpTab] }],
+        };
+        const conn = await connectLpAgentBrowser({
+          checkEndpointFn: async () => ({ Browser: "CloakBrowser" }),
+          chromiumClient: {
+            connectOverCDP: async () => mockBrowser,
+          } as unknown as Parameters<typeof connectLpAgentBrowser>[0]["chromiumClient"],
+        });
+        assert.equal(conn.cdpUrl, "http://127.0.0.1:9223");
+        assert.equal(conn.page.url(), "https://app.lpagent.io/smart-lp");
+        assert.equal(userTab.isClosed(), false);
+      } finally {
+        if (prevLp !== undefined) process.env.LPAGENT_CDP_URL = prevLp;
+        else delete process.env.LPAGENT_CDP_URL;
+        if (prevCloak !== undefined) process.env.CLOAK_CDP_URL = prevCloak;
+        else delete process.env.CLOAK_CDP_URL;
       }
     });
   });

@@ -1528,7 +1528,7 @@ export function WalletDataControlPanel({
                   <div className="warning-callout">
                     <AlertTriangle size={14} />
                     <span>
-                      Before updating: Open LP Agent in Brave and make sure the desired Solana filter/table is already active.
+                      Before updating: Open LP Agent in CloakBrowser and make sure the desired Solana filter/table is already active.
                     </span>
                   </div>
 

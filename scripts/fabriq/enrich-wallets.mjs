@@ -1,11 +1,14 @@
 import fs from "node:fs/promises";
 import { chromium } from "playwright-core";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
     getOrFreezeSnapshotTargets,
     extractSnapshotTargets,
 } from "./snapshot-targets.mjs";
-
+import {
+    FORBIDDEN_PORT,
+} from "../browser/launch-cloak.mjs";
 // ======================================================
 // CONFIG
 // ======================================================
@@ -59,6 +62,25 @@ const IS_RESUME =
 
 export const DEFAULT_FABRIQ_CDP_URL = "http://127.0.0.1:9223";
 
+export function getEnrichCdpUrl(customUrl = null) {
+    const raw =
+        customUrl?.trim() ||
+        process.env.FABRIQ_CDP_URL?.trim() ||
+        process.env.CLOAK_CDP_URL?.trim() ||
+        DEFAULT_FABRIQ_CDP_URL;
+    try {
+        const parsed = new URL(raw);
+        if (Number(parsed.port) === FORBIDDEN_PORT) {
+            throw new Error(
+                `Security violation: Refusing to connect to Brave CDP port ${FORBIDDEN_PORT}. Use CloakBrowser on port 9223. Silent fallback to Brave is strictly forbidden.`
+            );
+        }
+    } catch (err) {
+        if (err.message?.includes("Security violation")) throw err;
+    }
+    return raw;
+}
+
 const CDP_URL =
     process.env.FABRIQ_CDP_URL?.trim() ||
     process.env.CLOAK_CDP_URL?.trim() ||
@@ -99,7 +121,11 @@ const MIN_IN_FLIGHT =
 
 const MAX_RETRIES = 3;
 const STALE_AFTER_HOURS = 24;
-const RETRY_404_DELAY_MS = 5000;
+export const MAX_404_RETRIES = 3;
+export const RETRY_404_DELAY_MS =
+    process.env.FABRIQ_RETRY_404_DELAY_MS !== undefined
+        ? Math.max(0, parseInt(process.env.FABRIQ_RETRY_404_DELAY_MS, 10) || 0)
+        : 5000;
 const REFRESH_BEFORE =
     process.env.FABRIQ_REFRESH_BEFORE
         ? Date.parse(
@@ -136,6 +162,10 @@ const metrics = {
     totalRequests: 0,
     activeRequests: 0,
     peakActiveRequests: 0,
+    activeWorkers: 0,
+    peakActiveWorkers: 0,
+    networkRequestsInFlight: 0,
+    peakNetworkRequests: 0,
     statsLatencies: [],
     calendarLatencies: [],
     allLatencies: [],
@@ -171,12 +201,14 @@ class RequestScheduler {
         minIntervalMs = 20,
     } = {}) {
         this.maxInFlight = maxInFlight;
-        this.minInFlight = minInFlight;
+        this.minInFlight = Math.min(minInFlight, maxInFlight);
         this.currentLimit = Math.min(
-            maxInFlight,
-            Math.max(minInFlight, initialInFlight)
+            this.maxInFlight,
+            Math.max(this.minInFlight, initialInFlight)
         );
         this.activeInFlight = 0;
+        this.peakInFlight = 0;
+        this.peakQueueLength = 0;
         this.minIntervalMs = minIntervalMs;
         this.lastDispatchTime = 0;
         this.queue = [];
@@ -188,6 +220,9 @@ class RequestScheduler {
     acquire() {
         return new Promise((resolve) => {
             this.queue.push(resolve);
+            if (this.queue.length > this.peakQueueLength) {
+                this.peakQueueLength = this.queue.length;
+            }
             this.pump();
         });
     }
@@ -213,7 +248,7 @@ class RequestScheduler {
         this.consecutiveSuccesses = 0;
         this.currentLimit = Math.max(
             this.minInFlight,
-            Math.floor(this.currentLimit * 0.7)
+            Math.min(this.maxInFlight, Math.floor(this.currentLimit * 0.7))
         );
         this.pausedUntil =
             Date.now() + (retryAfterSeconds * 1000);
@@ -261,6 +296,9 @@ class RequestScheduler {
             }
 
             this.activeInFlight++;
+            if (this.activeInFlight > this.peakInFlight) {
+                this.peakInFlight = this.activeInFlight;
+            }
             this.lastDispatchTime = Date.now();
             const resolve = this.queue.shift();
             resolve();
@@ -494,7 +532,7 @@ function decodeJwtExpiry(token) {
 let checkpointWriteQueue =
     Promise.resolve();
 
-async function saveCheckpoint(row) {
+export async function saveCheckpoint(row, checkpointPath = CHECKPOINT) {
     const t0 = performance.now();
     const line =
         JSON.stringify(row) + "\n";
@@ -503,7 +541,7 @@ async function saveCheckpoint(row) {
         checkpointWriteQueue.then(
             () =>
                 fs.appendFile(
-                    CHECKPOINT,
+                    checkpointPath,
                     line
                 )
         );
@@ -512,12 +550,12 @@ async function saveCheckpoint(row) {
     metrics.checkpointWriteTimeMs += performance.now() - t0;
 }
 
-async function loadCheckpoint(targetWallets = null) {
+export async function loadCheckpoint(targetWallets = null, checkpointPath = CHECKPOINT) {
     const map = new Map();
 
     try {
         const text = await fs.readFile(
-            CHECKPOINT,
+            path.resolve(checkpointPath),
             "utf8"
         );
 
@@ -643,47 +681,31 @@ async function loadCheckpoint(targetWallets = null) {
 // CONNECT TO CLOAKBROWSER
 // ======================================================
 
-console.log(`[BOOT] Connecting to CloakBrowser at ${CDP_URL}...`);
+let browser = null;
+let context = null;
+let page = null;
+let token = null;
+let tokenExpiresAt = 0;
+let tokenRefreshPromise = null;
 
-const browser = await chromium.connectOverCDP(
-    CDP_URL,
-    {
-        timeout: 120_000,
-    }
-);
-
-const context = browser.contexts()[0];
-
-if (!context) {
-    throw new Error(
-        "No browser context found. Start CloakBrowser with remote debugging."
-    );
+export function setFabriqTokenForTesting(testToken, expiresAt = Date.now() + 60_000) {
+    token = testToken;
+    tokenExpiresAt = expiresAt;
 }
 
-const page =
-    context.pages().find((p) =>
-        p.url().includes("fabriq.trade")
-    ) ?? null;
-
-if (!page) {
-    throw new Error(
-        "Fabriq tab not found. Open https://fabriq.trade in CloakBrowser first."
-    );
+export function resetFabriqAuthForTesting() {
+    token = null;
+    tokenExpiresAt = 0;
+    tokenRefreshPromise = null;
+    browser = null;
+    context = null;
+    page = null;
 }
-
-console.log(
-    `[BOOT] Fabriq page: ${page.url()}`
-);
 
 // ======================================================
 // AUTH
 // ======================================================
 
-let token = null;
-let tokenExpiresAt = 0;
-
-let tokenRefreshPromise =
-    null;
 
 async function refreshTokenFromBrowser() {
     const t0 = performance.now();
@@ -807,47 +829,65 @@ async function getToken(
 // FABRIQ API
 // ======================================================
 
-async function fabriqFetch(
+export async function fabriqFetch(
     url,
-    initialAttempt = 1
+    initialAttempt = 1,
+    initialAttempt404 = 0,
+    options = {}
 ) {
     let attempt = initialAttempt;
+    let attempt404 = initialAttempt404;
     const isStats = url.includes("/portfolio/stats/");
+    const max404Retries = options.max404Retries ?? MAX_404_RETRIES;
+    const retry404DelayMs = options.retry404DelayMs ?? RETRY_404_DELAY_MS;
+    const fetchFn = options.fetchFn ?? fetch;
+    const getTokenFn = options.getTokenFn ?? getToken;
+    const sleepFn = options.sleepFn ?? sleep;
+    const activeScheduler = options.scheduler ?? scheduler;
+    const activeMetrics = options.metrics ?? metrics;
 
     while (true) {
         let slotHeld = false;
-        await scheduler.acquire();
+        await activeScheduler.acquire();
         slotHeld = true;
         const releaseSlot = () => {
             if (slotHeld) {
                 slotHeld = false;
-                scheduler.release();
+                activeScheduler.release();
             }
         };
 
-        metrics.totalRequests++;
-        metrics.activeRequests++;
-        if (metrics.activeRequests > metrics.peakActiveRequests) {
-            metrics.peakActiveRequests = metrics.activeRequests;
+        activeMetrics.totalRequests++;
+        activeMetrics.activeRequests++;
+        if (activeMetrics.activeRequests > activeMetrics.peakActiveRequests) {
+            activeMetrics.peakActiveRequests = activeMetrics.activeRequests;
         }
         const reqT0 = performance.now();
 
         try {
-            const jwt = await getToken();
-
-            const response = await fetch(url, {
-                headers: {
-                    Authorization: `Bearer ${jwt}`,
-                    Accept: "application/json",
-                },
-            });
+            const jwt = await getTokenFn();
+            activeMetrics.networkRequestsInFlight++;
+            if (activeMetrics.networkRequestsInFlight > activeMetrics.peakNetworkRequests) {
+                activeMetrics.peakNetworkRequests = activeMetrics.networkRequestsInFlight;
+            }
+            let response;
+            try {
+                response = await fetchFn(url, {
+                    headers: {
+                        Authorization: `Bearer ${jwt}`,
+                        Accept: "application/json",
+                    },
+                });
+            } finally {
+                activeMetrics.networkRequestsInFlight--;
+            }
 
             const reqDur = performance.now() - reqT0;
-            metrics.allLatencies.push(reqDur);
+            activeMetrics.allLatencies.push(reqDur);
             if (isStats) {
-                metrics.statsLatencies.push(reqDur);
+                activeMetrics.statsLatencies.push(reqDur);
             } else {
-                metrics.calendarLatencies.push(reqDur);
+                activeMetrics.calendarLatencies.push(reqDur);
             }
 
             // --------------------------------
@@ -866,7 +906,7 @@ async function fabriqFetch(
                     "[AUTH] 401 → refreshing JWT"
                 );
 
-                await getToken(true);
+                await getTokenFn(true);
 
                 attempt++;
                 continue;
@@ -877,15 +917,15 @@ async function fabriqFetch(
             // --------------------------------
 
             if (response.status === 429) {
-                metrics.http429Count++;
+                activeMetrics.http429Count++;
                 const retryAfter =
                     Number(
-                        response.headers.get(
+                        response.headers?.get?.(
                             "retry-after"
                         )
                     ) || 5;
 
-                scheduler.onRateLimit(retryAfter);
+                activeScheduler.onRateLimit(retryAfter);
                 releaseSlot();
 
                 if (attempt >= MAX_RETRIES) {
@@ -898,8 +938,8 @@ async function fabriqFetch(
                     `[RATE LIMIT] waiting ${retryAfter}s`
                 );
 
-                metrics.retryWaitTimeMs += retryAfter * 1000;
-                await sleep(
+                activeMetrics.retryWaitTimeMs += retryAfter * 1000;
+                await sleepFn(
                     retryAfter * 1000
                 );
 
@@ -912,7 +952,7 @@ async function fabriqFetch(
             // --------------------------------
 
             if (response.status === 403) {
-                metrics.http403Count++;
+                activeMetrics.http403Count++;
                 releaseSlot();
                 throw new Error(
                     "403 Forbidden. Check the existing Fabriq browser session."
@@ -924,18 +964,25 @@ async function fabriqFetch(
             // --------------------------------
 
             if (response.status === 404) {
-                metrics.http404Count++;
+                activeMetrics.http404Count++;
                 releaseSlot();
+                if (attempt404 >= max404Retries) {
+                    throw new Error(
+                        "404 Not Found after retries"
+                    );
+                }
+
+                const delay = retry404DelayMs;
                 console.log(
-                    "[WAIT] 404 Not Found — wallet data not ready, retrying in 5000ms"
+                    `[WAIT] 404 Not Found — wallet data not ready, retrying in ${delay}ms (retry ${attempt404 + 1}/${max404Retries})`
                 );
 
-                metrics.retryWaitTimeMs += RETRY_404_DELAY_MS;
-                await sleep(
-                    RETRY_404_DELAY_MS
+                activeMetrics.retryWaitTimeMs += delay;
+                await sleepFn(
+                    delay
                 );
 
-                attempt = 1;
+                attempt404++;
                 continue;
             }
 
@@ -944,8 +991,8 @@ async function fabriqFetch(
             // --------------------------------
 
             if (response.status >= 500) {
-                metrics.http5xxCount++;
-                scheduler.onServerError();
+                activeMetrics.http5xxCount++;
+                activeScheduler.onServerError();
                 releaseSlot();
                 if (attempt >= MAX_RETRIES) {
                     throw new Error(
@@ -960,8 +1007,8 @@ async function fabriqFetch(
                     `[RETRY] server ${response.status}, waiting ${delay}ms`
                 );
 
-                metrics.retryWaitTimeMs += delay;
-                await sleep(delay);
+                activeMetrics.retryWaitTimeMs += delay;
+                await sleepFn(delay);
 
                 attempt++;
                 continue;
@@ -975,7 +1022,7 @@ async function fabriqFetch(
             }
 
             const data = await response.json();
-            scheduler.onSuccess(reqDur);
+            activeScheduler.onSuccess(reqDur);
             releaseSlot();
             return data;
         } catch (error) {
@@ -992,11 +1039,14 @@ async function fabriqFetch(
                 !String(error.message).includes(
                     "429 Too Many Requests"
                 ) &&
+                !String(error.message).includes(
+                    "404 Not Found after retries"
+                ) &&
                 !String(error.message).startsWith(
                     "Server error"
                 )
             ) {
-                metrics.networkErrorCount++;
+                activeMetrics.networkErrorCount++;
                 const delay =
                     attempt * 2000;
 
@@ -1004,8 +1054,8 @@ async function fabriqFetch(
                     `[RETRY] ${error.message} → ${delay}ms`
                 );
 
-                metrics.retryWaitTimeMs += delay;
-                await sleep(delay);
+                activeMetrics.retryWaitTimeMs += delay;
+                await sleepFn(delay);
 
                 attempt++;
                 continue;
@@ -1014,7 +1064,7 @@ async function fabriqFetch(
             throw error;
         } finally {
             releaseSlot();
-            metrics.activeRequests--;
+            activeMetrics.activeRequests--;
         }
     }
 }
@@ -1116,9 +1166,176 @@ async function fetchWallet(wallet) {
 }
 
 // ======================================================
+// SCRAPE & WORKER POOL
+// ======================================================
+
+export function isFatalError(error) {
+    const msg = String(error?.message ?? "");
+    return (
+        msg.includes("403 Forbidden") ||
+        msg.includes("429 Too Many Requests") ||
+        msg.includes("401 Unauthorized")
+    );
+}
+
+export async function executeWalletWorkers({
+    wallets,
+    concurrency = CONCURRENCY,
+    fetchWallet,
+    checkpoint,
+    saveCheckpoint = () => {},
+    isFabriqFresh = () => false,
+    hasRequiredCalendars = () => false,
+    delayMs = 0,
+    metrics = { activeWorkers: 0, peakActiveWorkers: 0, walletTimesMs: [] },
+    alreadyDone = 0,
+}) {
+    let fatalError = null;
+    let nextIndex = 0;
+    let success = alreadyDone;
+    let failed = 0;
+    let skipped = 0;
+
+    async function runWorker(workerId) {
+        metrics.activeWorkers = (metrics.activeWorkers || 0) + 1;
+        if (metrics.activeWorkers > (metrics.peakActiveWorkers || 0)) {
+            metrics.peakActiveWorkers = metrics.activeWorkers;
+        }
+        try {
+            while (true) {
+                if (fatalError) {
+                    return;
+                }
+
+                const i = nextIndex++;
+                if (i >= wallets.length) {
+                    return;
+                }
+
+                const wallet = wallets[i];
+                const existing = checkpoint.get(wallet);
+
+                if (
+                    existing?.status === "ok" &&
+                    existing?.fabriq?.stats &&
+                    hasRequiredCalendars(existing) &&
+                    isFabriqFresh(existing)
+                ) {
+                    skipped++;
+                    console.log(
+                        `[W${workerId}] [${i + 1}/${wallets.length}] SKIP ${wallet} (already fresh in checkpoint)`
+                    );
+                    continue;
+                }
+
+                console.log(
+                    `\n[W${workerId}] [${i + 1}/${wallets.length}] ${wallet}`
+                );
+
+                const walletT0 = performance.now();
+                try {
+                    const result = await fetchWallet(wallet);
+                    metrics.walletTimesMs?.push(performance.now() - walletT0);
+
+                    checkpoint.set(wallet, result);
+                    await saveCheckpoint(result);
+                    success++;
+
+                    console.log(
+                        `[W${workerId}] [OK]` +
+                        ` positions=${result.fabriq?.stats?.totalPositions ?? "?"}` +
+                        ` pnlSOL=${result.fabriq?.stats?.netPnlSol?.toFixed?.(4) ?? "?"}` +
+                        ` days=${Object.values(result.fabriq?.calendars ?? {}).reduce(
+                            (total, calendar) =>
+                                total + Object.keys(calendar).length,
+                            0
+                        )}`
+                    );
+                } catch (error) {
+                    failed++;
+                    const failure = {
+                        owner: wallet,
+                        status: "error",
+                        failedAt: new Date().toISOString(),
+                        error: error.message,
+                    };
+
+                    checkpoint.set(wallet, failure);
+                    await saveCheckpoint(failure);
+                    console.error(
+                        `[W${workerId}] [FAIL] ${error.message}`
+                    );
+
+                    if (isFatalError(error)) {
+                        fatalError = error;
+                        console.error(
+                            `[FATAL] Global fail-fast triggered (${error.message}). Stopping new wallet dispatch promptly.`
+                        );
+                        return;
+                    }
+                }
+
+                if (delayMs > 0 && !fatalError) {
+                    await sleep(delayMs);
+                }
+            }
+        } finally {
+            if (metrics.activeWorkers > 0) {
+                metrics.activeWorkers--;
+            }
+        }
+    }
+
+    const workerCount = Math.min(concurrency, wallets.length);
+    await Promise.all(
+        Array.from({ length: workerCount }, (_, index) => runWorker(index + 1))
+    );
+
+    return {
+        success,
+        failed,
+        skipped,
+        fatalError,
+    };
+}
+
+// ======================================================
 // LOAD WALLET TARGET POPULATION
 // ======================================================
 
+export async function run() {
+    const activeCdpUrl = getEnrichCdpUrl();
+    console.log(`[BOOT] Connecting to CloakBrowser at ${activeCdpUrl}...`);
+
+    browser = await chromium.connectOverCDP(
+        activeCdpUrl,
+        {
+            timeout: 120_000,
+        }
+    );
+
+    context = browser.contexts()[0];
+
+    if (!context) {
+        throw new Error(
+            "No browser context found. Start CloakBrowser with remote debugging."
+        );
+    }
+
+    page =
+        context.pages().find((p) =>
+            p.url().includes("fabriq.trade")
+        ) ?? null;
+
+    if (!page) {
+        throw new Error(
+            "Fabriq tab not found. Open https://fabriq.trade in CloakBrowser first."
+        );
+    }
+
+    console.log(
+        `[BOOT] Fabriq page: ${page.url()}`
+    );
 let allWallets = [];
 let lpAgentCount = 0;
 let poolScannerCount = 0;
@@ -1172,19 +1389,24 @@ if (IS_SNAPSHOT_MODE) {
 
 let stateByOwner = new Map();
 
-const canonicalFabriqPath = path.resolve("data/master/wallets-fabriq.json");
-try {
-    const canonText = await fs.readFile(canonicalFabriqPath, "utf8");
-    const canonJson = JSON.parse(canonText);
-    const canonRows = extractWalletRows(canonJson);
-    for (const r of canonRows) {
-        const owner = getWalletOwner(r);
-        if (owner && r?.fabriq) {
-            stateByOwner.set(owner, r.fabriq);
+const canonicalFabriqPath = process.env.FABRIQ_CANONICAL_DATASET !== undefined
+    ? (process.env.FABRIQ_CANONICAL_DATASET ? path.resolve(process.env.FABRIQ_CANONICAL_DATASET) : null)
+    : (process.env.FABRIQ_STATE_DATASET ? null : path.resolve("data/master/wallets-fabriq.json"));
+
+if (canonicalFabriqPath) {
+    try {
+        const canonText = await fs.readFile(canonicalFabriqPath, "utf8");
+        const canonJson = JSON.parse(canonText);
+        const canonRows = extractWalletRows(canonJson);
+        for (const r of canonRows) {
+            const owner = getWalletOwner(r);
+            if (owner && r?.fabriq) {
+                stateByOwner.set(owner, r.fabriq);
+            }
         }
+    } catch {
+        // Canonical master dataset absent or empty; proceed to row fallbacks
     }
-} catch {
-    // Canonical master dataset absent or empty; proceed to row fallbacks
 }
 
 if (IS_SNAPSHOT_MODE) {
@@ -1274,6 +1496,9 @@ if (LIMIT > 0) {
 console.log(
     `[WORKERS] ${CONCURRENCY}`
 );
+console.log(
+    `[SCHEDULER] maxInFlight=${MAX_IN_FLIGHT} minInFlight=${scheduler.minInFlight} initialLimit=${scheduler.currentLimit} minIntervalMs=${scheduler.minIntervalMs}ms`
+);
 
 if (IS_CUSTOM_RANGE) {
     console.log(
@@ -1313,157 +1538,40 @@ console.log(
 );
 
 // ======================================================
-// SCRAPE
-// ======================================================
 
 let success = alreadyDone;
 let failed = 0;
 let skipped = 0;
 
-const startedAt =
-    Date.now();
+const startedAt = Date.now();
 
-let nextIndex = 0;
+const {
+    success: finalSuccess,
+    failed: finalFailed,
+    skipped: finalSkipped,
+    fatalError,
+} = await executeWalletWorkers({
+    wallets,
+    concurrency: CONCURRENCY,
+    fetchWallet,
+    checkpoint,
+    saveCheckpoint,
+    isFabriqFresh,
+    hasRequiredCalendars,
+    delayMs: DELAY_MS,
+    metrics,
+    alreadyDone,
+});
 
-async function runWorker(
-    workerId
-) {
-    while (true) {
-        const i =
-            nextIndex++;
+success = finalSuccess;
+failed = finalFailed;
+skipped = finalSkipped;
 
-        if (
-            i >= wallets.length
-        ) {
-            return;
-        }
-
-        const wallet =
-            wallets[i];
-
-        const existing =
-            checkpoint.get(
-                wallet
-            );
-
-        if (
-            existing?.status ===
-            "ok" &&
-            existing?.fabriq?.stats &&
-            hasRequiredCalendars(
-                existing
-            ) &&
-            isFabriqFresh(
-                existing
-            )
-        ) {
-            skipped++;
-
-            console.log(
-                `[W${workerId}] [${i + 1}/${wallets.length}] SKIP ${wallet}`
-            );
-
-            continue;
-        }
-
-        console.log(
-            `\n[W${workerId}] [${i + 1}/${wallets.length}] ${wallet}`
-        );
-
-        const walletT0 = performance.now();
-        try {
-            const result =
-                await fetchWallet(
-                    wallet
-                );
-            metrics.walletTimesMs.push(performance.now() - walletT0);
-
-            checkpoint.set(
-                wallet,
-                result
-            );
-
-            await saveCheckpoint(
-                result
-            );
-
-            success++;
-
-            console.log(
-                `[W${workerId}] [OK]` +
-                ` positions=${result.fabriq.stats.totalPositions ?? "?"}` +
-                ` pnlSOL=${result.fabriq.stats.netPnlSol?.toFixed?.(4) ?? "?"}` +
-                ` days=${Object.values(
-                    result.fabriq.calendars
-                ).reduce(
-                    (
-                        total,
-                        calendar
-                    ) =>
-                        total +
-                        Object.keys(
-                            calendar
-                        ).length,
-                    0
-                )}`
-            );
-        } catch (error) {
-            failed++;
-
-            const failure = {
-                owner:
-                    wallet,
-
-                status:
-                    "error",
-
-                failedAt:
-                    new Date()
-                        .toISOString(),
-
-                error:
-                    error.message,
-            };
-
-            checkpoint.set(
-                wallet,
-                failure
-            );
-
-            await saveCheckpoint(
-                failure
-            );
-
-            console.error(
-                `[W${workerId}] [FAIL] ${error.message}`
-            );
-        }
-
-        if (DELAY_MS > 0) {
-            await sleep(DELAY_MS);
-        }
-    }
-}
-
-const workerCount =
-    Math.min(
-        CONCURRENCY,
-        wallets.length
+if (fatalError) {
+    console.error(
+        `\n[FATAL] Enrichment terminated early due to: ${fatalError.message}`
     );
-
-await Promise.all(
-    Array.from(
-        {
-            length:
-                workerCount,
-        },
-        (_, index) =>
-            runWorker(
-                index + 1
-            )
-    )
-);
-
+}
 // ======================================================
 // BUILD FINAL OUTPUT
 // ======================================================
@@ -1579,6 +1687,11 @@ console.log(`Wallets Completed: ${successfulResults.length} / ${wallets.length}`
 console.log(`Throughput       : ${walletsPerMin.toFixed(2)} wallets/min`);
 console.log(`Avg Wallet Time  : ${average(metrics.walletTimesMs).toFixed(0)} ms`);
 console.log(`Total Requests   : ${metrics.totalRequests}`);
+console.log(`Worker Concurrency: configured=${CONCURRENCY} peak=${metrics.peakActiveWorkers}`);
+console.log(`Scheduler Limits : limit=${scheduler.currentLimit} max=${MAX_IN_FLIGHT} min=${scheduler.minInFlight}`);
+console.log(`Scheduler Queue  : peakQueued=${scheduler.peakQueueLength}`);
+console.log(`Scheduler Permits: peakInFlight=${scheduler.peakInFlight}`);
+console.log(`Network In-Flight: peakActive=${metrics.peakNetworkRequests}`);
 console.log(`Peak In-Flight   : ${metrics.peakActiveRequests}`);
 console.log(`Req Latency (all): mean=${average(metrics.allLatencies).toFixed(0)}ms p50=${percentile(metrics.allLatencies, 50).toFixed(0)}ms p95=${percentile(metrics.allLatencies, 95).toFixed(0)}ms`);
 console.log(`Stats Latency    : mean=${average(metrics.statsLatencies).toFixed(0)}ms p50=${percentile(metrics.statsLatencies, 50).toFixed(0)}ms p95=${percentile(metrics.statsLatencies, 95).toFixed(0)}ms`);
@@ -1591,7 +1704,31 @@ console.log(`Retry/Wait Time  : ${(metrics.retryWaitTimeMs / 1000).toFixed(2)}s`
 console.log(`Checkpoint Time  : ${(metrics.checkpointWriteTimeMs / 1000).toFixed(2)}s`);
 console.log(`JWT Refresh Time : ${(metrics.jwtRefreshTimeMs / 1000).toFixed(2)}s (${metrics.jwtRefreshCount} refreshes)`);
 console.log("========================================");
-process.exit(failures.length > 0 ? 1 : 0);
+    return {
+        success: successfulResults.length,
+        failed: failures.length,
+        skipped,
+        totalWallets: allWallets.length,
+        aborted: Boolean(fatalError),
+        fatalError: fatalError ? fatalError.message : null,
+        output,
+    };
+}
+
+const isDirectRun =
+    process.argv[1] &&
+    path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+
+if (isDirectRun) {
+    run()
+        .then((res) => {
+            process.exit(res.failed > 0 ? 1 : 0);
+        })
+        .catch((err) => {
+            console.error(err);
+            process.exit(1);
+        });
+}
 
 // IMPORTANT:
 // jangan browser.close()

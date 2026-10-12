@@ -3,12 +3,82 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 import { chromium } from "playwright-core";
+import {
+    DEFAULT_CDP_PORT,
+    FORBIDDEN_PORT,
+    checkCdpEndpoint,
+} from "../browser/launch-cloak.mjs";
 
 // ======================================================
 // CONFIG
 // ======================================================
 
-const CDP_URL = "http://127.0.0.1:9222";
+export const DEFAULT_LPAGENT_CDP_URL = `http://127.0.0.1:${DEFAULT_CDP_PORT}`;
+
+export function getLpAgentCdpUrl(customUrl = null) {
+    const raw =
+        customUrl?.trim() ||
+        process.env.LPAGENT_CDP_URL?.trim() ||
+        process.env.CLOAK_CDP_URL?.trim() ||
+        DEFAULT_LPAGENT_CDP_URL;
+
+    let parsed;
+    try {
+        parsed = new URL(raw);
+    } catch {
+        throw new Error(`Invalid LP Agent CDP URL: "${raw}"`);
+    }
+
+    const port = Number(parsed.port) || (parsed.protocol === "https:" ? 443 : 80);
+    if (port === FORBIDDEN_PORT) {
+        throw new Error(
+            `Security violation: Refusing to connect to Brave CDP port ${FORBIDDEN_PORT}. Use CloakBrowser on port ${DEFAULT_CDP_PORT}. Silent fallback to Brave is strictly forbidden.`
+        );
+    }
+
+    return raw.replace(/\/+$/, "");
+}
+
+export async function connectLpAgentBrowser({
+    cdpUrl = null,
+    chromiumClient = chromium,
+    checkEndpointFn = checkCdpEndpoint,
+} = {}) {
+    const targetUrl = getLpAgentCdpUrl(cdpUrl);
+    const parsed = new URL(targetUrl);
+    const port = Number(parsed.port) || (parsed.protocol === "https:" ? 443 : 80);
+    const host = parsed.hostname || "127.0.0.1";
+
+    const isReady = await checkEndpointFn(port, host, 2500);
+    if (!isReady) {
+        throw new Error(
+            `CloakBrowser is not running at ${targetUrl}. Start it first with 'npm run browser:cloak'. Silent fallback to Brave is strictly forbidden.`
+        );
+    }
+
+    console.log(`[BOOT] Connecting to CloakBrowser at ${targetUrl}...`);
+    const browser = await chromiumClient.connectOverCDP(targetUrl);
+    const context = browser.contexts()[0];
+
+    if (!context) {
+        throw new Error(
+            "No CloakBrowser context found. Start CloakBrowser with 'npm run browser:cloak'."
+        );
+    }
+
+    const page = context
+        .pages()
+        .find((p) => (typeof p.isClosed === "function" ? !p.isClosed() : true) && p.url().includes("lpagent"));
+
+    if (!page) {
+        throw new Error(
+            "LP Agent tab not found. Open https://app.lpagent.io in CloakBrowser first."
+        );
+    }
+
+    return { browser, context, page, cdpUrl: targetUrl };
+}
+
 const API_MATCH = "/api/v1/smart-lp";
 
 function resolvePath(envVar, defaultRelativeUrl) {
@@ -525,7 +595,7 @@ async function fetchPageWithRetry(
             throw new Error(
                 `${status} Auth/session error. ` +
                 `Checkpoint sudah aman. ` +
-                `Siapkan LP Agent di Brave lalu jalankan ulang script.`
+                `Siapkan LP Agent di CloakBrowser lalu jalankan ulang script.`
             );
         }
 
@@ -679,47 +749,16 @@ async function fetchPageWithRetry(
 }
 
 // ======================================================
-// CONNECT BRAVE
+// CONNECT CLOAKBROWSER
 // ======================================================
 
-console.log(
-    "[BOOT] Connecting to Brave..."
-);
-
-const browser =
-    await chromium.connectOverCDP(
-        CDP_URL
-    );
-
-const context =
-    browser.contexts()[0];
-
-if (!context) {
-    throw new Error(
-        "No Brave context found."
-    );
-}
-
-const page =
-    context
-        .pages()
-        .find((p) =>
-            p.url().includes(
-                "lpagent"
-            )
-        );
-
-if (!page) {
-    throw new Error(
-        "LP Agent tab not found."
-    );
-}
+export async function run() {
+const { browser, context, page } = await connectLpAgentBrowser();
 
 console.log(
     "[1] LP Agent page:",
     page.url()
 );
-
 console.log(`
 ========================================
 BEFORE RUNNING
@@ -1434,4 +1473,20 @@ Checkpoint:
 cleared after successful scrape
 `);
 
-process.exit(0);
+    return output;
+}
+
+const isDirectRun =
+    process.argv[1] &&
+    path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+
+if (isDirectRun) {
+    run()
+        .then(() => {
+            process.exit(0);
+        })
+        .catch((err) => {
+            console.error(err);
+            process.exit(1);
+        });
+}

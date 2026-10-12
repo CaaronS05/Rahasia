@@ -15,7 +15,8 @@ import {
   resetFabriqAuthForTesting,
   FabriqCdpError,
 } from "../../scripts/discovery/core/fabriq-position-history.ts";
-
+import { getEnrichCdpUrl } from "../../scripts/fabriq/enrich-wallets.mjs";
+import { resolveSelectedEnrichCdpUrl } from "../../scripts/pool/enrich-selected-wallets.mjs";
 interface MockTabOptions {
   url?: string;
   authStatus?: number;
@@ -357,6 +358,19 @@ describe("Fabriq CloakBrowser Integration Suite", () => {
     delete process.env.FABRIQ_CDP_URL;
     process.env.CLOAK_CDP_URL = "http://127.0.0.1:9226";
     assert.equal(getFabriqCdpUrl(), "http://127.0.0.1:9226");
+
+    assert.throws(
+      () => getFabriqCdpUrl("http://127.0.0.1:9222"),
+      /Security violation: Refusing to connect to Brave CDP port 9222/
+    );
+    assert.throws(
+      () => getEnrichCdpUrl("http://127.0.0.1:9222"),
+      /Security violation: Refusing to connect to Brave CDP port 9222/
+    );
+    assert.throws(
+      () => resolveSelectedEnrichCdpUrl("http://127.0.0.1:9222"),
+      /Security violation: Refusing to connect to Brave CDP port 9222/
+    );
   });
 
   // ---------------------------------------------------------------------------
