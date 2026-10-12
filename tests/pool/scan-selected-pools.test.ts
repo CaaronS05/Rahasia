@@ -1,0 +1,1025 @@
+import { describe, it, beforeEach, afterEach } from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import path from "node:path";
+import os from "node:os";
+import EventEmitter from "node:events";
+
+import {
+  scanSelectedPools,
+  parseCliArgs,
+  validateAndReconcileCheckpoints,
+  connectToBrowser,
+  CheckpointWriter,
+  computeSelectionFingerprint,
+} from "../../scripts/pool/scan-selected-pools.mjs";
+import { RateLimiter } from "../../scripts/bench/rate-limiter.mjs";
+
+const TEST_TOKEN = "TEST_TOKEN_MINT_111111111111111111111111111";
+const POOL_A = "PoolAddressA11111111111111111111111111111111";
+const POOL_B = "PoolAddressB22222222222222222222222222222222";
+const POOL_C = "PoolAddressC33333333333333333333333333333333";
+const POOL_D = "PoolAddressD44444444444444444444444444444444";
+
+interface TopLperRow {
+  owner?: string;
+  wallet?: string;
+  total_pnl?: number | string;
+  win_rate?: number | string;
+  total_lp?: number | string;
+}
+
+interface DiscoveredPoolItem {
+  poolAddress: string;
+  pair: string;
+  binStep?: number;
+  baseFeePct?: number;
+}
+
+interface PoolWalletsRecord {
+  poolAddress: string;
+  status: string;
+  wallets: Array<{ wallet: string; pnlUsd?: number | null; winRate?: number | null; positions?: number | null }>;
+}
+
+interface PoolWalletsJson {
+  version: string;
+  tokenMint: string;
+  updatedAt?: string;
+  pools: PoolWalletsRecord[];
+}
+
+interface ScanStateJson {
+  version: string;
+  tokenMint: string;
+  selectionFingerprint: string;
+  status: string;
+  selectedPoolCount: number;
+  completedPoolCount: number;
+  completedPoolAddresses: string[];
+  error?: string;
+}
+
+function createMockDiscoveryResult(pools: DiscoveredPoolItem[]) {
+  return async () => ({
+    tokenMint: TEST_TOKEN,
+    solMint: "So11111111111111111111111111111111111111112",
+    usdcMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+    pairRule: "TOKEN_SOL_OR_USDC_EXACT",
+    discoveredAt: new Date().toISOString(),
+    poolCount: pools.length,
+    pools: pools.map((p) => ({
+      poolAddress: p.poolAddress,
+      pair: p.pair,
+      binStep: p.binStep ?? 20,
+      baseFeePct: p.baseFeePct ?? 0.25,
+      tokenX: TEST_TOKEN,
+      tokenY: "So11111111111111111111111111111111111111112",
+    })),
+  });
+}
+
+interface MockPageOptions {
+  id?: string;
+  browser?: MockBrowser;
+  dataMap?: Record<string, Record<number, TopLperRow[]>>;
+  statusOverrides?: Record<string, { status: number; retryAfter?: number; text?: string }>;
+  onGoto?: (url: string, pageId: string) => void;
+  onRequest?: (poolAddress: string, pageNumber: number, pageId: string) => void;
+}
+
+class MockPage {
+  id: string;
+  _url = "about:blank";
+  _closed = false;
+  options: MockPageOptions;
+
+  constructor(options: MockPageOptions = {}) {
+    this.id = options.id || `tab-${Math.random().toString(36).slice(2, 6)}`;
+    this.options = options;
+  }
+
+  url(): string {
+    return this._url;
+  }
+
+  isClosed(): boolean {
+    return this._closed;
+  }
+
+  async close(): Promise<void> {
+    this._closed = true;
+  }
+
+  async goto(url: string): Promise<void> {
+    if (this._closed) throw new Error("Target page closed");
+    if (this.options.browser && !this.options.browser.isConnected()) {
+      throw new Error("Target page closed due to browser disconnect");
+    }
+    this._url = url;
+    this.options.onGoto?.(url, this.id);
+  }
+
+  async evaluate(
+    _fn: unknown,
+    args: { poolAddress: string; pageNumber: number }
+  ): Promise<{
+    ok: boolean;
+    status: number;
+    retryAfterSec: number | null;
+    text: string;
+  }> {
+    if (this._closed) throw new Error("Target page closed");
+    if (this.options.browser && !this.options.browser.isConnected()) {
+      throw new Error("Target page closed due to browser disconnect");
+    }
+
+    const { poolAddress, pageNumber } = args;
+    this.options.onRequest?.(poolAddress, pageNumber, this.id);
+
+    if (this.options.browser && !this.options.browser.isConnected()) {
+      throw new Error("Browser CDP session disconnected");
+    }
+
+    const overrideKey = `${poolAddress}:${pageNumber}`;
+    const override = this.options.statusOverrides?.[overrideKey];
+    if (override) {
+      return {
+        ok: override.status >= 200 && override.status < 300,
+        status: override.status,
+        retryAfterSec: override.retryAfter ?? null,
+        text: override.text || (override.status === 429 ? "Too Many Requests" : "Error"),
+      };
+    }
+
+    const poolRows = this.options.dataMap?.[poolAddress]?.[pageNumber] || [];
+    const totalPages = Object.keys(this.options.dataMap?.[poolAddress] || { 1: [] }).length;
+
+    return {
+      ok: true,
+      status: 200,
+      retryAfterSec: null,
+      text: JSON.stringify({
+        status: "success",
+        data: poolRows,
+        pagination: {
+          totalPages,
+          totalCount: poolRows.length,
+          page: pageNumber,
+          pageSize: 20,
+        },
+      }),
+    };
+  }
+}
+
+class MockBrowserContext {
+  _pages: MockPage[] = [];
+  _pageOptions: MockPageOptions;
+
+  constructor(pageOptions: MockPageOptions = {}, initialPages: MockPage[] = []) {
+    this._pageOptions = pageOptions;
+    this._pages = [...initialPages];
+  }
+
+  pages(): MockPage[] {
+    return [...this._pages];
+  }
+
+  async newPage(): Promise<MockPage> {
+    const p = new MockPage({
+      ...this._pageOptions,
+      id: `worker-tab-${this._pages.length + 1}`,
+    });
+    this._pages.push(p);
+    return p;
+  }
+}
+
+class MockBrowser extends EventEmitter {
+  _context: MockBrowserContext;
+  _closed = false;
+
+  constructor(context: MockBrowserContext) {
+    super();
+    this._context = context;
+  }
+
+  contexts(): MockBrowserContext[] {
+    return [this._context];
+  }
+
+  isConnected(): boolean {
+    return !this._closed;
+  }
+
+  async close(): Promise<void> {
+    this._closed = true;
+    this.emit("disconnected");
+  }
+}
+
+describe("CloakBrowser 2-Tab LP Agent Selected Pool Scanner Suite", () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "dllm-pool-scan-test-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  });
+
+  // ---------------------------------------------------------------------------
+  // 1. One-worker compatibility
+  // ---------------------------------------------------------------------------
+  it("1. One-worker compatibility: runs sequential extraction using single tab", async () => {
+    const dataMap: Record<string, Record<number, TopLperRow[]>> = {
+      [POOL_A]: { 1: [{ owner: "WalletA1", total_pnl: 100 }] },
+      [POOL_B]: { 1: [{ owner: "WalletB1", total_pnl: 200 }] },
+    };
+
+    const createdPages: MockPage[] = [];
+    const context = new MockBrowserContext({ dataMap });
+    const originalNewPage = context.newPage.bind(context);
+    context.newPage = async () => {
+      const p = await originalNewPage();
+      createdPages.push(p);
+      return p;
+    };
+    const browser = new MockBrowser(context);
+
+    const result = await scanSelectedPools({
+      tokenCA: TEST_TOKEN,
+      pools: [POOL_A, POOL_B],
+      workers: 1,
+      outputDir: tmpDir,
+      discoverTokenPoolsFn: createMockDiscoveryResult([
+        { poolAddress: POOL_A, pair: "TEST/SOL" },
+        { poolAddress: POOL_B, pair: "TEST/USDC" },
+      ]),
+      context: context as unknown as Parameters<typeof scanSelectedPools>[0]["context"],
+      browser: browser as unknown as Parameters<typeof scanSelectedPools>[0]["browser"],
+      minPageDelay: 0,
+      maxPageDelay: 0,
+      minPoolDelay: 0,
+      maxPoolDelay: 0,
+    });
+
+    assert.equal(createdPages.length, 1, "Only 1 scanner tab should be created for 1 worker");
+    assert.equal(createdPages[0].isClosed(), true, "Scanner tab must be closed when complete");
+    assert.equal(result.completedPoolsMap.size, 2);
+    assert.equal(result.uniqueWallets, 2);
+
+    const pw = JSON.parse(await fs.readFile(path.join(tmpDir, "pool-wallets.json"), "utf8")) as PoolWalletsJson;
+    assert.equal(pw.pools.length, 2);
+    assert.equal(pw.pools[0].poolAddress, POOL_A);
+    assert.equal(pw.pools[1].poolAddress, POOL_B);
+  });
+
+  // ---------------------------------------------------------------------------
+  // 2. Two independent tab workers
+  // ---------------------------------------------------------------------------
+  it("2. Two independent tab workers: opens two separate tabs in the same context", async () => {
+    const dataMap: Record<string, Record<number, TopLperRow[]>> = {
+      [POOL_A]: { 1: [{ owner: "WalletA1", total_pnl: 100 }] },
+      [POOL_B]: { 1: [{ owner: "WalletB1", total_pnl: 200 }] },
+    };
+
+    const createdPages: MockPage[] = [];
+    const context = new MockBrowserContext({ dataMap });
+    const originalNewPage = context.newPage.bind(context);
+    context.newPage = async () => {
+      const p = await originalNewPage();
+      createdPages.push(p);
+      return p;
+    };
+    const browser = new MockBrowser(context);
+
+    await scanSelectedPools({
+      tokenCA: TEST_TOKEN,
+      pools: [POOL_A, POOL_B],
+      workers: 2,
+      outputDir: tmpDir,
+      discoverTokenPoolsFn: createMockDiscoveryResult([
+        { poolAddress: POOL_A, pair: "TEST/SOL" },
+        { poolAddress: POOL_B, pair: "TEST/USDC" },
+      ]),
+      context: context as unknown as Parameters<typeof scanSelectedPools>[0]["context"],
+      browser: browser as unknown as Parameters<typeof scanSelectedPools>[0]["browser"],
+      minPageDelay: 0,
+      maxPageDelay: 0,
+      minPoolDelay: 0,
+      maxPoolDelay: 0,
+    });
+
+    assert.equal(createdPages.length, 2, "Exactly 2 scanner tabs must be opened for 2 workers");
+    assert.notEqual(createdPages[0].id, createdPages[1].id, "Tabs must be distinct");
+    assert.equal(createdPages[0].isClosed(), true, "Tab 1 must be closed on completion");
+    assert.equal(createdPages[1].isClosed(), true, "Tab 2 must be closed on completion");
+    assert.equal(browser.isConnected(), true, "Browser must remain connected after scan");
+  });
+
+  // ---------------------------------------------------------------------------
+  // 3. Disjoint pool assignment
+  // ---------------------------------------------------------------------------
+  it("3. Disjoint pool assignment: each pool is processed by exactly one worker without overlap", async () => {
+    const poolWorkers: Record<string, string[]> = {};
+    const dataMap: Record<string, Record<number, TopLperRow[]>> = {
+      [POOL_A]: { 1: [{ owner: "W1" }] },
+      [POOL_B]: { 1: [{ owner: "W2" }] },
+      [POOL_C]: { 1: [{ owner: "W3" }] },
+      [POOL_D]: { 1: [{ owner: "W4" }] },
+    };
+
+    const context = new MockBrowserContext({
+      dataMap,
+      onGoto: (url, pageId) => {
+        const match = url.match(/\/pools\/([^?]+)/);
+        if (match) {
+          const pool = match[1];
+          if (!poolWorkers[pool]) poolWorkers[pool] = [];
+          poolWorkers[pool].push(pageId);
+        }
+      },
+    });
+    const browser = new MockBrowser(context);
+
+    await scanSelectedPools({
+      tokenCA: TEST_TOKEN,
+      pools: [POOL_A, POOL_B, POOL_C, POOL_D],
+      workers: 2,
+      outputDir: tmpDir,
+      discoverTokenPoolsFn: createMockDiscoveryResult([
+        { poolAddress: POOL_A, pair: "TEST/SOL" },
+        { poolAddress: POOL_B, pair: "TEST/USDC" },
+        { poolAddress: POOL_C, pair: "TEST/SOL-2" },
+        { poolAddress: POOL_D, pair: "TEST/USDC-2" },
+      ]),
+      context: context as unknown as Parameters<typeof scanSelectedPools>[0]["context"],
+      browser: browser as unknown as Parameters<typeof scanSelectedPools>[0]["browser"],
+      minPageDelay: 0,
+      maxPageDelay: 0,
+      minPoolDelay: 0,
+      maxPoolDelay: 0,
+    });
+
+    for (const pool of [POOL_A, POOL_B, POOL_C, POOL_D]) {
+      assert.ok(poolWorkers[pool], `Pool ${pool} should have been visited`);
+      assert.equal(poolWorkers[pool].length, 1, `Pool ${pool} must be handled by exactly 1 tab`);
+    }
+  });
+
+  // ---------------------------------------------------------------------------
+  // 4. No duplicate page requests
+  // ---------------------------------------------------------------------------
+  it("4. No duplicate page requests: dispatches each (pool, page) request exactly once", async () => {
+    const requestedPages: string[] = [];
+    const dataMap: Record<string, Record<number, TopLperRow[]>> = {
+      [POOL_A]: {
+        1: [{ owner: "W1" }],
+        2: [{ owner: "W2" }],
+      },
+      [POOL_B]: {
+        1: [{ owner: "W3" }],
+        2: [{ owner: "W4" }],
+      },
+    };
+
+    const context = new MockBrowserContext({
+      dataMap,
+      onRequest: (pool, pageNum) => {
+        requestedPages.push(`${pool}:${pageNum}`);
+      },
+    });
+    const browser = new MockBrowser(context);
+
+    await scanSelectedPools({
+      tokenCA: TEST_TOKEN,
+      pools: [POOL_A, POOL_B],
+      workers: 2,
+      outputDir: tmpDir,
+      discoverTokenPoolsFn: createMockDiscoveryResult([
+        { poolAddress: POOL_A, pair: "TEST/SOL" },
+        { poolAddress: POOL_B, pair: "TEST/USDC" },
+      ]),
+      context: context as unknown as Parameters<typeof scanSelectedPools>[0]["context"],
+      browser: browser as unknown as Parameters<typeof scanSelectedPools>[0]["browser"],
+      minPageDelay: 0,
+      maxPageDelay: 0,
+      minPoolDelay: 0,
+      maxPoolDelay: 0,
+    });
+
+    const uniqueRequests = new Set(requestedPages);
+    assert.equal(
+      requestedPages.length,
+      uniqueRequests.size,
+      "Zero duplicate page requests across workers"
+    );
+    assert.ok(uniqueRequests.has(`${POOL_A}:1`));
+    assert.ok(uniqueRequests.has(`${POOL_A}:2`));
+    assert.ok(uniqueRequests.has(`${POOL_B}:1`));
+    assert.ok(uniqueRequests.has(`${POOL_B}:2`));
+  });
+
+  // ---------------------------------------------------------------------------
+  // 5. Shared request rate limiting
+  // ---------------------------------------------------------------------------
+  it("5. Shared request rate limiting: enforces max in-flight = 2 and pauses on 429", async () => {
+    let currentInFlight = 0;
+    let maxObservedInFlight = 0;
+    const limiter = new RateLimiter({ maxInFlight: 2, minIntervalMs: 5 });
+
+    const originalAcquire = limiter.acquireSlot.bind(limiter);
+    limiter.acquireSlot = async () => {
+      await originalAcquire();
+      currentInFlight++;
+      if (currentInFlight > maxObservedInFlight) {
+        maxObservedInFlight = currentInFlight;
+      }
+    };
+    const originalRelease = limiter.releaseSlot.bind(limiter);
+    limiter.releaseSlot = () => {
+      currentInFlight = Math.max(0, currentInFlight - 1);
+      originalRelease();
+    };
+
+    const startBackoff = Date.now();
+    limiter.triggerBackoff(30);
+    await limiter.acquireSlot();
+    const elapsed = Date.now() - startBackoff;
+    limiter.releaseSlot();
+
+    assert.ok(elapsed >= 25, `Backoff must hold dispatch for duration (elapsed=${elapsed}ms)`);
+    limiter.destroy();
+  });
+
+  // ---------------------------------------------------------------------------
+  // 6. Pool-local wallet membership
+  // ---------------------------------------------------------------------------
+  it("6. Pool-local wallet membership: attributes wallets strictly to their parent pool", async () => {
+    const dataMap: Record<string, Record<number, TopLperRow[]>> = {
+      [POOL_A]: { 1: [{ owner: "LocalA_1", total_pnl: 10 }, { owner: "Shared_1", total_pnl: 20 }] },
+      [POOL_B]: { 1: [{ owner: "LocalB_1", total_pnl: 30 }, { owner: "Shared_1", total_pnl: 40 }] },
+    };
+
+    const context = new MockBrowserContext({ dataMap });
+    const browser = new MockBrowser(context);
+
+    await scanSelectedPools({
+      tokenCA: TEST_TOKEN,
+      pools: [POOL_A, POOL_B],
+      workers: 2,
+      outputDir: tmpDir,
+      discoverTokenPoolsFn: createMockDiscoveryResult([
+        { poolAddress: POOL_A, pair: "TEST/SOL" },
+        { poolAddress: POOL_B, pair: "TEST/USDC" },
+      ]),
+      context: context as unknown as Parameters<typeof scanSelectedPools>[0]["context"],
+      browser: browser as unknown as Parameters<typeof scanSelectedPools>[0]["browser"],
+      minPageDelay: 0,
+      maxPageDelay: 0,
+      minPoolDelay: 0,
+      maxPoolDelay: 0,
+    });
+
+    const pw = JSON.parse(await fs.readFile(path.join(tmpDir, "pool-wallets.json"), "utf8")) as PoolWalletsJson;
+    const poolARecord = pw.pools.find((p) => p.poolAddress === POOL_A);
+    const poolBRecord = pw.pools.find((p) => p.poolAddress === POOL_B);
+
+    assert.ok(poolARecord);
+    assert.ok(poolBRecord);
+
+    const walletsInA = poolARecord.wallets.map((w) => w.wallet);
+    const walletsInB = poolBRecord.wallets.map((w) => w.wallet);
+
+    assert.deepEqual(walletsInA, ["LocalA_1", "Shared_1"]);
+    assert.deepEqual(walletsInB, ["LocalB_1", "Shared_1"]);
+    assert.equal(walletsInA.includes("LocalB_1"), false, "LocalB_1 must not leak to Pool A");
+  });
+
+  // ---------------------------------------------------------------------------
+  // 7. Global wallet deduplication
+  // ---------------------------------------------------------------------------
+  it("7. Global wallet deduplication: wallets.json contains sorted deduplicated union", async () => {
+    const dataMap: Record<string, Record<number, TopLperRow[]>> = {
+      [POOL_A]: { 1: [{ owner: "Z_Wallet" }, { owner: "M_Wallet" }] },
+      [POOL_B]: { 1: [{ owner: "A_Wallet" }, { owner: "M_Wallet" }] },
+    };
+
+    const context = new MockBrowserContext({ dataMap });
+    const browser = new MockBrowser(context);
+
+    await scanSelectedPools({
+      tokenCA: TEST_TOKEN,
+      pools: [POOL_A, POOL_B],
+      workers: 2,
+      outputDir: tmpDir,
+      discoverTokenPoolsFn: createMockDiscoveryResult([
+        { poolAddress: POOL_A, pair: "TEST/SOL" },
+        { poolAddress: POOL_B, pair: "TEST/USDC" },
+      ]),
+      context: context as unknown as Parameters<typeof scanSelectedPools>[0]["context"],
+      browser: browser as unknown as Parameters<typeof scanSelectedPools>[0]["browser"],
+      minPageDelay: 0,
+      maxPageDelay: 0,
+      minPoolDelay: 0,
+      maxPoolDelay: 0,
+    });
+
+    const globalWallets = JSON.parse(await fs.readFile(path.join(tmpDir, "wallets.json"), "utf8")) as string[];
+    assert.deepEqual(
+      globalWallets,
+      ["A_Wallet", "M_Wallet", "Z_Wallet"],
+      "Wallets must be unique and alphabetically sorted"
+    );
+  });
+
+  // ---------------------------------------------------------------------------
+  // 8. Serialized checkpoint writes
+  // ---------------------------------------------------------------------------
+  it("8. Serialized checkpoint writes: CheckpointWriter queues concurrent write requests", async () => {
+    const writer = new CheckpointWriter();
+    const executionOrder: number[] = [];
+
+    const { promise: p1Started, resolve: resolveP1Started } = Promise.withResolvers<void>();
+    const { promise: p1CanFinish, resolve: resolveP1Finish } = Promise.withResolvers<void>();
+
+    const write1 = writer.write(async () => {
+      resolveP1Started();
+      await p1CanFinish;
+      executionOrder.push(1);
+    });
+
+    const write2 = writer.write(async () => {
+      executionOrder.push(2);
+    });
+
+    await p1Started;
+    assert.deepEqual(executionOrder, [], "Write 2 must not start while Write 1 is in progress");
+    resolveP1Finish();
+    await Promise.all([write1, write2]);
+
+    assert.deepEqual(executionOrder, [1, 2], "Writes must execute in strict serialized order");
+  });
+
+  // ---------------------------------------------------------------------------
+  // 9. Crash between checkpoint file writes
+  // ---------------------------------------------------------------------------
+  it("9. Crash between checkpoint file writes: detects partial writes and reconciles state safely", async () => {
+    const fingerprint = computeSelectionFingerprint(TEST_TOKEN, [POOL_A, POOL_B]);
+    const selectedPools = [
+      { poolAddress: POOL_A, pair: "TEST/SOL" },
+      { poolAddress: POOL_B, pair: "TEST/USDC" },
+    ];
+
+    const pwData: PoolWalletsJson = {
+      version: "v1",
+      tokenMint: TEST_TOKEN,
+      pools: [
+        { poolAddress: POOL_A, status: "completed", wallets: [{ wallet: "W1" }] },
+        { poolAddress: POOL_B, status: "completed", wallets: [{ wallet: "W2" }] },
+      ],
+    };
+    await fs.writeFile(path.join(tmpDir, "pool-wallets.json"), JSON.stringify(pwData));
+
+    await fs.writeFile(path.join(tmpDir, "wallets.json"), JSON.stringify(["CORRUPTED_OR_OUTDATED"]));
+
+    const scanStateData: ScanStateJson = {
+      version: "v1",
+      tokenMint: TEST_TOKEN,
+      selectionFingerprint: fingerprint,
+      status: "in_progress",
+      selectedPoolCount: 2,
+      completedPoolCount: 1,
+      completedPoolAddresses: [POOL_A],
+    };
+    await fs.writeFile(path.join(tmpDir, "scan-state.json"), JSON.stringify(scanStateData));
+
+    const reconciliation = await validateAndReconcileCheckpoints({
+      outputDir: tmpDir,
+      tokenCA: TEST_TOKEN,
+      fingerprint,
+      selectedPools,
+      refresh: false,
+    });
+
+    assert.equal(reconciliation.canResume, true);
+    assert.equal(
+      reconciliation.completedPoolsMap.has(POOL_A),
+      true,
+      "Pool A (acknowledged in both files) must be kept"
+    );
+    assert.equal(
+      reconciliation.completedPoolsMap.has(POOL_B),
+      false,
+      "Pool B (unconfirmed in scan-state) must be discarded to prevent corrupt resume"
+    );
+
+    const reconciledWallets = JSON.parse(await fs.readFile(path.join(tmpDir, "wallets.json"), "utf8")) as string[];
+    assert.deepEqual(reconciledWallets, ["W1"]);
+  });
+
+  // ---------------------------------------------------------------------------
+  // 10. Stop and resume
+  // ---------------------------------------------------------------------------
+  it("10. Stop and resume: skips completed pools on second run and preserves selection metadata", async () => {
+    const dataMap: Record<string, Record<number, TopLperRow[]>> = {
+      [POOL_A]: { 1: [{ owner: "WalletA" }] },
+      [POOL_B]: { 1: [{ owner: "WalletB" }] },
+    };
+
+    const visitedPoolsRun1: string[] = [];
+    const context1 = new MockBrowserContext({
+      dataMap,
+      onGoto: (url) => {
+        const m = url.match(/\/pools\/([^?]+)/);
+        if (m) visitedPoolsRun1.push(m[1]);
+      },
+    });
+    const browser1 = new MockBrowser(context1);
+
+    await scanSelectedPools({
+      tokenCA: TEST_TOKEN,
+      pools: [POOL_A],
+      workers: 1,
+      outputDir: tmpDir,
+      discoverTokenPoolsFn: createMockDiscoveryResult([
+        { poolAddress: POOL_A, pair: "TEST/SOL" },
+      ]),
+      context: context1 as unknown as Parameters<typeof scanSelectedPools>[0]["context"],
+      browser: browser1 as unknown as Parameters<typeof scanSelectedPools>[0]["browser"],
+      minPageDelay: 0,
+      maxPageDelay: 0,
+      minPoolDelay: 0,
+      maxPoolDelay: 0,
+    });
+
+    const initialSel = JSON.parse(await fs.readFile(path.join(tmpDir, "selection.json"), "utf8")) as { createdAt: string };
+    const initialCreatedAt = initialSel.createdAt;
+    assert.ok(initialCreatedAt);
+
+    const fpAB = computeSelectionFingerprint(TEST_TOKEN, [POOL_A, POOL_B]);
+    await fs.writeFile(
+      path.join(tmpDir, "scan-state.json"),
+      JSON.stringify({
+        version: "v1",
+        tokenMint: TEST_TOKEN,
+        selectionFingerprint: fpAB,
+        status: "in_progress",
+        selectedPoolCount: 2,
+        completedPoolCount: 1,
+        completedPoolAddresses: [POOL_A],
+        startedAt: initialCreatedAt,
+      })
+    );
+    await fs.writeFile(
+      path.join(tmpDir, "selection.json"),
+      JSON.stringify({
+        version: "v1",
+        tokenMint: TEST_TOKEN,
+        selectionFingerprint: fpAB,
+        createdAt: initialCreatedAt,
+        selectedPoolCount: 2,
+        pools: [
+          { poolAddress: POOL_A, pair: "TEST/SOL" },
+          { poolAddress: POOL_B, pair: "TEST/USDC" },
+        ],
+      })
+    );
+
+    const visitedPoolsRun2: string[] = [];
+    const context2 = new MockBrowserContext({
+      dataMap,
+      onGoto: (url) => {
+        const m = url.match(/\/pools\/([^?]+)/);
+        if (m) visitedPoolsRun2.push(m[1]);
+      },
+    });
+    const browser2 = new MockBrowser(context2);
+
+    await scanSelectedPools({
+      tokenCA: TEST_TOKEN,
+      pools: [POOL_A, POOL_B],
+      workers: 1,
+      outputDir: tmpDir,
+      discoverTokenPoolsFn: createMockDiscoveryResult([
+        { poolAddress: POOL_A, pair: "TEST/SOL" },
+        { poolAddress: POOL_B, pair: "TEST/USDC" },
+      ]),
+      context: context2 as unknown as Parameters<typeof scanSelectedPools>[0]["context"],
+      browser: browser2 as unknown as Parameters<typeof scanSelectedPools>[0]["browser"],
+      minPageDelay: 0,
+      maxPageDelay: 0,
+      minPoolDelay: 0,
+      maxPoolDelay: 0,
+    });
+
+    assert.deepEqual(visitedPoolsRun2, [POOL_B], "Run 2 must skip completed POOL_A and only visit POOL_B");
+  });
+
+  // ---------------------------------------------------------------------------
+  // 11. One worker fails while another completes
+  // ---------------------------------------------------------------------------
+  it("11. One worker fails while another completes: completed pool work is preserved in error state", async () => {
+    const dataMap: Record<string, Record<number, TopLperRow[]>> = {
+      [POOL_A]: { 1: [{ owner: "WalletA" }] },
+      [POOL_B]: { 1: [{ owner: "WalletB" }] },
+    };
+
+    const statusOverrides: Record<string, { status: number; text: string }> = {
+      [`${POOL_B}:1`]: { status: 500, text: "Internal Server Error" },
+    };
+
+    const context = new MockBrowserContext({
+      dataMap,
+      statusOverrides,
+    });
+    const browser = new MockBrowser(context);
+
+    let caughtError: unknown = null;
+    try {
+      await scanSelectedPools({
+        tokenCA: TEST_TOKEN,
+        pools: [POOL_A, POOL_B],
+        workers: 2,
+        outputDir: tmpDir,
+        discoverTokenPoolsFn: createMockDiscoveryResult([
+          { poolAddress: POOL_A, pair: "TEST/SOL" },
+          { poolAddress: POOL_B, pair: "TEST/USDC" },
+        ]),
+        context: context as unknown as Parameters<typeof scanSelectedPools>[0]["context"],
+        browser: browser as unknown as Parameters<typeof scanSelectedPools>[0]["browser"],
+        maxRetries: 0, // Fail fast without multiple backoff delays
+        minPageDelay: 0,
+        maxPageDelay: 0,
+        minPoolDelay: 0,
+        maxPoolDelay: 0,
+      });
+    } catch (err) {
+      caughtError = err;
+    }
+
+    assert.ok(caughtError, "Expected scanner to throw on worker error");
+
+    const state = JSON.parse(await fs.readFile(path.join(tmpDir, "scan-state.json"), "utf8")) as ScanStateJson;
+    assert.equal(state.status, "error");
+    assert.ok(state.error);
+
+    const pw = JSON.parse(await fs.readFile(path.join(tmpDir, "pool-wallets.json"), "utf8")) as PoolWalletsJson;
+    assert.equal(pw.pools.length, 1, "Completed POOL_A must be safely preserved in pool-wallets.json");
+    assert.equal(pw.pools[0].poolAddress, POOL_A);
+  });
+
+  // ---------------------------------------------------------------------------
+  // 12. CDP disconnect recovery
+  // ---------------------------------------------------------------------------
+  it("12. CDP disconnect recovery: handles browser disconnect event without corrupting checkpoints", async () => {
+    const dataMap: Record<string, Record<number, TopLperRow[]>> = {
+      [POOL_A]: { 1: [{ owner: "WalletA" }] },
+      [POOL_B]: { 1: [{ owner: "WalletB" }] },
+    };
+
+    let browserRef: MockBrowser | null = null;
+    const context = new MockBrowserContext({
+      dataMap,
+      onRequest: (pool) => {
+        if (pool === POOL_B && browserRef) {
+          // Trigger disconnect during scan of POOL_B
+          browserRef.close();
+        }
+      },
+    });
+    browserRef = new MockBrowser(context);
+    context._pageOptions.browser = browserRef;
+
+    let caughtErr: unknown = null;
+    try {
+      await scanSelectedPools({
+        tokenCA: TEST_TOKEN,
+        pools: [POOL_A, POOL_B],
+        workers: 1,
+        outputDir: tmpDir,
+        discoverTokenPoolsFn: createMockDiscoveryResult([
+          { poolAddress: POOL_A, pair: "TEST/SOL" },
+          { poolAddress: POOL_B, pair: "TEST/USDC" },
+        ]),
+        context: context as unknown as Parameters<typeof scanSelectedPools>[0]["context"],
+        browser: browserRef as unknown as Parameters<typeof scanSelectedPools>[0]["browser"],
+        minPageDelay: 0,
+        maxPageDelay: 0,
+        minPoolDelay: 0,
+        maxPoolDelay: 0,
+      });
+    } catch (err) {
+      caughtErr = err;
+    }
+
+    assert.ok(caughtErr, "Expected error on disconnect");
+    const errMessage = caughtErr instanceof Error ? caughtErr.message : String(caughtErr);
+    assert.ok(
+      errMessage.includes("CDP session disconnected") || errMessage.includes("disconnected"),
+      `Error message should indicate disconnect: ${errMessage}`
+    );
+
+    const state = JSON.parse(await fs.readFile(path.join(tmpDir, "scan-state.json"), "utf8")) as ScanStateJson;
+    assert.equal(state.status, "error");
+
+    const pw = JSON.parse(await fs.readFile(path.join(tmpDir, "pool-wallets.json"), "utf8")) as PoolWalletsJson;
+    assert.equal(pw.pools.length, 1, "Only Pool A (completed before disconnect) should be stored");
+    assert.equal(pw.pools[0].poolAddress, POOL_A);
+  });
+
+  // ---------------------------------------------------------------------------
+  // 13. User-owned tab preservation
+  // ---------------------------------------------------------------------------
+  it("13. User-owned tab preservation: leaves existing browser tabs unnavigated and open", async () => {
+    const userTab1 = new MockPage({ id: "user-tab-portfolio" });
+    await userTab1.goto("https://app.lpagent.io/portfolio");
+    const userTab2 = new MockPage({ id: "user-tab-solana" });
+    await userTab2.goto("https://solscan.io");
+
+    const dataMap: Record<string, Record<number, TopLperRow[]>> = {
+      [POOL_A]: { 1: [{ owner: "WalletA" }] },
+    };
+
+    const context = new MockBrowserContext({ dataMap }, [userTab1, userTab2]);
+    const browser = new MockBrowser(context);
+
+    await scanSelectedPools({
+      tokenCA: TEST_TOKEN,
+      pools: [POOL_A],
+      workers: 1,
+      outputDir: tmpDir,
+      discoverTokenPoolsFn: createMockDiscoveryResult([
+        { poolAddress: POOL_A, pair: "TEST/SOL" },
+      ]),
+      context: context as unknown as Parameters<typeof scanSelectedPools>[0]["context"],
+      browser: browser as unknown as Parameters<typeof scanSelectedPools>[0]["browser"],
+      minPageDelay: 0,
+      maxPageDelay: 0,
+      minPoolDelay: 0,
+      maxPoolDelay: 0,
+    });
+
+    assert.equal(userTab1.isClosed(), false, "userTab1 must NOT be closed");
+    assert.equal(userTab2.isClosed(), false, "userTab2 must NOT be closed");
+    assert.equal(userTab1.url(), "https://app.lpagent.io/portfolio", "userTab1 URL must be preserved");
+    assert.equal(userTab2.url(), "https://solscan.io", "userTab2 URL must be preserved");
+  });
+
+  // ---------------------------------------------------------------------------
+  // 14. Single-worker versus two-worker data parity
+  // ---------------------------------------------------------------------------
+  it("14. Single-worker versus two-worker data parity: produces bit-for-bit identical output", async () => {
+    const dataMap: Record<string, Record<number, TopLperRow[]>> = {
+      [POOL_A]: {
+        1: [
+          { owner: "AlphaWallet", total_pnl: 100, win_rate: 0.8, total_lp: 5 },
+          { owner: "BetaWallet", total_pnl: 50, win_rate: 0.6, total_lp: 2 },
+        ],
+      },
+      [POOL_B]: {
+        1: [
+          { owner: "GammaWallet", total_pnl: 300, win_rate: 0.9, total_lp: 10 },
+          { owner: "AlphaWallet", total_pnl: 20, win_rate: 0.5, total_lp: 1 },
+        ],
+      },
+    };
+
+    const dirWorker1 = path.join(tmpDir, "worker-1");
+    const dirWorker2 = path.join(tmpDir, "worker-2");
+
+    const ctx1 = new MockBrowserContext({ dataMap });
+    await scanSelectedPools({
+      tokenCA: TEST_TOKEN,
+      pools: [POOL_A, POOL_B],
+      workers: 1,
+      outputDir: dirWorker1,
+      discoverTokenPoolsFn: createMockDiscoveryResult([
+        { poolAddress: POOL_A, pair: "TEST/SOL", binStep: 20, baseFeePct: 0.25 },
+        { poolAddress: POOL_B, pair: "TEST/USDC", binStep: 25, baseFeePct: 0.3 },
+      ]),
+      context: ctx1 as unknown as Parameters<typeof scanSelectedPools>[0]["context"],
+      browser: new MockBrowser(ctx1) as unknown as Parameters<typeof scanSelectedPools>[0]["browser"],
+      minPageDelay: 0,
+      maxPageDelay: 0,
+      minPoolDelay: 0,
+      maxPoolDelay: 0,
+    });
+
+    const ctx2 = new MockBrowserContext({ dataMap });
+    await scanSelectedPools({
+      tokenCA: TEST_TOKEN,
+      pools: [POOL_A, POOL_B],
+      workers: 2,
+      outputDir: dirWorker2,
+      discoverTokenPoolsFn: createMockDiscoveryResult([
+        { poolAddress: POOL_A, pair: "TEST/SOL", binStep: 20, baseFeePct: 0.25 },
+        { poolAddress: POOL_B, pair: "TEST/USDC", binStep: 25, baseFeePct: 0.3 },
+      ]),
+      context: ctx2 as unknown as Parameters<typeof scanSelectedPools>[0]["context"],
+      browser: new MockBrowser(ctx2) as unknown as Parameters<typeof scanSelectedPools>[0]["browser"],
+      minPageDelay: 0,
+      maxPageDelay: 0,
+      minPoolDelay: 0,
+      maxPoolDelay: 0,
+    });
+
+    const pw1 = JSON.parse(await fs.readFile(path.join(dirWorker1, "pool-wallets.json"), "utf8")) as PoolWalletsJson;
+    const pw2 = JSON.parse(await fs.readFile(path.join(dirWorker2, "pool-wallets.json"), "utf8")) as PoolWalletsJson;
+
+    const w1 = JSON.parse(await fs.readFile(path.join(dirWorker1, "wallets.json"), "utf8")) as string[];
+    const w2 = JSON.parse(await fs.readFile(path.join(dirWorker2, "wallets.json"), "utf8")) as string[];
+
+    delete pw1.updatedAt;
+    delete pw2.updatedAt;
+    assert.deepEqual(pw1, pw2, "pool-wallets.json must be identical across 1 and 2 workers");
+    assert.deepEqual(w1, w2, "wallets.json must be identical across 1 and 2 workers");
+  });
+
+  // ---------------------------------------------------------------------------
+  // 15. Missing CloakBrowser must not trigger Brave fallback
+  // ---------------------------------------------------------------------------
+  it("15. Missing CloakBrowser must not trigger Brave fallback: fails closed on port 9223", async () => {
+    let connectCalledWith: string | null = null;
+    const mockChromium = {
+      connectOverCDP: async (url: string) => {
+        connectCalledWith = url;
+        return {
+          contexts: () => [new MockBrowserContext()],
+        };
+      },
+    };
+
+    await assert.rejects(
+      async () => {
+        await connectToBrowser({
+          browserType: "cloak",
+          chromiumClient: mockChromium as unknown as Parameters<typeof connectToBrowser>[0]["chromiumClient"],
+          checkEndpointFn: async () => null,
+        });
+      },
+      (err: Error) => {
+        assert.ok(
+          err.message.includes("CloakBrowser is not running"),
+          `Expected CloakBrowser not running error, got: ${err.message}`
+        );
+        assert.ok(
+          err.message.includes("Silent fallback to Brave is strictly forbidden"),
+          `Expected fallback forbidden warning, got: ${err.message}`
+        );
+        return true;
+      }
+    );
+
+    assert.equal(connectCalledWith, null, "Must never connect to any CDP port when CloakBrowser is down");
+
+    await assert.rejects(
+      async () => {
+        await connectToBrowser({
+          browserType: "cloak",
+          cdpUrl: "http://127.0.0.1:9222",
+          chromiumClient: mockChromium as unknown as Parameters<typeof connectToBrowser>[0]["chromiumClient"],
+        });
+      },
+      (err: Error) => {
+        assert.ok(
+          err.message.includes("Security violation") && err.message.includes("Brave CDP port 9222"),
+          `Expected security violation for port 9222, got: ${err.message}`
+        );
+        return true;
+      }
+    );
+  });
+
+  // ---------------------------------------------------------------------------
+  // CLI Arguments Validation
+  // ---------------------------------------------------------------------------
+  describe("CLI Arguments Parsing & Worker Boundary", () => {
+    it("should accept --workers 1 and --workers 2", () => {
+      const a1 = parseCliArgs(["--token", "TOK", "--workers", "1"]);
+      assert.equal(a1.workers, 1);
+      const a2 = parseCliArgs(["--token", "TOK", "--workers", "2"]);
+      assert.equal(a2.workers, 2);
+    });
+
+    it("should default to workers=1 when --workers is omitted", () => {
+      const a = parseCliArgs(["--token", "TOK"]);
+      assert.equal(a.workers, 1);
+      assert.equal(a.browserType, "cloak");
+    });
+
+    it("should reject workers outside 1-2", () => {
+      assert.throws(() => parseCliArgs(["--token", "TOK", "--workers", "3"]), /Invalid workers count "3"/);
+      assert.throws(() => parseCliArgs(["--token", "TOK", "--workers", "0"]), /Invalid workers count "0"/);
+      assert.throws(() => parseCliArgs(["--token", "TOK", "--workers", "-1"]), /Invalid workers count "-1"/);
+      assert.throws(() => parseCliArgs(["--token", "TOK", "--workers", "abc"]), /Invalid workers count "abc"/);
+    });
+
+    it("should reject invalid browser types", () => {
+      assert.throws(() => parseCliArgs(["--token", "TOK", "--browser", "firefox"]), /Invalid browser type "firefox"/);
+    });
+  });
+});
