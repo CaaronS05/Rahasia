@@ -432,3 +432,39 @@ Wallet shortlist / watchlist
 → OPEN / ADD / REMOVE / CLOSE
 → copy-trade engine
 ```
+
+
+PENTING 
+
+## 10. Brave Remote Debugging
+
+Start Brave di macOS:
+
+```bash
+"/Applications/Brave Browser.app/Contents/MacOS/Brave Browser" \
+  --remote-debugging-port=9222 \
+  --user-data-dir="$HOME/Documents/fabriq-playwright-profile"
+```
+
+---
+
+## 11. CloakBrowser Persistent Launcher (Port 9223)
+
+Start CloakBrowser persistent headed instance:
+
+```bash
+npm run browser:cloak
+```
+
+Check status:
+
+```bash
+npm run browser:cloak -- --status
+```
+
+Stop safely:
+
+```bash
+npm run browser:cloak -- --stop
+```
+
