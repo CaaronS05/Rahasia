@@ -57,7 +57,12 @@ const IS_RESUME =
     process.env.FABRIQ_IS_RESUME === "true" ||
     process.argv.includes("--resume");
 
-const CDP_URL = "http://127.0.0.1:9222";
+export const DEFAULT_FABRIQ_CDP_URL = "http://127.0.0.1:9223";
+
+const CDP_URL =
+    process.env.FABRIQ_CDP_URL?.trim() ||
+    process.env.CLOAK_CDP_URL?.trim() ||
+    DEFAULT_FABRIQ_CDP_URL;
 
 const TIMEZONE = "Asia/Jakarta";
 
@@ -635,10 +640,10 @@ async function loadCheckpoint(targetWallets = null) {
 }
 
 // ======================================================
-// CONNECT TO BRAVE
+// CONNECT TO CLOAKBROWSER
 // ======================================================
 
-console.log("[BOOT] Connecting to Brave...");
+console.log(`[BOOT] Connecting to CloakBrowser at ${CDP_URL}...`);
 
 const browser = await chromium.connectOverCDP(
     CDP_URL,
@@ -651,7 +656,7 @@ const context = browser.contexts()[0];
 
 if (!context) {
     throw new Error(
-        "No Brave context found. Start Brave with remote debugging."
+        "No browser context found. Start CloakBrowser with remote debugging."
     );
 }
 
@@ -662,7 +667,7 @@ const page =
 
 if (!page) {
     throw new Error(
-        "Fabriq tab not found. Open https://fabriq.trade in Brave first."
+        "Fabriq tab not found. Open https://fabriq.trade in CloakBrowser first."
     );
 }
 
@@ -1590,4 +1595,4 @@ process.exit(failures.length > 0 ? 1 : 0);
 
 // IMPORTANT:
 // jangan browser.close()
-// karena ini attach ke Brave milikmu.
+// karena ini attach ke CloakBrowser.

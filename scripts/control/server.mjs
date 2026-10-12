@@ -73,7 +73,7 @@ function extractCleanErrorMessage(stderr, stdout) {
     }
 
     if (combined.includes("Timeout 120000ms exceeded") || combined.includes("connectOverCDP")) {
-        return "Unable to initialize Brave CDP session (connection timed out).";
+        return "Unable to initialize browser CDP session (connection timed out).";
     }
 
     const stderrLines = (stderr || "").split("\n").map((l) => stripAnsi(l).trim()).filter(Boolean);
