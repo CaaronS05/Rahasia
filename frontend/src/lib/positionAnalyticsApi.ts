@@ -716,13 +716,9 @@ export async function getMeteoraVerificationReport(
 ): Promise<MeteoraVerificationReport | null> {
   const params = new URLSearchParams({ wallet, period });
   const url = `${API_BASE}/api/position-analytics/verification?${params.toString()}`;
-  try {
-    const res = await fetch(url, { cache: "no-store" });
-    if (res.status === 404) return null;
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || `Failed to fetch verification report (${res.status})`);
-    return (data.report || data) as MeteoraVerificationReport;
-  } catch {
-    return null;
-  }
+  const res = await fetch(url, { cache: "no-store" });
+  if (res.status === 404) return null;
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || `Failed to fetch verification report (${res.status})`);
+  return (data.report || data) as MeteoraVerificationReport;
 }

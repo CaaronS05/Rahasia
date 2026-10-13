@@ -1,8 +1,8 @@
-import { Sidebar } from "../components/Sidebar";
+import { Sidebar, type AppPage } from "../components/Sidebar";
 import { PoolInsightPage } from "./PoolInsightPage";
 
 export function PoolExplorerPage() {
-  function navigateApp(pageName: "explore" | "track" | "portfolio" | "data") {
+  function navigateApp(pageName: AppPage) {
     const path =
       pageName === "track"
         ? "/track"
@@ -10,9 +10,18 @@ export function PoolExplorerPage() {
           ? "/portfolio"
           : pageName === "data"
             ? "/data"
-            : "/";
+            : pageName === "activity-logs"
+              ? "/activity-logs"
+              : pageName === "pools"
+                ? "/pools"
+                : "/";
+    window.history.pushState({}, "", path);
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  }
 
-    window.location.assign(path);
+  function handleSpaNav(path: string) {
+    window.history.pushState({}, "", path);
+    window.dispatchEvent(new PopStateEvent("popstate"));
   }
 
   return (
@@ -22,15 +31,22 @@ export function PoolExplorerPage() {
       <main className="main-content">
         <header className="topbar">
           <nav className="top-nav">
-            <button className="active" onClick={() => window.location.assign("/")}>
+            <button onClick={() => handleSpaNav("/")}>
               EXPLORE
             </button>
-            <button onClick={() => window.location.assign("/track")}>TRACK</button>
-            <button>COPY TRADE</button>
-            <button onClick={() => window.location.assign("/portfolio")}>
+            <button onClick={() => handleSpaNav("/track")}>TRACK</button>
+            <button className="active" onClick={() => handleSpaNav("/pools")}>
+              POOLS
+            </button>
+            <button className="top-nav-disabled" disabled aria-disabled="true" title="Unavailable">
+              COPY TRADE
+            </button>
+            <button onClick={() => handleSpaNav("/portfolio")}>
               PORTFOLIO
             </button>
-            <button>LEADERBOARD</button>
+            <button className="top-nav-disabled" disabled aria-disabled="true" title="Unavailable">
+              LEADERBOARD
+            </button>
           </nav>
 
           <div className="topbar-right">

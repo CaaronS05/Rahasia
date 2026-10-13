@@ -10,67 +10,57 @@ import {
   Terminal,
   WalletCards,
 } from "lucide-react";
+import {
+  DISCOVER_NAV_ITEMS,
+  WATCHLIST_NAV_ITEMS,
+  TOOLS_NAV_ITEMS,
+  type ActivePage,
+  type AppPage,
+} from "../lib/navigation";
 
-type ActivePage = "explore" | "pools" | "track" | "portfolio" | "data" | "activity-logs";
-type AppPage = "explore" | "track" | "portfolio" | "data" | "activity-logs";
+export type { ActivePage, AppPage };
 
 type Props = {
   activePage: ActivePage;
   onNavigate: (page: AppPage) => void;
 };
 
-type SidebarItem = {
+export type SidebarItem = {
   label: string;
   icon: typeof WalletCards;
   page?: AppPage;
-  href?: string;
   activeKey?: ActivePage;
+  disabled?: boolean;
 };
 
-const discover: SidebarItem[] = [
-  {
-    label: "Wallet Explorer",
-    icon: WalletCards,
-    page: "explore",
-    activeKey: "explore",
-  },
-  {
-    label: "Pool Explorer",
-    icon: Coins,
-    href: "/pools",
-    activeKey: "pools",
-  },
-  { label: "Token Insights", icon: Activity },
-  { label: "Trends", icon: ChartNoAxesCombined },
-  { label: "Opportunities", icon: Star },
-];
+const iconMap: Record<string, typeof WalletCards> = {
+  "Wallet Explorer": WalletCards,
+  "Pool Explorer": Coins,
+  "Token Insights": Activity,
+  "Trends": ChartNoAxesCombined,
+  "Opportunities": Star,
+  "My Wallets": WalletCards,
+  "Tracked Wallets": ShieldCheck,
+  "Data": Database,
+  "Activity Logs": Terminal,
+  "Alerts": Bell,
+  "Settings": Settings,
+};
 
-const watchlist: SidebarItem[] = [
-  { label: "My Wallets", icon: WalletCards },
-  {
-    label: "Tracked Wallets",
-    icon: ShieldCheck,
-    page: "track",
-    activeKey: "track",
-  },
-];
+export const discover: SidebarItem[] = DISCOVER_NAV_ITEMS.map((item) => ({
+  ...item,
+  icon: iconMap[item.label] ?? WalletCards,
+}));
 
-const tools: SidebarItem[] = [
-  {
-    label: "Data",
-    icon: Database,
-    page: "data",
-    activeKey: "data",
-  },
-  {
-    label: "Activity Logs",
-    icon: Terminal,
-    page: "activity-logs",
-    activeKey: "activity-logs",
-  },
-  { label: "Alerts", icon: Bell },
-  { label: "Settings", icon: Settings },
-];
+export const watchlist: SidebarItem[] = WATCHLIST_NAV_ITEMS.map((item) => ({
+  ...item,
+  icon: iconMap[item.label] ?? WalletCards,
+}));
+
+export const tools: SidebarItem[] = TOOLS_NAV_ITEMS.map((item) => ({
+  ...item,
+  icon: iconMap[item.label] ?? WalletCards,
+}));
 
 function SidebarButton({
   item,
@@ -83,13 +73,10 @@ function SidebarButton({
 }) {
   const Icon = item.icon;
   const active = item.activeKey === activePage;
+  const isDisabled = Boolean(item.disabled);
 
   function handleClick() {
-    if (item.href) {
-      window.location.assign(item.href);
-      return;
-    }
-
+    if (isDisabled) return;
     if (item.page) {
       onNavigate(item.page);
     }
@@ -97,11 +84,15 @@ function SidebarButton({
 
   return (
     <button
-      className={`nav-item ${active ? "active" : ""}`}
+      className={`nav-item ${active ? "active" : ""} ${isDisabled ? "disabled" : ""}`}
       onClick={handleClick}
+      disabled={isDisabled}
+      aria-disabled={isDisabled}
+      title={isDisabled ? "Unavailable" : undefined}
     >
       <Icon size={16} strokeWidth={1.7} />
       <span>{item.label}</span>
+      {isDisabled ? <span className="nav-item-badge">Soon</span> : null}
     </button>
   );
 }

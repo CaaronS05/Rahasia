@@ -21,6 +21,8 @@ import {
   fetchPoolWalletTrades,
   fetchScannedPools,
   filterPoolTrades,
+  formatPct,
+  formatUsd,
   getPoolRefreshStatus,
   startPoolRefresh,
   type PoolDetailResponse,
@@ -32,6 +34,8 @@ import {
   type ScannedPoolItem,
   type SortOrder,
 } from "../lib/poolInsight";
+
+export { formatUsd, formatPct };
 import { shortWallet } from "../lib/format";
 import "../pool-insight.css";
 
@@ -87,23 +91,6 @@ function getRefreshStageLabel(stage: PoolRefreshStage | null): string {
   }
 }
 
-function formatUsd(val: number): string {
-  if (!Number.isFinite(val)) return "$0.00";
-  const sign = val > 0 ? "+" : val < 0 ? "-" : "";
-  const abs = Math.abs(val);
-  const formatted = new Intl.NumberFormat("en-US", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(abs);
-  return `${sign}$${formatted}`;
-}
-
-function formatPct(val: number): string {
-  if (!Number.isFinite(val)) return "0.00%";
-  const sign = val > 0 ? "+" : val < 0 ? "-" : "";
-  const abs = Math.abs(val);
-  return `${sign}${abs.toFixed(2)}%`;
-}
 
 function formatDuration(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) return "—";

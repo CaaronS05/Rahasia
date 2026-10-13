@@ -10,58 +10,43 @@ import { fmt, shortWallet, timeAgo, walletAge } from "../lib/format";
 import type { Wallet } from "../types";
 import { Sparkline } from "./Sparkline";
 import {
+  pnlColorClass,
   walletAllTimePnl,
   walletMonthlyPnl,
   walletPnl30d,
   walletPnl7d,
   walletSparkline7d,
+  walletWinDays,
+  walletLoseDays,
   walletWinRatePercent,
   walletEffectiveLastActivity,
+  walletEffectiveFirstActivity,
+  walletPositions,
+  paginateWallets,
+  toFiniteNumber,
+  type WalletSortKey,
 } from "../lib/walletMetrics";
-
-export type WalletSortKey =
-  | "wallet"
-  | "shortlist"
-  | "quality"
-  | "risk"
-  | "confidence"
-  | "style"
-  | "pnl7"
-  | "win"
-  | "winDays"
-  | "loseDays"
-  | "pnl30"
-  | "pnlAll"
-  | "positions"
-  | "walletAge"
-  | "age"
-  | "ev"
-  | "invested"
-  | "monthly"
-  | "fees"
-  | "last";
-
-type ColumnKey =
-  | "wallet"
-  | "shortlist"
-  | "quality"
-  | "risk"
-  | "confidence"
-  | "style"
-  | "pnl7"
-  | "win"
-  | "winDays"
-  | "loseDays"
-  | "pnl30"
-  | "pnlAll"
-  | "positions"
-  | "walletAge"
-  | "age"
-  | "ev"
-  | "invested"
-  | "monthly"
-  | "fees"
-  | "last";
+export type { WalletSortKey };
+import {
+  type ColumnKey,
+  labels,
+  COLUMN_STORAGE_KEY,
+  getDefaultVisibleColumns,
+  defaultVisible,
+  loadSavedColumns,
+  saveColumns,
+  clearSavedColumns,
+} from "../lib/walletTableColumns";
+export type { ColumnKey };
+export {
+  labels,
+  COLUMN_STORAGE_KEY,
+  getDefaultVisibleColumns,
+  defaultVisible,
+  loadSavedColumns,
+  saveColumns,
+  clearSavedColumns,
+};
 
 type Props = {
   wallets: Wallet[];
@@ -71,69 +56,26 @@ type Props = {
   onOpenWallet: (wallet: Wallet) => void;
   trackedOwners?: Set<string>;
   onToggleTrack?: (owner: string) => void;
+  timeframe?: "7d" | "30d" | "all";
 };
 
-const labels: Record<ColumnKey, string> = {
-  wallet: "Wallet",
-  shortlist: "Shortlist",
-  quality: "Quality",
-  risk: "Risk",
-  confidence: "Confidence",
-  style: "Style",
-  pnl7: "7D PnL",
-  win: "Win Rate",
-  winDays: "Win Days",
-  loseDays: "Lose Days",
-  pnl30: "30D PnL",
-  pnlAll: "All-Time PnL",
-  positions: "Positions",
-  walletAge: "Wallet Age",
-  age: "Avg Age",
-  ev: "EV",
-  invested: "Avg Invested",
-  monthly: "Monthly PnL",
-  fees: "Fees",
-  last: "Last Active",
-};
 
-const defaultVisible: Record<ColumnKey, boolean> = {
-  wallet: true,
-  shortlist: true,
-  quality: true,
-  risk: true,
-  confidence: true,
-  style: true,
-  pnl7: true,
-  win: true,
-  winDays: true,
-  loseDays: true,
-  pnl30: true,
-  pnlAll: true,
-  positions: true,
-  walletAge: true,
-  age: true,
-  ev: true,
-  invested: true,
-  monthly: true,
-  fees: true,
-  last: false,
-};
 
 function formatQualityScore(wallet: Wallet): string {
-  const val = wallet.intelligenceV1?.qualityScore;
-  if (val === null || val === undefined) return "—";
+  const val = toFiniteNumber(wallet.intelligenceV1?.qualityScore);
+  if (val === null) return "—";
   return fmt(val, 1);
 }
 
 function formatRiskScore(wallet: Wallet): string {
-  const val = wallet.intelligenceV1?.riskScore;
-  if (val === null || val === undefined) return "—";
+  const val = toFiniteNumber(wallet.intelligenceV1?.riskScore);
+  if (val === null) return "—";
   return fmt(val, 1);
 }
 
 function formatV1ConfidenceScore(wallet: Wallet): string {
-  const val = wallet.intelligenceV1?.confidenceScore;
-  if (val !== null && val !== undefined) return fmt(val, 1);
+  const val = toFiniteNumber(wallet.intelligenceV1?.confidenceScore);
+  if (val !== null) return fmt(val, 1);
   return "—";
 }
 
@@ -150,8 +92,12 @@ function formatV1StyleTag(wallet: Wallet): string {
   return "—";
 }
 
-function signed(value: number, digits = 2) {
-  return `${value >= 0 ? "+" : ""}${fmt(value, digits)}`;
+function signed(value: number | null | undefined, digits = 2) {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
+    return "—";
+  }
+  const normalized = Object.is(value, -0) ? 0 : value;
+  return `${normalized > 0 ? "+" : ""}${fmt(normalized, digits)}`;
 }
 
 function duration(hours: number | null | undefined) {
@@ -162,19 +108,9 @@ function duration(hours: number | null | undefined) {
 }
 
 function getDayStats(wallet: Wallet) {
-  const stats =
-    wallet.fabriq?.stats;
-
-  const dayStats =
-    stats?.dayWinUsd ??
-    stats?.dayWinSol;
-
   return {
-    wins:
-      Number(dayStats?.wins) || 0,
-
-    losses:
-      Number(dayStats?.losses) || 0,
+    wins: walletWinDays(wallet),
+    losses: walletLoseDays(wallet),
   };
 }
 
@@ -186,24 +122,58 @@ export function WalletTable({
   onOpenWallet,
   trackedOwners = new Set(),
   onToggleTrack,
+  timeframe = "7d",
 }: Props) {
   const [page, setPage] = useState(1);
   const [columnsOpen, setColumnsOpen] = useState(false);
-  const [visible, setVisible] = useState(defaultVisible);
+  const [hasCustomColumns, setHasCustomColumns] = useState(() => {
+    return loadSavedColumns() !== null;
+  });
+  const [visible, setVisible] = useState<Record<ColumnKey, boolean>>(() => {
+    const saved = loadSavedColumns();
+    if (saved) {
+      return { ...getDefaultVisibleColumns(timeframe), ...saved };
+    }
+    return getDefaultVisibleColumns(timeframe);
+  });
+
+  useEffect(() => {
+    if (!hasCustomColumns) {
+      setVisible(getDefaultVisibleColumns(timeframe));
+    }
+  }, [timeframe, hasCustomColumns]);
+
+  function handleToggleColumn(key: ColumnKey) {
+    setVisible((current) => {
+      const next = { ...current, [key]: !current[key] };
+      saveColumns(next);
+      setHasCustomColumns(true);
+      return next;
+    });
+  }
+
+  function handleResetColumns() {
+    clearSavedColumns();
+    setHasCustomColumns(false);
+    setVisible(getDefaultVisibleColumns(timeframe));
+  }
   const [copiedWallet, setCopiedWallet] = useState<string | null>(null);
   const pageSize = 25;
 
-  const pageCount = Math.max(1, Math.ceil(wallets.length / pageSize));
-  const safePage = Math.min(page, pageCount);
+  const { rows, safePage, pageCount } = useMemo(
+    () => paginateWallets(wallets, page, pageSize),
+    [page, pageSize, wallets],
+  );
+
+  useEffect(() => {
+    setPage(1);
+  }, [sortKey, sortDir]);
+
   useEffect(() => {
     if (page > pageCount) {
-      setPage(1);
+      setPage(pageCount);
     }
   }, [page, pageCount]);
-  const rows = useMemo(
-    () => wallets.slice((safePage - 1) * pageSize, safePage * pageSize),
-    [safePage, wallets],
-  );
 
   const visibleColumns = (Object.keys(visible) as ColumnKey[]).filter(
     (key) => visible[key],
@@ -263,15 +233,22 @@ export function WalletTable({
 
             {columnsOpen ? (
               <div className="columns-menu">
+                <div className="columns-menu-header">
+                  <span>Columns</span>
+                  <button
+                    type="button"
+                    className="columns-reset-btn"
+                    onClick={handleResetColumns}
+                    title="Reset to default columns"
+                  >
+                    Reset
+                  </button>
+                </div>
                 {(Object.keys(labels) as ColumnKey[]).map((key) => (
                   <button
                     key={key}
-                    onClick={() =>
-                      setVisible((current) => ({
-                        ...current,
-                        [key]: !current[key],
-                      }))
-                    }
+                    type="button"
+                    onClick={() => handleToggleColumn(key)}
                   >
                     <span>{labels[key]}</span>
                     {visible[key] ? <Check size={13} /> : <span />}
@@ -461,11 +438,7 @@ export function WalletTable({
                     <td>
                       <div className="pnl-cell">
                         <Sparkline values={sparkValues.slice(-14)} />
-                        <strong
-                          className={
-                            pnl7 >= 0 ? "positive" : "negative"
-                          }
-                        >
+                        <strong className={pnlColorClass(pnl7)}>
                           {signed(pnl7)}
                         </strong>
                       </div>
@@ -482,7 +455,7 @@ export function WalletTable({
                       <td>
                         <div className="win-rate-cell">
                           <span>
-                            {fmt(winRate, 1)}%
+                            {winRate !== null ? `${fmt(winRate, 1)}%` : "—"}
                           </span>
 
                           <div className="win-rate-bar">
@@ -490,7 +463,7 @@ export function WalletTable({
                               style={{
                                 width: `${Math.max(
                                   0,
-                                  Math.min(100, winRate),
+                                  Math.min(100, winRate ?? 0),
                                 )}%`,
                               }}
                             />
@@ -502,30 +475,23 @@ export function WalletTable({
 
                   {visible.winDays ? (
                     <td className="day-stat win-day-stat">
-                      {dayStats.wins}
+                      {dayStats.wins !== null ? dayStats.wins : "—"}
                     </td>
                   ) : null}
 
                   {visible.loseDays ? (
                     <td className="day-stat lose-day-stat">
-                      {dayStats.losses}
+                      {dayStats.losses !== null ? dayStats.losses : "—"}
                     </td>
                   ) : null}
-
                   {visible.pnl30 ? (
-                    <td
-                      className={
-                        pnl30 >= 0 ? "positive" : "negative"
-                      }
-                    >
+                    <td className={pnlColorClass(pnl30)}>
                       {signed(pnl30)}
                     </td>
                   ) : null}
 
                   {visible.pnlAll ? (
-                    <td
-                      className={pnlAll >= 0 ? "positive" : "negative"}
-                    >
+                    <td className={pnlColorClass(pnlAll)}>
                       <strong>{signed(pnlAll)}</strong>
                     </td>
                   ) : null}
@@ -533,9 +499,7 @@ export function WalletTable({
                   {visible.positions ? (
                     <td className="numeric">
                       <strong>
-                        {wallet.total_lp !== null && wallet.total_lp !== undefined
-                          ? wallet.total_lp
-                          : (wallet.fabriq?.stats?.totalPositions ?? "—")}
+                        {walletPositions(wallet) ?? "—"}
                       </strong>
                       <small>
                         {wallet.total_lp_7d !== null && wallet.total_lp_7d !== undefined
@@ -549,7 +513,7 @@ export function WalletTable({
                   ) : null}
 
                   {visible.walletAge ? (
-                    <td className="numeric">{walletAge(wallet.first_activity)}</td>
+                    <td className="numeric">{walletAge(walletEffectiveFirstActivity(wallet))}</td>
                   ) : null}
 
                   {visible.age ? (
@@ -559,18 +523,10 @@ export function WalletTable({
                   {visible.ev ? (
                     <td
                       className={
-                        wallet.expected_value_native !== null &&
-                        wallet.expected_value_native !== undefined &&
-                        Number.isFinite(wallet.expected_value_native)
-                          ? wallet.expected_value_native >= 0 ? "positive" : "negative"
-                          : "numeric"
+                        pnlColorClass(wallet.expected_value_native) || "numeric"
                       }
                     >
-                      {wallet.expected_value_native !== null &&
-                      wallet.expected_value_native !== undefined &&
-                      Number.isFinite(wallet.expected_value_native)
-                        ? signed(wallet.expected_value_native)
-                        : "—"}
+                      {signed(wallet.expected_value_native)}
                     </td>
                   ) : null}
 
@@ -585,11 +541,7 @@ export function WalletTable({
                   ) : null}
 
                   {visible.monthly ? (
-                    <td
-                      className={
-                        monthlyPnl >= 0 ? "positive" : "negative"
-                      }
-                    >
+                    <td className={pnlColorClass(monthlyPnl)}>
                       {signed(monthlyPnl)}
                     </td>
                   ) : null}

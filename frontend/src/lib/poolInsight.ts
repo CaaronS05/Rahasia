@@ -269,3 +269,27 @@ export async function filterPoolTrades(
   }
   return response.json();
 }
+
+export function formatUsd(val: number | null | undefined): string {
+  if (val === null || val === undefined || typeof val !== "number" || !Number.isFinite(val)) {
+    return "—";
+  }
+  const normalized = Object.is(val, -0) ? 0 : val;
+  const sign = normalized > 0 ? "+" : normalized < 0 ? "-" : "";
+  const abs = Math.abs(normalized);
+  const formatted = new Intl.NumberFormat("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(abs);
+  return `${sign}$${formatted}`;
+}
+
+export function formatPct(val: number | null | undefined): string {
+  if (val === null || val === undefined || typeof val !== "number" || !Number.isFinite(val)) {
+    return "—";
+  }
+  const normalized = Object.is(val, -0) ? 0 : val;
+  const sign = normalized > 0 ? "+" : normalized < 0 ? "-" : "";
+  const abs = Math.abs(normalized);
+  return `${sign}${abs.toFixed(2)}%`;
+}

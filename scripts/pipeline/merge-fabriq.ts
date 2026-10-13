@@ -5,16 +5,17 @@ import {
 } from "node:fs/promises";
 
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 type JsonObject = Record<string, any>;
 
-const CANONICAL_PATH = path.resolve(
-    "data/master/wallets-fabriq.json",
-);
+const CANONICAL_PATH = process.env.FABRIQ_CANONICAL_PATH
+    ? path.resolve(process.env.FABRIQ_CANONICAL_PATH)
+    : path.resolve("data/master/wallets-fabriq.json");
 
-const FABRIQ_PATH = path.resolve(
-    "data/raw/fabriq/fabriq-enriched.json",
-);
+const FABRIQ_PATH = process.env.FABRIQ_INPUT_PATH
+    ? path.resolve(process.env.FABRIQ_INPUT_PATH)
+    : path.resolve("data/raw/fabriq/fabriq-enriched.json");
 
 function isObject(
     value: unknown,
@@ -142,6 +143,7 @@ function mergeNonDestructive(
 
     for (const [k, v] of Object.entries(incomingFabriq)) {
         if (k === "calendars" || k === "calendar" || k === "month") continue;
+        if (k === "fetchedAt" && parseValidTimestamp(v) === null) continue;
         if (!(k in merged)) {
             merged[k] = v;
         }
@@ -197,24 +199,38 @@ function mergeNewerSnapshot(
     return {
         ...existingFabriq,
         ...incomingFabriq,
+        ...(isObject(existingFabriq.stats) && isObject(incomingFabriq.stats)
+            ? { stats: { ...existingFabriq.stats, ...incomingFabriq.stats } }
+            : isObject(existingFabriq.stats) && !isObject(incomingFabriq.stats)
+                ? { stats: existingFabriq.stats }
+                : {}),
         calendars: mergedCalendars,
     };
 }
 
-async function main() {
-    const { dryRun } = parseCliArgs();
+function mergeIncomingFabriq(
+    existingIncoming: JsonObject,
+    nextIncoming: JsonObject,
+): JsonObject {
+    const prevTs = parseValidTimestamp(existingIncoming.fetchedAt);
+    const nextTs = parseValidTimestamp(nextIncoming.fetchedAt);
 
-    if (!dryRun) {
-        console.log("\nMERGE FABRIQ DATA");
-        console.log("=================");
+    if (prevTs !== null && nextTs !== null) {
+        if (nextTs > prevTs) {
+            return mergeNewerSnapshot(existingIncoming, nextIncoming);
+        }
+        return mergeNonDestructive(existingIncoming, nextIncoming);
     }
+    if (prevTs === null && nextTs !== null) {
+        return mergeNewerSnapshot(existingIncoming, nextIncoming);
+    }
+    return mergeNonDestructive(existingIncoming, nextIncoming);
+}
 
-    const [canonical, fabriqRaw] =
-        await Promise.all([
-            loadJson(CANONICAL_PATH),
-            loadJson(FABRIQ_PATH),
-        ]);
-
+export function mergeFabriqPayloads(
+    canonical: unknown,
+    fabriqRaw: unknown,
+) {
     if (!isObject(canonical)) {
         throw new Error(
             'Canonical file root is not an object.',
@@ -261,10 +277,18 @@ async function main() {
 
         incomingOk++;
         const trimmedOwner = owner.trim();
-        incomingFabriqByOwner.set(
-            trimmedOwner,
-            row.fabriq,
-        );
+        const prevIncoming = incomingFabriqByOwner.get(trimmedOwner);
+        if (prevIncoming) {
+            incomingFabriqByOwner.set(
+                trimmedOwner,
+                mergeIncomingFabriq(prevIncoming, row.fabriq),
+            );
+        } else {
+            incomingFabriqByOwner.set(
+                trimmedOwner,
+                row.fabriq,
+            );
+        }
     }
 
     const canonicalBefore = canonical.wallets.length;
@@ -339,13 +363,10 @@ async function main() {
         }
 
         const updatedWallet: JsonObject = {
+            ...existingWallet,
             owner: existingWallet.owner,
             fabriq: newFabriqPayload,
         };
-
-        if (existingWallet._local !== undefined) {
-            updatedWallet._local = existingWallet._local;
-        }
 
         if (deepEqual(existingWallet, updatedWallet)) {
             unchanged++;
@@ -412,71 +433,113 @@ async function main() {
     }
 
     const outputPayload = {
+        ...canonical,
         version: canonical.version || "v1",
         updatedAt: nextUpdatedAt,
         walletCount: sortedWallets.length,
         wallets: sortedWallets,
     };
 
+    return {
+        incomingOk,
+        incomingUnique: incomingFabriqByOwner.size,
+        canonicalBefore,
+        added,
+        updated,
+        unchanged,
+        staleSkipped,
+        sameTimestamp,
+        timestampUnsafe,
+        timestampAmbiguous,
+        canonicalAfter,
+        isContentChanged,
+        outputPayload,
+    };
+}
+
+async function main() {
+    const { dryRun } = parseCliArgs();
+
+    if (!dryRun) {
+        console.log("\nMERGE FABRIQ DATA");
+        console.log("=================");
+    }
+
+    const [canonical, fabriqRaw] =
+        await Promise.all([
+            loadJson(CANONICAL_PATH),
+            loadJson(FABRIQ_PATH),
+        ]);
+
+    const result = mergeFabriqPayloads(canonical, fabriqRaw);
+
     if (dryRun) {
         console.log("\nFABRIQ CANONICAL MERGE DRY RUN\n");
-        console.log(`INCOMING OK:`);
-        console.log(incomingOk);
+        console.log(`INPUT PATH:`);
+        console.log(FABRIQ_PATH);
+        console.log(`\nINCOMING UNIQUE:`);
+        console.log(result.incomingUnique);
+        console.log(`\nINCOMING OK:`);
+        console.log(result.incomingOk);
         console.log(`\nCANONICAL BEFORE:`);
-        console.log(canonicalBefore);
+        console.log(result.canonicalBefore);
         console.log(`\nADDED:`);
-        console.log(added);
+        console.log(result.added);
         console.log(`\nUPDATED:`);
-        console.log(updated);
+        console.log(result.updated);
         console.log(`\nUNCHANGED:`);
-        console.log(unchanged);
+        console.log(result.unchanged);
         console.log(`\nSTALE SKIPPED:`);
-        console.log(staleSkipped);
+        console.log(result.staleSkipped);
         console.log(`\nSAME TIMESTAMP:`);
-        console.log(sameTimestamp);
+        console.log(result.sameTimestamp);
         console.log(`\nTIMESTAMP UNSAFE:`);
-        console.log(timestampUnsafe);
+        console.log(result.timestampUnsafe);
         console.log(`\nTIMESTAMP AMBIGUOUS:`);
-        console.log(timestampAmbiguous);
+        console.log(result.timestampAmbiguous);
         console.log(`\nCANONICAL AFTER:`);
-        console.log(canonicalAfter);
+        console.log(result.canonicalAfter);
         console.log(`\nWALLETS-MASTER WRITTEN:`);
         console.log("NO");
         return;
     }
 
-    if (isContentChanged) {
-        const tempPath = `${CANONICAL_PATH}.tmp`;
+    if (result.isContentChanged) {
+        const tempPath = `${CANONICAL_PATH}.tmp.${process.pid}.${Date.now()}`;
         await writeFile(
             tempPath,
-            JSON.stringify(outputPayload, null, 2) + "\n",
+            JSON.stringify(result.outputPayload, null, 2) + "\n",
             "utf8",
         );
         await rename(tempPath, CANONICAL_PATH);
     }
 
-    console.log(`Incoming OK     : ${incomingOk}`);
-    console.log(`Canonical before: ${canonicalBefore}`);
-    console.log(`Added           : ${added}`);
-    console.log(`Updated         : ${updated}`);
-    console.log(`Unchanged       : ${unchanged}`);
-    console.log(`Stale skipped   : ${staleSkipped}`);
-    console.log(`Same timestamp  : ${sameTimestamp}`);
-    console.log(`Timestamp unsafe: ${timestampUnsafe}`);
-    console.log(`Timestamp ambig : ${timestampAmbiguous}`);
-    console.log(`Canonical after : ${canonicalAfter}`);
+    console.log(`Input path      : ${FABRIQ_PATH}`);
+    console.log(`Incoming OK     : ${result.incomingOk}`);
+    console.log(`Incoming unique : ${result.incomingUnique}`);
+    console.log(`Canonical before: ${result.canonicalBefore}`);
+    console.log(`Added           : ${result.added}`);
+    console.log(`Updated         : ${result.updated}`);
+    console.log(`Unchanged       : ${result.unchanged}`);
+    console.log(`Stale skipped   : ${result.staleSkipped}`);
+    console.log(`Same timestamp  : ${result.sameTimestamp}`);
+    console.log(`Timestamp unsafe: ${result.timestampUnsafe}`);
+    console.log(`Timestamp ambig : ${result.timestampAmbiguous}`);
+    console.log(`Canonical after : ${result.canonicalAfter}`);
     console.log(`Output          : ${CANONICAL_PATH}`);
-    console.log(`Status          : ${isContentChanged ? "updated" : "byte-identical (preserved)"}`);
+    console.log(`Status          : ${result.isContentChanged ? "updated" : "byte-identical (preserved)"}`);
 }
 
-main().catch((error) => {
-    console.error("\nMERGE FABRIQ FAILED");
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+    main().catch((error) => {
+        console.error("\nMERGE FABRIQ FAILED");
 
-    console.error(
-        error instanceof Error
-            ? error.stack || error.message
-            : error,
-    );
+        console.error(
+            error instanceof Error
+                ? error.stack || error.message
+                : error,
+        );
 
-    process.exitCode = 1;
-});
+        process.exitCode = 1;
+    });
+}

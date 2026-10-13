@@ -202,14 +202,14 @@ export function PortfolioCalendar({
           <span>
             Win Days:{" "}
             <strong className="positive">
-              {winDays}
+              {entries.length === 0 ? "—" : winDays}
             </strong>
           </span>
 
           <span>
             Lose Days:{" "}
             <strong className="negative">
-              {loseDays}
+              {entries.length === 0 ? "—" : loseDays}
             </strong>
           </span>
 

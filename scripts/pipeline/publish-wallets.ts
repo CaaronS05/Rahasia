@@ -340,15 +340,22 @@ interface FabriqFile {
     [key: string]: unknown;
 }
 
+export interface PublishOptions {
+    outputPath?: string;
+    dryRun?: boolean;
+}
+
 export interface PublishResult {
     masterCount: number;
     poolRegistryCount: number;
     publishedCount: number;
     missingFabriqCount: number;
     publishedAt: string;
+    targetPath?: string;
+    dryRun?: boolean;
 }
 
-export async function publishWallets(): Promise<PublishResult> {
+export async function publishWallets(options: PublishOptions = {}): Promise<PublishResult> {
     console.log("\nPUBLISH WALLET DATA");
     console.log("===================");
 
@@ -554,35 +561,42 @@ export async function publishWallets(): Promise<PublishResult> {
         wallets: publishedWallets,
     };
 
-    await mkdir(
-        path.dirname(FRONTEND_PATH),
-        { recursive: true },
-    );
+    const targetPath = options.outputPath
+        ? path.resolve(options.outputPath)
+        : (process.env.PUBLISH_OUTPUT_PATH ? path.resolve(process.env.PUBLISH_OUTPUT_PATH) : FRONTEND_PATH);
+    const isDryRun = Boolean(options.dryRun);
 
-    const tempPath = `${FRONTEND_PATH}.tmp.${Date.now()}`;
+    if (!isDryRun) {
+        await mkdir(
+            path.dirname(targetPath),
+            { recursive: true },
+        );
 
-    await writeFile(
-        tempPath,
-        JSON.stringify(
-            publishedPayload,
-            null,
-            2,
-        ),
-        "utf8",
-    );
+        const tempPath = `${targetPath}.tmp.${Date.now()}`;
 
-    await rename(
-        tempPath,
-        FRONTEND_PATH,
-    );
+        await writeFile(
+            tempPath,
+            JSON.stringify(
+                publishedPayload,
+                null,
+                2,
+            ),
+            "utf8",
+        );
+
+        await rename(
+            tempPath,
+            targetPath,
+        );
+    }
 
     console.log(`Source Master : ${MASTER_PATH} (${masterWallets.length})`);
     console.log(`Source Pool   : ${POOL_REGISTRY_PATH} (${poolWallets.length})`);
     console.log(`Fabriq Store  : ${FABRIQ_PATH} (${fabriqByOwner.size})`);
-    console.log(`Target File   : ${FRONTEND_PATH}`);
+    console.log(`Target File   : ${targetPath}${isDryRun ? " (DRY RUN - skipped write)" : ""}`);
     console.log(`Total Wallets : ${publishedWallets.length} (Master: ${masterWallets.length}, Pool-only: ${poolOnlyCount})`);
     console.log(`Missing Fabriq: ${missingFabriqCount}`);
-    console.log("Status        : published successfully");
+    console.log(`Status        : ${isDryRun ? "dry-run completed" : "published successfully"}`);
 
     return {
         masterCount: masterWallets.length,
@@ -590,11 +604,38 @@ export async function publishWallets(): Promise<PublishResult> {
         publishedCount: publishedWallets.length,
         missingFabriqCount,
         publishedAt,
+        targetPath,
+        dryRun: isDryRun,
     };
+}
+function parseCliArgs(): PublishOptions {
+    const args = process.argv.slice(2);
+    let outputPath: string | undefined;
+    let dryRun = false;
+
+    for (let i = 0; i < args.length; i++) {
+        const arg = args[i];
+        if (arg === "--dry-run") {
+            dryRun = true;
+        } else if (arg === "--output" || arg === "-o") {
+            const next = args[++i];
+            if (!next) {
+                throw new Error("Missing path argument after --output / -o");
+            }
+            outputPath = next;
+        } else if (arg.startsWith("--output=")) {
+            outputPath = arg.slice("--output=".length);
+        } else {
+            throw new Error(`Unknown argument: ${arg}`);
+        }
+    }
+
+    return { outputPath, dryRun };
 }
 
 async function main() {
-    await publishWallets();
+    const options = parseCliArgs();
+    await publishWallets(options);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

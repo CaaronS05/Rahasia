@@ -2,13 +2,7 @@ import { Search, Star } from "lucide-react";
 import { useMemo, useState } from "react";
 import { WalletTable, type WalletSortKey } from "../components/WalletTable";
 import type { Wallet } from "../types";
-import {
-  walletAllTimePnl,
-  walletMonthlyPnl,
-  walletPnl30d,
-  walletPnl7d,
-  walletWinRatePercent,
-} from "../lib/walletMetrics";
+import { sortWallets } from "../lib/walletMetrics";
 
 type Props = {
   wallets: Wallet[];
@@ -17,52 +11,6 @@ type Props = {
   onOpenWallet: (wallet: Wallet) => void;
 };
 
-function sortValue(wallet: Wallet, key: WalletSortKey): string | number {
-  switch (key) {
-    case "wallet": return wallet.owner;
-    case "shortlist": return wallet.intelligenceV1?.shortlisted ? 1 : 0;
-    case "quality": return wallet.intelligenceV1?.qualityScore ?? -1;
-    case "risk": return wallet.intelligenceV1?.riskScore ?? -1;
-    case "confidence": return wallet.intelligenceV1?.confidenceScore ?? -1;
-    case "style": return wallet.intelligenceV1?.style ?? "";
-    case "pnl7":
-      return walletPnl7d(wallet);
-    case "win":
-      return walletWinRatePercent(wallet);
-    case "winDays": {
-      const dayStats =
-        wallet.fabriq?.stats?.dayWinUsd ??
-        wallet.fabriq?.stats?.dayWinSol;
-
-      return Number(
-        dayStats?.wins ?? 0,
-      );
-    }
-
-    case "loseDays": {
-      const dayStats =
-        wallet.fabriq?.stats?.dayWinUsd ??
-        wallet.fabriq?.stats?.dayWinSol;
-
-      return Number(
-        dayStats?.losses ?? 0,
-      );
-    }
-    case "pnl30":
-      return walletPnl30d(wallet);
-    case "pnlAll":
-      return walletAllTimePnl(wallet);
-    case "positions": return wallet.total_lp;
-    case "walletAge": return Date.now() - new Date(wallet.first_activity).getTime();
-    case "age": return wallet.avg_age_hour;
-    case "ev": return wallet.expected_value_native;
-    case "invested": return wallet.avg_inflow_native;
-    case "monthly":
-      return walletMonthlyPnl(wallet);
-    case "fees": return wallet.total_fee_native;
-    case "last": return new Date(wallet.last_activity).getTime();
-  }
-}
 
 export function TrackPage({
   wallets,
@@ -76,27 +24,12 @@ export function TrackPage({
 
   const rows = useMemo(() => {
     const needle = search.trim().toLowerCase();
-
-    return wallets
-      .filter(
-        (wallet) =>
-          trackedOwners.has(wallet.owner) &&
-          (!needle || wallet.owner.toLowerCase().includes(needle)),
-      )
-      .sort((a, b) => {
-        const av = sortValue(a, sortKey);
-        const bv = sortValue(b, sortKey);
-
-        if (typeof av === "string" && typeof bv === "string") {
-          return sortDir === "asc"
-            ? av.localeCompare(bv)
-            : bv.localeCompare(av);
-        }
-
-        return sortDir === "asc"
-          ? Number(av) - Number(bv)
-          : Number(bv) - Number(av);
-      });
+    const filtered = wallets.filter(
+      (wallet) =>
+        trackedOwners.has(wallet.owner) &&
+        (!needle || wallet.owner.toLowerCase().includes(needle)),
+    );
+    return sortWallets(filtered, sortKey, sortDir);
   }, [wallets, trackedOwners, search, sortKey, sortDir]);
 
   function handleSort(key: WalletSortKey) {

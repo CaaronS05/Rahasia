@@ -18,6 +18,19 @@ export type PnlPoint = {
   cumulative_pnl_native: number;
 };
 
+export type ChartTimeframe = "7D" | "30D" | "ALL" | "7d" | "30d" | "all";
+
+export type NormalizedDailyPnlPoint = {
+  date: string;
+  pnl: number;
+};
+
+export type CumulativePnlPoint = {
+  date: string;
+  dailyPnl: number;
+  cumulativePnl: number;
+};
+
 export type FabriqDailyPoint = {
   date: string;
   pnlSol: number;
@@ -33,11 +46,11 @@ export type FabriqDerived = {
   asOfDate: string;
   currentMonth: string;
 
-  pnl7dSol: number;
-  pnl30dSol: number;
-  monthlyPnlSol: number;
+  pnl7dSol?: number | null;
+  pnl30dSol?: number | null;
+  monthlyPnlSol?: number | null;
 
-  allTimePnlSol: number | null;
+  allTimePnlSol?: number | null;
 
   daily: FabriqDailyPoint[];
 };

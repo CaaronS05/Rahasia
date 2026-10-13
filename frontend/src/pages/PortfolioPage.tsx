@@ -24,6 +24,16 @@ import {
   type SingleWalletIntelligenceResult,
 } from "../lib/walletIntelligenceControl";
 import { fmt } from "../lib/format";
+import {
+  formatNativeWinRate,
+  formatNumberMetric as number,
+  formatPercentMetric as percent,
+  formatSolPnl,
+  formatUsdMetric as usd,
+  pnlColorClass,
+  resolveReferenceDate,
+  toFiniteNumber,
+} from "../lib/walletMetrics";
 import { PortfolioCalendar } from "../components/portfolio/PortfolioCalendar";
 import {
   CumulativePnlChart,
@@ -72,6 +82,10 @@ function formatHumanErrorSummary(err: string): string {
   return firstLine.length > 120 ? `${firstLine.slice(0, 117)}...` : firstLine;
 }
 
+import { PORTFOLIO_TAB_ITEMS } from "../lib/navigation";
+export { PORTFOLIO_TAB_ITEMS };
+
+
 
 type WalletWithFabriq = Wallet & {
   fabriq?: {
@@ -93,31 +107,20 @@ type Props = {
   onBack: () => void;
   isTracked: boolean;
   onToggleTrack: (owner: string) => void;
+  referenceDate?: string;
 };
 
-function usd(value: unknown, digits = 0) {
-  const number = Number(value);
-  if (!Number.isFinite(number)) return "—";
+function clampPercent(value: unknown) {
+  const parsed = toFiniteNumber(value);
 
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-    maximumFractionDigits: digits,
-  }).format(number);
-}
+  if (parsed === null) {
+    return 0;
+  }
 
-function percent(value: unknown) {
-  const number = Number(value);
-  if (!Number.isFinite(number)) return "—";
-  return `${number.toFixed(2)}%`;
-}
-
-function number(value: unknown, digits = 2) {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return "—";
-  return parsed.toLocaleString("en-US", {
-    maximumFractionDigits: digits,
-  });
+  return Math.max(
+    0,
+    Math.min(100, parsed),
+  );
 }
 
 function shortWallet(address: string) {
@@ -140,18 +143,6 @@ function formatStyleDisplay(style?: string | null): string {
 }
 
 
-function clampPercent(value: unknown) {
-  const parsed = Number(value);
-
-  if (!Number.isFinite(parsed)) {
-    return 0;
-  }
-
-  return Math.max(
-    0,
-    Math.min(100, parsed),
-  );
-}
 
 function ratioShare(
   positiveValue: unknown,
@@ -202,9 +193,11 @@ export function PortfolioPage({
   onBack,
   isTracked,
   onToggleTrack,
+  referenceDate,
 }: Props) {
   const [search, setSearch] = useState(requestedAddress ?? "");
   const [tab, setTab] = useState("Overview");
+  const [chartTimeframe, setChartTimeframe] = useState<"7D" | "30D" | "ALL">("30D");
 
   const currentWallet = useMemo(() => {
     if (wallet) return wallet;
@@ -213,6 +206,17 @@ export function PortfolioPage({
     }
     return undefined;
   }, [wallet, requestedAddress, wallets]);
+
+  const effectiveReferenceDate = useMemo(() => {
+    if (referenceDate && /^\d{4}-\d{2}-\d{2}$/.test(referenceDate)) {
+      return referenceDate;
+    }
+    return resolveReferenceDate(
+      currentWallet?.fabriqDerived?.asOfDate
+        ? { derivedAsOfDate: currentWallet.fabriqDerived.asOfDate }
+        : null
+    );
+  }, [referenceDate, currentWallet?.fabriqDerived?.asOfDate]);
   // Single-wallet intelligence state
   const [singleStatus, setSingleStatus] = useState<SingleWalletIntelligenceStatus | null>(null);
   const [singleResult, setSingleResult] = useState<SingleWalletIntelligenceResult | null>(null);
@@ -240,7 +244,7 @@ export function PortfolioPage({
 
   useEffect(() => {
     let isMounted = true;
-    let pollTimer: number | null = null;
+    let pollTimer: number | undefined;
 
     setSingleStatus(null);
     setSingleResult(null);
@@ -251,7 +255,7 @@ export function PortfolioPage({
     const owner = currentWallet?.owner;
     if (!owner) return;
 
-    async function checkStatusAndResult() {
+    const checkStatusAndResult = async () => {
       try {
         const status = await getSingleWalletStatus(owner);
         if (!isMounted || currentWallet?.owner !== owner) return;
@@ -260,14 +264,14 @@ export function PortfolioPage({
         if (status.status === "running") {
           setIsAnalyzing(true);
           setIsStopping(false);
-          pollTimer = setTimeout(checkStatusAndResult, 1500);
+          pollTimer = window.setTimeout(checkStatusAndResult, 1500);
           return;
         }
 
         if (status.status === "stopping") {
           setIsAnalyzing(false);
           setIsStopping(true);
-          pollTimer = setTimeout(checkStatusAndResult, 1500);
+          pollTimer = window.setTimeout(checkStatusAndResult, 1500);
           return;
         }
 
@@ -287,7 +291,7 @@ export function PortfolioPage({
       } catch {
         if (!isMounted) return;
       }
-    }
+    };
 
     void checkStatusAndResult();
 
@@ -566,17 +570,20 @@ export function PortfolioPage({
           </section>
 
           <nav className="portfolio-tabs">
-            {["Overview", "Position Analytics", "Active Positions", "Closed Positions", "Transactions", "Balances"].map(
-              (item) => (
-                <button
-                  key={item}
-                  className={tab === item ? "active" : ""}
-                  onClick={() => setTab(item)}
-                >
-                  {item}
-                </button>
-              ),
-            )}
+            {PORTFOLIO_TAB_ITEMS.map((item) => (
+              <button
+                key={item.id}
+                className={`${tab === item.id ? "active" : ""} ${!item.enabled ? "tab-disabled" : ""}`}
+                disabled={!item.enabled}
+                aria-disabled={!item.enabled}
+                title={!item.enabled ? "Unavailable (Coming soon)" : undefined}
+                onClick={() => {
+                  if (item.enabled) setTab(item.id);
+                }}
+              >
+                {item.label}
+              </button>
+            ))}
           </nav>
 
           {tab === "Position Analytics" ? (
@@ -606,12 +613,11 @@ export function PortfolioPage({
               <section className="portfolio-metrics-grid">
                 <article className="portfolio-metric">
                   <span>Net PnL ⓘ</span>
-                  <strong className={Number(metricData.netPnl) >= 0 ? "positive" : "negative"}>
+                  <strong className={pnlColorClass(metricData.netPnl)}>
                     {usd(metricData.netPnl)}
                   </strong>
-                  <small className="positive">
-                    {currentWallet.total_pnl_native >= 0 ? "+" : ""}
-                    {number(currentWallet.total_pnl_native, 2)} SOL all-time
+                  <small className={pnlColorClass(currentWallet.total_pnl_native)}>
+                    {formatSolPnl(currentWallet.total_pnl_native, 2, "SOL all-time")}
                   </small>
                   <TrendingUp size={18} />
                 </article>
@@ -621,7 +627,10 @@ export function PortfolioPage({
                   <strong>{percent(metricData.positionWin.percentage)}</strong>
                   <small>
                     {metricData.positionWin.wins ?? "—"} /{" "}
-                    {(metricData.positionWin.wins ?? 0) + (metricData.positionWin.losses ?? 0)} positions
+                    {metricData.positionWin.wins != null && metricData.positionWin.losses != null
+                      ? metricData.positionWin.wins + metricData.positionWin.losses
+                      : "—"}{" "}
+                    positions
                   </small>
                   <div
                     className="mini-gauge"
@@ -667,7 +676,10 @@ export function PortfolioPage({
                   <strong>{percent(metricData.dayWin.percentage)}</strong>
                   <small>
                     {metricData.dayWin.wins ?? "—"} /{" "}
-                    {(metricData.dayWin.wins ?? 0) + (metricData.dayWin.losses ?? 0)} days
+                    {metricData.dayWin.wins != null && metricData.dayWin.losses != null
+                      ? metricData.dayWin.wins + metricData.dayWin.losses
+                      : "—"}{" "}
+                    days
                   </small>
                   <div
                     className="mini-gauge"
@@ -966,36 +978,35 @@ export function PortfolioPage({
                         <div className="v1-perf-item">
                           <span>Total PnL (USD)</span>
                           <strong
-                            className={
-                              activeIntelligence.performance.totalPnl >= 0
-                                ? "positive"
-                                : "negative"
-                            }
+                            className={pnlColorClass(
+                              activeIntelligence.performance.totalPnl,
+                            )}
                           >
-                            {activeIntelligence.performance.totalPnl >= 0 ? "+" : ""}${fmt(activeIntelligence.performance.totalPnl, 2)} USD
+                            {toFiniteNumber(activeIntelligence.performance.totalPnl) !== null
+                              ? `${activeIntelligence.performance.totalPnl > 0 ? "+" : ""}$${fmt(activeIntelligence.performance.totalPnl, 2)} USD`
+                              : "—"}
                           </strong>
                         </div>
 
                         <div className="v1-perf-item">
                           <span>Profit Factor</span>
                           <strong>
-                            {fmt(activeIntelligence.performance.profitFactor, 2)}
+                            {toFiniteNumber(activeIntelligence.performance.profitFactor) !== null
+                              ? fmt(activeIntelligence.performance.profitFactor, 2)
+                              : "—"}
                           </strong>
                         </div>
 
                         <div className="v1-perf-item">
                           <span>Median Position PnL %</span>
                           <strong
-                            className={
-                              activeIntelligence.performance.medianPositionPnlPct >= 0
-                                ? "positive"
-                                : "negative"
-                            }
+                            className={pnlColorClass(
+                              activeIntelligence.performance.medianPositionPnlPct,
+                            )}
                           >
-                            {activeIntelligence.performance.medianPositionPnlPct >= 0
-                              ? "+"
-                              : ""}
-                            {fmt(activeIntelligence.performance.medianPositionPnlPct, 2)}%
+                            {toFiniteNumber(activeIntelligence.performance.medianPositionPnlPct) !== null
+                              ? `${activeIntelligence.performance.medianPositionPnlPct > 0 ? "+" : ""}${fmt(activeIntelligence.performance.medianPositionPnlPct, 2)}%`
+                              : "—"}
                           </strong>
                         </div>
 
@@ -1099,7 +1110,7 @@ export function PortfolioPage({
                     </div>
                     <div>
                       <span>Win Rate</span>
-                      <strong className="positive">
+                      <strong className={toFiniteNumber(metricData.positionWin.percentage) !== null ? "positive" : ""}>
                         {percent(metricData.positionWin.percentage)}
                       </strong>
                     </div>
@@ -1107,7 +1118,7 @@ export function PortfolioPage({
 
                   <div className="total-profit-strip">
                     <span>Total Profit</span>
-                    <strong className={Number(metricData.netPnl) >= 0 ? "positive" : "negative"}>
+                    <strong className={pnlColorClass(metricData.netPnl)}>
                       {usd(metricData.netPnl, 2)}
                     </strong>
                   </div>
@@ -1136,30 +1147,67 @@ export function PortfolioPage({
               <section className="portfolio-bottom-grid">
                 <article className="portfolio-panel chart-panel">
                   <div className="panel-title">
-                    <h3>Cumulative P&L</h3>
+                    <h3>Cumulative P&L (SOL)</h3>
                     <span>ⓘ</span>
                     <div className="segmented mini">
-                      <button>7D</button>
-                      <button className="active">30D</button>
-                      <button>ALL</button>
+                      <button
+                        className={chartTimeframe === "7D" ? "active" : ""}
+                        onClick={() => setChartTimeframe("7D")}
+                      >
+                        7D
+                      </button>
+                      <button
+                        className={chartTimeframe === "30D" ? "active" : ""}
+                        onClick={() => setChartTimeframe("30D")}
+                      >
+                        30D
+                      </button>
+                      <button
+                        className={chartTimeframe === "ALL" ? "active" : ""}
+                        onClick={() => setChartTimeframe("ALL")}
+                      >
+                        ALL
+                      </button>
                     </div>
                   </div>
-                  <CumulativePnlChart points={currentWallet.pnl_chart ?? []} />
+                  <CumulativePnlChart
+                    wallet={currentWallet}
+                    timeframe={chartTimeframe}
+                    referenceDate={effectiveReferenceDate}
+                  />
                 </article>
 
                 <article className="portfolio-panel chart-panel">
                   <div className="panel-title">
-                    <h3>Daily P&L</h3>
+                    <h3>Daily P&L (SOL)</h3>
                     <span>ⓘ</span>
                     <div className="segmented mini">
-                      <button>7D</button>
-                      <button className="active">30D</button>
-                      <button>ALL</button>
+                      <button
+                        className={chartTimeframe === "7D" ? "active" : ""}
+                        onClick={() => setChartTimeframe("7D")}
+                      >
+                        7D
+                      </button>
+                      <button
+                        className={chartTimeframe === "30D" ? "active" : ""}
+                        onClick={() => setChartTimeframe("30D")}
+                      >
+                        30D
+                      </button>
+                      <button
+                        className={chartTimeframe === "ALL" ? "active" : ""}
+                        onClick={() => setChartTimeframe("ALL")}
+                      >
+                        ALL
+                      </button>
                     </div>
                   </div>
-                  <DailyPnlChart points={currentWallet.pnl_chart ?? []} />
+                  <DailyPnlChart
+                    wallet={currentWallet}
+                    timeframe={chartTimeframe}
+                    referenceDate={effectiveReferenceDate}
+                  />
                 </article>
-
                 <article className="portfolio-panel weekly-panel">
                   <div className="panel-title">
                     <h3>Weekly Summary</h3>
@@ -1175,30 +1223,27 @@ export function PortfolioPage({
                     </div>
                     <div>
                       <span>Recent 7D</span>
-                      <strong className="positive">
-                        {currentWallet.total_pnl_native_7d >= 0 ? "+" : ""}
-                        {number(currentWallet.total_pnl_native_7d, 2)} SOL
+                      <strong className={pnlColorClass(currentWallet.total_pnl_native_7d)}>
+                        {formatSolPnl(currentWallet.total_pnl_native_7d, 2)}
                       </strong>
-                      <span>{percent(currentWallet.win_rate_native * 100)}</span>
-                      <span>{currentWallet.total_lp_7d}</span>
+                      <span>{formatNativeWinRate(currentWallet.win_rate_native)}</span>
+                      <span>{number(currentWallet.total_lp_7d, 0)}</span>
                     </div>
                     <div>
                       <span>30D</span>
-                      <strong className="positive">
-                        {currentWallet.total_pnl_native_30d >= 0 ? "+" : ""}
-                        {number(currentWallet.total_pnl_native_30d, 2)} SOL
+                      <strong className={pnlColorClass(currentWallet.total_pnl_native_30d)}>
+                        {formatSolPnl(currentWallet.total_pnl_native_30d, 2)}
                       </strong>
                       <span>—</span>
-                      <span>{currentWallet.total_lp_30d}</span>
+                      <span>{number(currentWallet.total_lp_30d, 0)}</span>
                     </div>
                     <div>
                       <span>All-time</span>
-                      <strong className="positive">
-                        {currentWallet.total_pnl_native >= 0 ? "+" : ""}
-                        {number(currentWallet.total_pnl_native, 2)} SOL
+                      <strong className={pnlColorClass(currentWallet.total_pnl_native)}>
+                        {formatSolPnl(currentWallet.total_pnl_native, 2)}
                       </strong>
-                      <span>{percent(currentWallet.win_rate_native * 100)}</span>
-                      <span>{currentWallet.total_lp}</span>
+                      <span>{formatNativeWinRate(currentWallet.win_rate_native)}</span>
+                      <span>{number(currentWallet.total_lp, 0)}</span>
                     </div>
                   </div>
                 </article>

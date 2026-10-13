@@ -20,7 +20,7 @@ export interface DataPipelineStatus extends PipelineSnapshot {
 
 export function useDataPipelineStatus(onDatasetRefreshed: () => void): DataPipelineStatus {
   const [snapshot, setSnapshot] = useState<PipelineSnapshot>({
-    fabriq: null, lpagent: null, poolScanner: null, intelligence: null,
+    fabriq: null, lpagent: null, poolScanner: null, poolRefresh: null, intelligence: null,
   });
   const mounted = useRef(false);
   const inFlight = useRef(false);

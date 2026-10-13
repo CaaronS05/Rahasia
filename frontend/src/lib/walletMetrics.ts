@@ -1,12 +1,113 @@
-import type { Wallet } from "../types";
+import type { PnlPoint, Wallet } from "../types";
 
 const DAY_MS =
     24 * 60 * 60 * 1000;
 
-function derivedOrFallback(
+export function toFiniteNumber(
+    value: unknown,
+): number | null {
+    if (
+        typeof value === "number" &&
+        Number.isFinite(value)
+    ) {
+        return value;
+    }
+
+    if (
+        typeof value === "string" &&
+        value.trim() !== ""
+    ) {
+        const parsed = Number(value);
+        if (Number.isFinite(parsed)) {
+            return parsed;
+        }
+    }
+
+    return null;
+}
+
+export function pnlColorClass(
+    value: unknown,
+): "positive" | "negative" | "" {
+    const parsed = toFiniteNumber(value);
+    if (parsed === null || parsed === 0) {
+        return "";
+    }
+    return parsed > 0 ? "positive" : "negative";
+}
+
+export function formatSolPnl(
+    value: unknown,
+    digits = 2,
+    suffix = "SOL",
+): string {
+    const parsed = toFiniteNumber(value);
+    if (parsed === null) {
+        return "—";
+    }
+    const normalized = Object.is(parsed, -0) ? 0 : parsed;
+    const sign = normalized > 0 ? "+" : "";
+    const formatted = normalized.toLocaleString("en-US", {
+        maximumFractionDigits: digits,
+    });
+    return suffix ? `${sign}${formatted} ${suffix}` : `${sign}${formatted}`;
+}
+
+export function formatUsdMetric(
+    value: unknown,
+    digits = 0,
+): string {
+    const parsed = toFiniteNumber(value);
+    if (parsed === null) {
+        return "—";
+    }
+    const normalized = Object.is(parsed, -0) ? 0 : parsed;
+    return new Intl.NumberFormat("en-US", {
+        style: "currency",
+        currency: "USD",
+        maximumFractionDigits: digits,
+    }).format(normalized);
+}
+
+export function formatPercentMetric(
+    value: unknown,
+): string {
+    const parsed = toFiniteNumber(value);
+    if (parsed === null) {
+        return "—";
+    }
+    const normalized = Object.is(parsed, -0) ? 0 : parsed;
+    return `${normalized.toFixed(2)}%`;
+}
+
+export function formatNumberMetric(
+    value: unknown,
+    digits = 2,
+): string {
+    const parsed = toFiniteNumber(value);
+    if (parsed === null) {
+        return "—";
+    }
+    const normalized = Object.is(parsed, -0) ? 0 : parsed;
+    return normalized.toLocaleString("en-US", {
+        maximumFractionDigits: digits,
+    });
+}
+
+export function formatNativeWinRate(
+    value: unknown,
+): string {
+    const parsed = toFiniteNumber(value);
+    if (parsed === null) {
+        return "—";
+    }
+    return formatPercentMetric(parsed * 100);
+}
+
+export function derivedOrFallback(
     derived: number | null | undefined,
     fallback: number | null | undefined,
-): number {
+): number | null {
     if (
         typeof derived === "number" &&
         Number.isFinite(derived)
@@ -21,12 +122,12 @@ function derivedOrFallback(
         return fallback;
     }
 
-    return 0;
+    return null;
 }
 
 export function walletPnl7d(
     wallet: Wallet,
-) {
+): number | null {
     return derivedOrFallback(
         wallet.fabriqDerived?.pnl7dSol,
         wallet.total_pnl_native_7d,
@@ -35,7 +136,7 @@ export function walletPnl7d(
 
 export function walletPnl30d(
     wallet: Wallet,
-) {
+): number | null {
     return derivedOrFallback(
         wallet.fabriqDerived?.pnl30dSol,
         wallet.total_pnl_native_30d,
@@ -44,7 +145,7 @@ export function walletPnl30d(
 
 export function walletAllTimePnl(
     wallet: Wallet,
-) {
+): number | null {
     return derivedOrFallback(
         wallet.fabriqDerived?.allTimePnlSol,
         wallet.total_pnl_native,
@@ -53,7 +154,7 @@ export function walletAllTimePnl(
 
 export function walletMonthlyPnl(
     wallet: Wallet,
-) {
+): number | null {
     return derivedOrFallback(
         wallet.fabriqDerived?.monthlyPnlSol,
         wallet.avg_monthly_pnl_native,
@@ -62,26 +163,48 @@ export function walletMonthlyPnl(
 
 export function walletWinRatePercent(
     wallet: Wallet,
-) {
+): number | null {
     const positionWin =
         wallet.fabriq?.stats?.positionWinUsd ??
         wallet.fabriq?.stats?.positionWinSol;
 
-    const derived =
-        Number(
-            positionWin?.percentage,
-        );
+    const derived = toFiniteNumber(
+        positionWin?.percentage,
+    );
 
-    if (
-        Number.isFinite(derived)
-    ) {
+    if (derived !== null) {
         return derived;
     }
 
-    return (
-        (wallet.win_rate_native ?? 0) *
-        100
+    const native = toFiniteNumber(
+        wallet.win_rate_native,
     );
+
+    if (native !== null) {
+        return native * 100;
+    }
+
+    return null;
+}
+
+export function walletWinDays(
+    wallet: Wallet,
+): number | null {
+    const dayStats =
+        wallet.fabriq?.stats?.dayWinUsd ??
+        wallet.fabriq?.stats?.dayWinSol;
+
+    return toFiniteNumber(dayStats?.wins);
+}
+
+export function walletLoseDays(
+    wallet: Wallet,
+): number | null {
+    const dayStats =
+        wallet.fabriq?.stats?.dayWinUsd ??
+        wallet.fabriq?.stats?.dayWinSol;
+
+    return toFiniteNumber(dayStats?.losses);
 }
 
 export function walletSparkline7d(
@@ -322,4 +445,384 @@ export function walletEffectiveFirstActivity(wallet: Wallet): string | null {
         return `${dates[0]}T00:00:00.000Z`;
     }
     return null;
+}
+
+export type WalletSortKey =
+    | "wallet"
+    | "shortlist"
+    | "quality"
+    | "risk"
+    | "confidence"
+    | "style"
+    | "pnl7"
+    | "win"
+    | "winDays"
+    | "loseDays"
+    | "pnl30"
+    | "pnlAll"
+    | "positions"
+    | "walletAge"
+    | "age"
+    | "ev"
+    | "invested"
+    | "monthly"
+    | "fees"
+    | "last";
+
+export type SortDirection = "asc" | "desc";
+export type WalletTimeframe = "7d" | "30d" | "all";
+
+export const WALLET_TABLE_PAGE_SIZE = 25;
+
+export function walletTimeframePnl(
+    wallet: Wallet,
+    timeframe: WalletTimeframe,
+): number | null {
+    if (timeframe === "30d") {
+        return walletPnl30d(wallet);
+    }
+    if (timeframe === "all") {
+        return walletAllTimePnl(wallet);
+    }
+    return walletPnl7d(wallet);
+}
+
+export function defaultSortKeyForTimeframe(
+    timeframe: WalletTimeframe,
+): WalletSortKey {
+    if (timeframe === "30d") return "pnl30";
+    if (timeframe === "all") return "pnlAll";
+    return "pnl7";
+}
+
+export function resolveSortKeyForTimeframeChange(
+    currentSortKey: WalletSortKey,
+    nextTimeframe: WalletTimeframe,
+): WalletSortKey {
+    if (
+        currentSortKey === "pnl7" ||
+        currentSortKey === "pnl30" ||
+        currentSortKey === "pnlAll"
+    ) {
+        return defaultSortKeyForTimeframe(nextTimeframe);
+    }
+    return currentSortKey;
+}
+
+export function walletPositions(
+    wallet: Wallet,
+): number | null {
+    return derivedOrFallback(
+        toFiniteNumber(wallet.total_lp),
+        toFiniteNumber(wallet.fabriq?.stats?.totalPositions),
+    );
+}
+export function walletTimeframeLp(
+    wallet: Wallet,
+    timeframe: "7d" | "30d" | "all" | string,
+): number | null {
+    switch (timeframe) {
+        case "7d":
+            return toFiniteNumber(wallet.total_lp_7d);
+        case "30d":
+            return toFiniteNumber(wallet.total_lp_30d);
+        case "all":
+            return walletPositions(wallet);
+        default:
+            return toFiniteNumber(wallet.total_lp_7d);
+    }
+}
+
+
+export function walletAgeMs(
+    wallet: Wallet,
+    nowMs: number = Date.now(),
+): number | null {
+    const firstIso = walletEffectiveFirstActivity(wallet);
+    if (!firstIso) return null;
+    const ts = Date.parse(firstIso);
+    if (!Number.isFinite(ts) || ts <= 0) return null;
+    return Math.max(0, nowMs - ts);
+}
+
+export function walletLastActivityTimestamp(
+    wallet: Wallet,
+): number | null {
+    const lastIso = walletEffectiveLastActivity(wallet);
+    if (!lastIso) return null;
+    const ts = Date.parse(lastIso);
+    return Number.isFinite(ts) && ts > 0 ? ts : null;
+}
+
+export function walletSortValue(
+    wallet: Wallet,
+    key: WalletSortKey,
+    nowMs: number = Date.now(),
+): string | number | null {
+    switch (key) {
+        case "wallet":
+            return typeof wallet.owner === "string" && wallet.owner.trim() !== ""
+                ? wallet.owner.trim()
+                : null;
+        case "shortlist":
+            if (typeof wallet.intelligenceV1?.shortlisted !== "boolean") {
+                return null;
+            }
+            return wallet.intelligenceV1.shortlisted ? 1 : 0;
+        case "quality":
+            return toFiniteNumber(wallet.intelligenceV1?.qualityScore);
+        case "risk":
+            return toFiniteNumber(wallet.intelligenceV1?.riskScore);
+        case "confidence":
+            return toFiniteNumber(wallet.intelligenceV1?.confidenceScore);
+        case "style": {
+            const raw = wallet.intelligenceV1?.style;
+            return typeof raw === "string" && raw.trim() !== ""
+                ? raw.trim().toUpperCase()
+                : null;
+        }
+        case "pnl7":
+            return walletPnl7d(wallet);
+        case "win":
+            return walletWinRatePercent(wallet);
+        case "winDays":
+            return walletWinDays(wallet);
+        case "loseDays":
+            return walletLoseDays(wallet);
+        case "pnl30":
+            return walletPnl30d(wallet);
+        case "pnlAll":
+            return walletAllTimePnl(wallet);
+        case "positions":
+            return walletPositions(wallet);
+        case "walletAge":
+            return walletAgeMs(wallet, nowMs);
+        case "age":
+            return toFiniteNumber(wallet.avg_age_hour);
+        case "ev":
+            return toFiniteNumber(wallet.expected_value_native);
+        case "invested":
+            return toFiniteNumber(wallet.avg_inflow_native);
+        case "monthly":
+            return walletMonthlyPnl(wallet);
+        case "fees":
+            return toFiniteNumber(wallet.total_fee_native);
+        case "last":
+            return walletLastActivityTimestamp(wallet);
+    }
+}
+
+export function compareNullableNumbers(
+    a: number | null | undefined,
+    b: number | null | undefined,
+    dir: SortDirection = "desc",
+): number {
+    const na = toFiniteNumber(a);
+    const nb = toFiniteNumber(b);
+
+    if (na === null && nb === null) return 0;
+    if (na === null) return 1;
+    if (nb === null) return -1;
+
+    const valA = Object.is(na, -0) ? 0 : na;
+    const valB = Object.is(nb, -0) ? 0 : nb;
+
+    if (valA === valB) return 0;
+    return dir === "asc" ? valA - valB : valB - valA;
+}
+
+export function compareNullableStrings(
+    a: string | null | undefined,
+    b: string | null | undefined,
+    dir: SortDirection = "asc",
+): number {
+    const sa = typeof a === "string" && a.trim() !== "" ? a.trim() : null;
+    const sb = typeof b === "string" && b.trim() !== "" ? b.trim() : null;
+
+    if (sa === null && sb === null) return 0;
+    if (sa === null) return 1;
+    if (sb === null) return -1;
+
+    if (sa === sb) return 0;
+    return dir === "asc" ? sa.localeCompare(sb) : sb.localeCompare(sa);
+}
+
+export function compareWalletMetricValues(
+    a: Wallet,
+    b: Wallet,
+    sortKey: WalletSortKey,
+    sortDir: SortDirection = "desc",
+    nowMs: number = Date.now(),
+): number {
+    const av = walletSortValue(a, sortKey, nowMs);
+    const bv = walletSortValue(b, sortKey, nowMs);
+
+    if (sortKey === "wallet" || sortKey === "style") {
+        return compareNullableStrings(
+            av as string | null,
+            bv as string | null,
+            sortDir,
+        );
+    }
+
+    return compareNullableNumbers(
+        av as number | null,
+        bv as number | null,
+        sortDir,
+    );
+}
+
+export function compareWallets(
+    a: Wallet,
+    b: Wallet,
+    sortKey: WalletSortKey,
+    sortDir: SortDirection = "desc",
+    nowMs: number = Date.now(),
+): number {
+    const primary = compareWalletMetricValues(a, b, sortKey, sortDir, nowMs);
+    if (primary !== 0) return primary;
+
+    const ownerA = typeof a.owner === "string" ? a.owner : "";
+    const ownerB = typeof b.owner === "string" ? b.owner : "";
+    if (ownerA === ownerB) return 0;
+    return ownerA.localeCompare(ownerB);
+}
+
+export function sortWallets(
+    wallets: readonly Wallet[],
+    sortKey: WalletSortKey = "pnl7",
+    sortDir: SortDirection = "desc",
+    nowMs: number = Date.now(),
+): Wallet[] {
+    return [...wallets].sort((a, b) =>
+        compareWallets(a, b, sortKey, sortDir, nowMs),
+    );
+}
+
+export function paginateWallets<T>(
+    items: readonly T[],
+    page: number,
+    pageSize: number = WALLET_TABLE_PAGE_SIZE,
+): {
+    rows: T[];
+    safePage: number;
+    pageCount: number;
+} {
+    const safePageSize = Math.max(1, Math.floor(pageSize));
+    const pageCount = Math.max(1, Math.ceil(items.length / safePageSize));
+    const safePage = Math.min(Math.max(1, Math.floor(page)), pageCount);
+    const start = (safePage - 1) * safePageSize;
+    return {
+        rows: items.slice(start, start + safePageSize),
+        safePage,
+        pageCount,
+    };
+}
+
+export type ChartTimeframe = "7D" | "30D" | "ALL" | "7d" | "30d" | "all";
+
+export type NormalizedDailyPnlPoint = {
+    date: string;
+    pnl: number;
+};
+
+export type CumulativePnlPoint = {
+    date: string;
+    dailyPnl: number;
+    cumulativePnl: number;
+};
+
+function parsePointDate(raw: unknown): string | null {
+    if (typeof raw !== "string" || !raw.trim()) return null;
+    const match = raw.match(/^\d{4}-\d{2}-\d{2}/);
+    if (match) return match[0];
+    const ts = Date.parse(raw);
+    if (Number.isFinite(ts) && ts > 0) {
+        return new Date(ts).toISOString().slice(0, 10);
+    }
+    return null;
+}
+
+export function extractNormalizedDailyPnl(
+    source: Wallet | PnlPoint[] | unknown[] | undefined | null,
+    currency: "SOL" | "USD" = "SOL",
+): NormalizedDailyPnlPoint[] {
+    if (!source) return [];
+
+    let rawItems: unknown[] = [];
+    if (Array.isArray(source)) {
+        rawItems = source;
+    } else if (typeof source === "object" && source !== null) {
+        const w = source as Wallet;
+        if (Array.isArray(w.pnl_chart) && w.pnl_chart.length > 0) {
+            rawItems = w.pnl_chart;
+        } else if (Array.isArray(w.fabriqDerived?.daily) && w.fabriqDerived.daily.length > 0) {
+            rawItems = w.fabriqDerived.daily;
+        }
+    }
+
+    const byDate = new Map<string, NormalizedDailyPnlPoint>();
+
+    for (const item of rawItems) {
+        if (!item || typeof item !== "object") continue;
+        const record = item as Record<string, unknown>;
+
+        const date = parsePointDate(record.close_day ?? record.date);
+        if (!date) continue;
+
+        let rawValue: unknown;
+        if (currency === "SOL") {
+            rawValue = record.sum_native !== undefined ? record.sum_native : record.pnlSol;
+        } else {
+            rawValue = record.sum !== undefined ? record.sum : record.pnlUsd;
+        }
+
+        const pnl = toFiniteNumber(rawValue);
+        if (pnl === null) continue;
+
+        byDate.set(date, { date, pnl });
+    }
+
+    return Array.from(byDate.values()).sort((a, b) => a.date.localeCompare(b.date));
+}
+
+export function filterDailyPnlByTimeframe(
+    points: readonly NormalizedDailyPnlPoint[],
+    timeframe: ChartTimeframe = "30D",
+    referenceDate?: string,
+): NormalizedDailyPnlPoint[] {
+    const tf = String(timeframe).toUpperCase();
+    const ref = (referenceDate && /^\d{4}-\d{2}-\d{2}$/.test(referenceDate))
+        ? referenceDate
+        : resolveReferenceDate(null);
+
+    const start7d = shiftUtcDays(ref, -6);
+    const start30d = shiftUtcDays(ref, -29);
+
+    return points
+        .filter((point) => {
+            if (!point.date || point.date > ref) return false;
+            if (tf === "7D") {
+                return point.date >= start7d && point.date <= ref;
+            }
+            if (tf === "30D") {
+                return point.date >= start30d && point.date <= ref;
+            }
+            return point.date <= ref;
+        })
+        .sort((a, b) => a.date.localeCompare(b.date));
+}
+
+export function computePeriodCumulativePnl(
+    dailyPoints: readonly NormalizedDailyPnlPoint[],
+): CumulativePnlPoint[] {
+    let cumulative = 0;
+    return dailyPoints.map((point) => {
+        cumulative += point.pnl;
+        return {
+            date: point.date,
+            dailyPnl: point.pnl,
+            cumulativePnl: cumulative,
+        };
+    });
 }

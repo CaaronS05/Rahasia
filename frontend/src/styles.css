@@ -142,6 +142,31 @@ button {
 .nav-item.active svg {
   color: var(--green);
 }
+.nav-item.disabled,
+.nav-item:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+.nav-item.disabled:hover,
+.nav-item:disabled:hover {
+  background: transparent;
+  color: #aaa69f;
+  border-color: transparent;
+}
+
+.nav-item-badge {
+  margin-left: auto;
+  padding: 1px 5px;
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  background: #242320;
+  color: #7a7670;
+  border-radius: 3px;
+  letter-spacing: 0.04em;
+}
+
 
 .sidebar-spacer {
   flex: 1;
@@ -233,6 +258,13 @@ button {
   height: 2px;
   background: var(--green);
 }
+.top-nav button.top-nav-disabled,
+.top-nav button:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
 
 .topbar-right {
   display: flex;
@@ -415,6 +447,32 @@ button {
   color: #07110d;
   font-weight: 800;
 }
+
+.reset-filters-btn,
+.reset-filters-toolbar-btn {
+  height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 14px;
+  border: 1px solid #383530;
+  border-radius: 7px;
+  background: transparent;
+  color: #c4bfb7;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 120ms ease;
+}
+
+.reset-filters-btn:hover,
+.reset-filters-toolbar-btn:hover {
+  border-color: #f87171;
+  color: #f87171;
+  background: rgba(239, 68, 68, 0.08);
+}
+
 
 .metrics-row {
   display: grid;
@@ -601,6 +659,38 @@ button {
   box-shadow: 0 16px 40px rgba(0, 0, 0, .48);
   z-index: 20;
 }
+.columns-menu-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 3px 5px 6px;
+  margin-bottom: 5px;
+  border-bottom: 1px solid #2b2926;
+  font-size: 10px;
+  font-weight: 600;
+  color: #8c8880;
+  letter-spacing: 0.04em;
+}
+
+.columns-menu .columns-reset-btn {
+  width: auto;
+  height: auto;
+  padding: 2px 6px;
+  margin-bottom: 0;
+  border: 1px solid #35322e;
+  border-radius: 3px;
+  background: transparent;
+  color: #38bdf8;
+  font-size: 9px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.columns-menu .columns-reset-btn:hover {
+  background: #1f1e1b;
+  border-color: #38bdf8;
+}
+
 
 .columns-menu button {
   width: 100%;
@@ -1024,6 +1114,13 @@ button {
   height: 2px;
   background: var(--green);
 }
+.portfolio-tabs button.tab-disabled,
+.portfolio-tabs button:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
 
 .portfolio-empty {
   min-height: 320px;
@@ -1482,6 +1579,10 @@ button {
 
 .negative-bar {
   background: var(--red);
+}
+
+.zero-bar {
+  background: var(--muted);
 }
 
 .weekly-table {

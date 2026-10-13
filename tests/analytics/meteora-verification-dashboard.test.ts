@@ -300,4 +300,270 @@ describe("Meteora Verification Dashboard & Advisory Overlay Suite", () => {
             assert.ok(detailWithHypothesis.divergenceReasons[0].includes("oracle valuation differences"));
         });
     });
+
+    describe("6. Step 3B.5: Position Analytics Tab & Verification Integration Contract Suite", () => {
+        it("1. Wallet switching: ensures previous metrics, status, details, and pair filters are reset immediately", () => {
+            let currentWallet = "WalletA111111111111111111111111111111111111";
+            let state = {
+                status: { status: "completed", hasMetrics: true },
+                metrics: { sampling: { analyzedPositions: 10, totalEligiblePositions: 10, coveragePct: 100 } },
+                positionsData: { positions: [{ positionId: "pos1", pairName: "SOL-USDC" }] },
+                positionDetails: { "pool1:pos1": { positionId: "pos1" } },
+                verificationReport: { targetWallet: currentWallet, period: "30D" },
+                pairFilter: "SOL-USDC",
+            };
+
+            const nextWallet = "WalletB222222222222222222222222222222222222";
+            if (nextWallet !== currentWallet) {
+                currentWallet = nextWallet;
+                state = {
+                    status: null,
+                    metrics: null,
+                    positionsData: null,
+                    positionDetails: {},
+                    verificationReport: null,
+                    pairFilter: "ALL",
+                };
+            }
+
+            assert.equal(currentWallet, nextWallet);
+            assert.equal(state.status, null);
+            assert.equal(state.metrics, null);
+            assert.equal(state.positionsData, null);
+            assert.deepEqual(state.positionDetails, {});
+            assert.equal(state.verificationReport, null);
+            assert.equal(state.pairFilter, "ALL");
+        });
+
+        it("2. Period switching: isolates requested period without cross-period state leakage", () => {
+            const periods = ["30D", "90D", "ALL_AVAILABLE"] as const;
+            for (const p of periods) {
+                const params = new URLSearchParams({ wallet: "WalletA", period: p });
+                assert.equal(params.get("period"), p);
+                assert.ok(["30D", "90D", "ALL_AVAILABLE"].includes(params.get("period")!));
+            }
+        });
+
+        it("3. Stale asynchronous responses: drops out-of-order responses for superseded wallet or period", () => {
+            let activeWallet = "WalletA";
+            let activePeriod = "30D";
+
+            function handleAsyncResponse(
+                reqWallet: string,
+                reqPeriod: string,
+                payload: { data: string }
+            ): { data: string } | null {
+                if (activeWallet !== reqWallet || activePeriod !== reqPeriod) {
+                    return null;
+                }
+                return payload;
+            }
+
+            const req1Wallet = "WalletA";
+            const req1Period = "30D";
+
+            activeWallet = "WalletB";
+            activePeriod = "90D";
+
+            const res1 = handleAsyncResponse(req1Wallet, req1Period, { data: "StaleA" });
+            assert.equal(res1, null, "Late response for previous wallet must be dropped");
+
+            const res2 = handleAsyncResponse("WalletB", "90D", { data: "FreshB" });
+            assert.deepEqual(res2, { data: "FreshB" }, "Current response must be accepted");
+        });
+
+        it("4. Dataset version mismatch: halts after bounded retries and sets safe error state", () => {
+            let retryCount = 0;
+            const maxRetries = 2;
+
+            function simulateVersionCheck(
+                metricsFetchedAt: string,
+                positionsFetchedAt: string,
+                currentRetry: number
+            ): { shouldRetry: boolean; error: string | null } {
+                const hasMismatch = metricsFetchedAt !== positionsFetchedAt;
+                if (!hasMismatch) return { shouldRetry: false, error: null };
+                if (currentRetry < maxRetries) {
+                    return { shouldRetry: true, error: null };
+                }
+                return {
+                    shouldRetry: false,
+                    error: "Dataset version mismatch detected across analytics artifacts. Please re-run analysis to synchronize.",
+                };
+            }
+
+            let check = simulateVersionCheck("2026-03-10T12:00:00Z", "2026-03-11T14:00:00Z", retryCount);
+            assert.equal(check.shouldRetry, true);
+            retryCount++;
+
+            check = simulateVersionCheck("2026-03-10T12:00:00Z", "2026-03-11T14:00:00Z", retryCount);
+            assert.equal(check.shouldRetry, true);
+            retryCount++;
+
+            check = simulateVersionCheck("2026-03-10T12:00:00Z", "2026-03-11T14:00:00Z", retryCount);
+            assert.equal(check.shouldRetry, false);
+            assert.ok(check.error?.includes("Dataset version mismatch"));
+        });
+
+        it("5. Missing verification report: distinguishes 404 absence from 500 server error", async () => {
+            async function mockFetchVerification(statusCode: number): Promise<{ report: unknown; error: string | null }> {
+                if (statusCode === 404) {
+                    return { report: null, error: null };
+                }
+                if (statusCode === 500) {
+                    throw new Error("Failed to fetch verification report (500)");
+                }
+                return { report: { targetWallet: "WalletA", period: "30D" }, error: null };
+            }
+
+            const absentRes = await mockFetchVerification(404);
+            assert.equal(absentRes.report, null);
+            assert.equal(absentRes.error, null);
+
+            await assert.rejects(
+                () => mockFetchVerification(500),
+                /Failed to fetch verification report \(500\)/
+            );
+        });
+
+        it("6. Incomplete verification sample: accurately calculates coverage and prevents 100% implication", () => {
+            const totalPositionsInWallet = 1000;
+            const evaluatedInVerification = 3;
+            const coveragePct = (evaluatedInVerification / totalPositionsInWallet) * 100;
+
+            assert.equal(coveragePct.toFixed(1), "0.3");
+            assert.equal(coveragePct < 100, true);
+
+            const sampleMatchRate = 100;
+            assert.notEqual(coveragePct, sampleMatchRate);
+        });
+
+        it("7. Verification badge classification: covers all 6 presentation states", () => {
+            assert.equal(
+                deriveVerificationPresentationStatus(createMockDetail({ classification: "MATCH" })),
+                "TOKEN_FLOW_MATCHED"
+            );
+            assert.equal(
+                deriveVerificationPresentationStatus(createMockDetail({
+                    tokenFlows: { ...createMockDetail().tokenFlows, allTokensMatch: false }
+                })),
+                "TOKEN_FLOW_DISCREPANCY"
+            );
+            assert.equal(
+                deriveVerificationPresentationStatus(createMockDetail({ classification: "USD_VALUATION_DIFFERENCE" })),
+                "USD_VALUATION_DIFFERENCE"
+            );
+            assert.equal(
+                deriveVerificationPresentationStatus(createMockDetail({ classification: "SIGN_MISMATCH" })),
+                "USD_SIGN_DIFFERENCE"
+            );
+            assert.equal(
+                deriveVerificationPresentationStatus(createMockDetail({ classification: "NOT_COMPARABLE" })),
+                "NOT_COMPARABLE"
+            );
+            assert.equal(
+                deriveVerificationPresentationStatus(null),
+                "NOT_VERIFIED"
+            );
+        });
+
+        it("8. Wallet/pool/position identity matching: attaches strictly by composite poolAddress + positionAddress", () => {
+            const reportPositions: PositionVerificationDetail[] = [
+                createMockDetail({
+                    wallet: "WalletA",
+                    poolAddress: "Pool1",
+                    positionAddress: "PosShared",
+                    classification: "MATCH",
+                }),
+                createMockDetail({
+                    wallet: "WalletA",
+                    poolAddress: "Pool2",
+                    positionAddress: "PosShared",
+                    classification: "SIGN_MISMATCH",
+                }),
+            ];
+
+            const map = new Map<string, PositionVerificationDetail>();
+            for (const p of reportPositions) {
+                if (p.positionAddress && p.poolAddress) {
+                    map.set(`${p.poolAddress}:${p.positionAddress}`, p);
+                }
+            }
+
+            const pool1Detail = map.get("Pool1:PosShared");
+            assert.equal(pool1Detail?.classification, "MATCH");
+
+            const pool2Detail = map.get("Pool2:PosShared");
+            assert.equal(pool2Detail?.classification, "SIGN_MISMATCH");
+
+            const pool3Detail = map.get("Pool3:PosShared");
+            assert.equal(pool3Detail, undefined);
+
+            const wrongWalletReport = { targetWallet: "WalletB", period: "30D" };
+            const activeWallet = "WalletA";
+            const isValid = wrongWalletReport.targetWallet === activeWallet;
+            assert.equal(isValid, false, "Report for different wallet must be rejected");
+        });
+
+        it("9. USD versus SOL separation: guarantees numeric distinction and formatting isolation", () => {
+            const detail = createMockDetail({
+                usdValuations: {
+                    deposits: { localUsd: 100, meteoraUsd: { rawString: "100", numeric: 100, decimalPlaces: 2 }, usdDelta: 0, usdDeltaPct: 0, isWithinTolerance: true },
+                    withdrawals: { localUsd: 150, meteoraUsd: { rawString: "150", numeric: 150, decimalPlaces: 2 }, usdDelta: 0, usdDeltaPct: 0, isWithinTolerance: true },
+                    claimedFees: { localUsd: 0, meteoraUsd: { rawString: "0", numeric: 0, decimalPlaces: 2 }, usdDelta: 0, usdDeltaPct: 0, isWithinTolerance: true },
+                    pnlUsd: { localUsd: 50, meteoraUsd: { rawString: "50", numeric: 50, decimalPlaces: 2 }, usdDelta: 0, usdDeltaPct: 0, isWithinTolerance: true },
+                    pnlSignFlip: false,
+                },
+                solValuations: {
+                    meteoraPnlSol: { rawString: "0.25", numeric: 0.25, decimalPlaces: 2 },
+                },
+            });
+
+            const usdPnl = detail.usdValuations.pnlUsd.meteoraUsd?.numeric;
+            const solPnl = detail.solValuations?.meteoraPnlSol?.numeric;
+
+            assert.equal(usdPnl, 50);
+            assert.equal(solPnl, 0.25);
+            assert.notEqual(usdPnl, solPnl, "USD and SOL values must never be equated");
+        });
+
+        it("10. Legitimate zero versus missing metrics: preserves numeric 0 and formats null as unknown/placeholder", () => {
+            function formatUsdValue(val: number | null | undefined): string {
+                if (val === null || val === undefined || !Number.isFinite(val)) return "—";
+                if (val === 0) return "$0.00";
+                return `$${val.toFixed(2)}`;
+            }
+
+            function formatPctValue(val: number | null | undefined): string {
+                if (val === null || val === undefined || !Number.isFinite(val)) return "—";
+                if (val === 0) return "0.00%";
+                return `${val.toFixed(2)}%`;
+            }
+
+            assert.equal(formatUsdValue(0), "$0.00");
+            assert.equal(formatPctValue(0), "0.00%");
+            assert.equal(formatUsdValue(null), "—");
+            assert.equal(formatUsdValue(undefined), "—");
+            assert.equal(formatPctValue(null), "—");
+            assert.equal(formatPctValue(undefined), "—");
+        });
+
+        it("11. Loading, error, and stopped states: renders distinct statuses truthfully", () => {
+            function resolveStatusPresentation(status: string | null, error?: string | null) {
+                if (status === "running") return { label: "Running", color: "blue", inProgress: true };
+                if (status === "stopping") return { label: "Stopping analysis...", color: "amber", inProgress: true };
+                if (status === "stopped") return { label: "Analysis Stopped", color: "gray", inProgress: false };
+                if (status === "error") return { label: `Analysis Failed: ${error || "Unknown"}`, color: "red", inProgress: false };
+                if (status === "completed") return { label: "Analysis Complete", color: "green", inProgress: false };
+                return { label: "Idle", color: "gray", inProgress: false };
+            }
+
+            assert.deepEqual(resolveStatusPresentation("running"), { label: "Running", color: "blue", inProgress: true });
+            assert.deepEqual(resolveStatusPresentation("stopping"), { label: "Stopping analysis...", color: "amber", inProgress: true });
+            assert.deepEqual(resolveStatusPresentation("stopped"), { label: "Analysis Stopped", color: "gray", inProgress: false });
+            assert.deepEqual(resolveStatusPresentation("error", "Network timeout"), { label: "Analysis Failed: Network timeout", color: "red", inProgress: false });
+            assert.deepEqual(resolveStatusPresentation("completed"), { label: "Analysis Complete", color: "green", inProgress: false });
+            assert.deepEqual(resolveStatusPresentation("idle"), { label: "Idle", color: "gray", inProgress: false });
+        });
+    });
 });

@@ -200,6 +200,7 @@ export function PositionAnalytics({ walletAddress }: Props) {
   const [positionsData, setPositionsData] = useState<PositionsResponse | null>(null);
   const [assessment, setAssessment] = useState<MonitoringAssessmentResult | null>(null);
   const [verificationReport, setVerificationReport] = useState<MeteoraVerificationReport | null>(null);
+  const [verificationError, setVerificationError] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
@@ -225,6 +226,16 @@ export function PositionAnalytics({ walletAddress }: Props) {
   activeWalletRef.current = walletAddress;
   activePeriodRef.current = period;
 
+  const prevWalletRef = useRef(walletAddress);
+  useEffect(() => {
+    if (prevWalletRef.current !== walletAddress) {
+      prevWalletRef.current = walletAddress;
+      setPairFilter("ALL");
+      setSearchQuery("");
+      setWinLossFilter("ALL");
+    }
+  }, [walletAddress]);
+
   const getPositionKey = (poolAddress: string, positionId: string) => `${poolAddress}:${positionId}`;
   const copyToClipboard = (key: string, text: string) => {
     navigator.clipboard.writeText(text);
@@ -233,41 +244,57 @@ export function PositionAnalytics({ walletAddress }: Props) {
   };
 
   // Load existing metrics and status for current wallet & period
-  const loadData = useCallback(async (wallet: string, p: AnalyticsPeriod, silent = false) => {
+  const loadData = useCallback(async (wallet: string, p: AnalyticsPeriod, silent = false, retryCount = 0) => {
     if (!silent) setLoading(true);
     setActionError(null);
 
     try {
-      const [st, m, pos, assess, verif] = await Promise.all([
-        getPositionAnalyticsStatus(wallet, p).catch(() => null),
+      let st: PositionAnalyticsStatus | null = null;
+      try {
+        st = await getPositionAnalyticsStatus(wallet, p);
+      } catch (err: unknown) {
+        if (activeWalletRef.current === wallet && activePeriodRef.current === p) {
+          setActionError(err instanceof Error ? `API request failed: ${err.message}` : "Failed to connect to control server");
+        }
+      }
+
+      const [m, pos, assess] = await Promise.all([
         getPositionMetrics(wallet, p).catch(() => null),
         getPositions(wallet, p).catch(() => null),
         getPositionAssessment(wallet, p).catch(() => null),
-        getMeteoraVerificationReport(wallet, p).catch(() => null),
       ]);
+
+      let verifReport: MeteoraVerificationReport | null = null;
+      let verifErr: string | null = null;
+      try {
+        verifReport = await getMeteoraVerificationReport(wallet, p);
+      } catch (err: unknown) {
+        verifErr = err instanceof Error ? err.message : "Failed to fetch verification report";
+      }
+
+      if (verifReport && (verifReport.targetWallet !== wallet || verifReport.period !== p)) {
+        verifErr = `Verification report identity mismatch: expected ${shortAddress(wallet)} (${p}), received ${shortAddress(verifReport.targetWallet)} (${verifReport.period}).`;
+        verifReport = null;
+      }
 
       if (activeWalletRef.current === wallet && activePeriodRef.current === p) {
         // Prevent frontend rendering of mixed versions if publication occurred between multiple requests
-        if (
-          m &&
-          pos &&
-          m.sourceDatasetFetchedAt &&
-          pos.fetchedAt &&
-          m.sourceDatasetFetchedAt !== pos.fetchedAt
-        ) {
-          loadData(wallet, p, true);
-          return;
-        }
+        const hasMismatch = Boolean(
+          (m && pos && m.sourceDatasetFetchedAt && pos.fetchedAt && m.sourceDatasetFetchedAt !== pos.fetchedAt) ||
+          (m && assess && m.sourceDatasetFetchedAt && assess.sourceDatasetFetchedAt && m.sourceDatasetFetchedAt !== assess.sourceDatasetFetchedAt)
+        );
 
-        if (
-          m &&
-          assess &&
-          m.sourceDatasetFetchedAt &&
-          assess.sourceDatasetFetchedAt &&
-          m.sourceDatasetFetchedAt !== assess.sourceDatasetFetchedAt
-        ) {
-          loadData(wallet, p, true);
-          return;
+        if (hasMismatch) {
+          if (retryCount < 2) {
+            await new Promise((resolve) => setTimeout(resolve, 500));
+            if (activeWalletRef.current === wallet && activePeriodRef.current === p) {
+              return loadData(wallet, p, true, retryCount + 1);
+            }
+            return;
+          } else {
+            setActionError("Dataset version mismatch detected across analytics artifacts. Please re-run analysis to synchronize.");
+            return;
+          }
         }
 
         const newVersion = pos?.fetchedAt || st?.lastAnalyzedAt || null;
@@ -280,7 +307,8 @@ export function PositionAnalytics({ walletAddress }: Props) {
         setMetrics(m);
         setPositionsData(pos);
         setAssessment(assess);
-        setVerificationReport(verif);
+        setVerificationReport(verifReport);
+        setVerificationError(verifErr);
       }
     } catch (err: unknown) {
       if (activeWalletRef.current === wallet && activePeriodRef.current === p) {
@@ -301,6 +329,11 @@ export function PositionAnalytics({ walletAddress }: Props) {
     setPositionDetails({});
     setAssessment(null);
     setVerificationReport(null);
+    setVerificationError(null);
+    setStatus(null);
+    setMetrics(null);
+    setPositionsData(null);
+    setActionError(null);
     currentDatasetVersionRef.current = null;
     loadData(walletAddress, period);
   }, [walletAddress, period, loadData]);
@@ -309,8 +342,7 @@ export function PositionAnalytics({ walletAddress }: Props) {
     const map = new Map<string, PositionVerificationDetail>();
     if (verificationReport?.positions) {
       for (const p of verificationReport.positions) {
-        if (p.positionAddress) {
-          map.set(p.positionAddress, p);
+        if (p.positionAddress && p.poolAddress) {
           map.set(`${p.poolAddress}:${p.positionAddress}`, p);
         }
       }
@@ -672,6 +704,15 @@ export function PositionAnalytics({ walletAddress }: Props) {
               <div className="disclaimer-text">
                 Performance metrics reflect observed closed positions only.
               </div>
+            </div>
+          </div>
+        ) : null}
+
+        {metrics && metrics.sampling?.totalEligiblePositions === 0 ? (
+          <div className="pa-notice-banner warning">
+            <Info size={16} />
+            <div>
+              <strong>No Eligible Closed DLMM Positions:</strong> This wallet has no closed DLMM positions recorded for the {period} period.
             </div>
           </div>
         ) : null}
@@ -1808,6 +1849,14 @@ export function PositionAnalytics({ walletAddress }: Props) {
                   </div>
                 </div>
               </>
+            ) : verificationError ? (
+              <div className="pa-empty-state" style={{ padding: "30px 20px", border: "1px solid rgba(239, 68, 68, 0.3)" }}>
+                <AlertTriangle size={32} color="var(--red)" />
+                <h4 style={{ color: "var(--red)" }}>Verification Report Unavailable</h4>
+                <p style={{ maxWidth: "540px", margin: "8px auto 0" }}>
+                  {verificationError}
+                </p>
+              </div>
             ) : (
               <div className="pa-empty-state" style={{ padding: "30px 20px" }}>
                 <Info size={32} color="var(--muted)" />
@@ -1943,7 +1992,7 @@ export function PositionAnalytics({ walletAddress }: Props) {
                         const isExpanded = expandedPositionKey === posKey;
                         const detail = positionDetails[posKey];
                         const isLoadingDetail = loadingDetailKey === posKey;
-                        const verifDetail = verificationPositionsMap.get(posKey) || verificationPositionsMap.get(pos.positionId) || null;
+                        const verifDetail = verificationPositionsMap.get(posKey) || null;
                         const verifStatus = deriveVerificationPresentationStatus(verifDetail);
                         return (
                           <Fragment key={posKey}>
