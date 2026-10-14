@@ -1,5 +1,5 @@
 export type Timeframe = "7d" | "30d" | "all";
-export type Page = "explore" | "pools" | "track" | "portfolio" | "data" | "activity-logs";
+export type Page = "explore" | "pools" | "track" | "portfolio" | "data" | "activity-logs" | "alerts";
 export type ActivePage = Page;
 export type AppPage = Page;
 
@@ -46,7 +46,11 @@ export const TOOLS_NAV_ITEMS: NavigationItemConfig[] = [
     page: "activity-logs",
     activeKey: "activity-logs",
   },
-  { label: "Alerts", disabled: true },
+  {
+    label: "Alerts",
+    page: "alerts",
+    activeKey: "alerts",
+  },
   { label: "Settings", disabled: true },
 ];
 
@@ -61,10 +65,12 @@ export const PORTFOLIO_TAB_ITEMS = [
 
 export type PortfolioTabId = typeof PORTFOLIO_TAB_ITEMS[number]["id"];
 
+export type NavDataTab = "overview" | "wallet-data" | "pool-scanner" | "wallet-intelligence";
+
 export function resolveRouteFromPath(pathname: string, search: string = ""): {
   page: Page;
   address?: string;
-  dataTab?: any;
+  dataTab?: NavDataTab;
 } {
   const match = pathname.match(/^\/portfolio\/([^/]+)$/);
   if (match) {
@@ -86,6 +92,10 @@ export function resolveRouteFromPath(pathname: string, search: string = ""): {
     return { page: "activity-logs" };
   }
 
+  if (pathname === "/alerts") {
+    return { page: "alerts" };
+  }
+
   if (pathname === "/pool-scanner") {
     return { page: "data", dataTab: "pool-scanner" };
   }
@@ -96,7 +106,7 @@ export function resolveRouteFromPath(pathname: string, search: string = ""): {
       return { page: "pools" };
     }
     const validDataTabs = ["overview", "wallet-data", "pool-scanner", "wallet-intelligence"];
-    const tab = validDataTabs.includes(tabParam ?? "") ? tabParam : "overview";
+    const tab = (validDataTabs.includes(tabParam ?? "") ? tabParam : "overview") as NavDataTab;
     return { page: "data", dataTab: tab };
   }
 
@@ -107,7 +117,7 @@ export function resolveRouteFromPath(pathname: string, search: string = ""): {
   return { page: "explore" };
 }
 
-export function routeFromLocation(): { page: Page; address?: string; dataTab?: any } {
+export function routeFromLocation(): { page: Page; address?: string; dataTab?: NavDataTab } {
   if (typeof window === "undefined") {
     return { page: "explore" };
   }

@@ -359,8 +359,10 @@ describe("Step 3B.6: Wallet Explorer UX & Navigation Finalization Suite", () => 
 
             (globalThis.window.location as any).pathname = "/activity-logs";
             assert.deepEqual(routeFromLocation(), { page: "activity-logs" });
-        });
 
+            (globalThis.window.location as any).pathname = "/alerts";
+            assert.deepEqual(routeFromLocation(), { page: "alerts" });
+        });
         it("executes navigate without full-page reload", () => {
             navigate("/pools");
             assert.equal((globalThis.window.location as any).pathname, "/pools");
@@ -393,10 +395,6 @@ describe("Step 3B.6: Wallet Explorer UX & Navigation Finalization Suite", () => 
             assert.ok(myWallets);
             assert.equal(myWallets?.disabled, true);
 
-            const alerts = TOOLS_NAV_ITEMS.find((item) => item.label === "Alerts");
-            assert.ok(alerts);
-            assert.equal(alerts?.disabled, true);
-
             const settings = TOOLS_NAV_ITEMS.find((item) => item.label === "Settings");
             assert.ok(settings);
             assert.equal(settings?.disabled, true);
@@ -427,6 +425,11 @@ describe("Step 3B.6: Wallet Explorer UX & Navigation Finalization Suite", () => 
             assert.ok(logs);
             assert.notEqual(logs?.disabled, true);
             assert.equal(logs?.page, "activity-logs");
+
+            const alerts = TOOLS_NAV_ITEMS.find((item) => item.label === "Alerts");
+            assert.ok(alerts);
+            assert.notEqual(alerts?.disabled, true);
+            assert.equal(alerts?.page, "alerts");
         });
     });
 

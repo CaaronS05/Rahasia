@@ -21,6 +21,9 @@ import {
     checkCdpEndpoint,
     resolveCloakCdpUrl,
 } from "../browser/launch-cloak.mjs";
+import { AlertsEngine } from "../alerts/alerts-engine.ts";
+import { WatchlistStore } from "../alerts/watchlist-store.ts";
+import { TelegramDryRunAdapter } from "../alerts/telegram-dryrun.ts";
 const HOST = "127.0.0.1";
 const PORT = Number.parseInt(process.env.CONTROL_SERVER_PORT || process.env.PORT || "8787", 10);
 
@@ -31,6 +34,8 @@ const ROOT = path.resolve(__dirname, "../..");
 const ALLOWED_ORIGINS = new Set([
     "http://localhost:5173",
     "http://127.0.0.1:5173",
+    `http://localhost:${PORT}`,
+    `http://127.0.0.1:${PORT}`,
 ]);
 
 let currentChild = null;
@@ -3466,8 +3471,46 @@ function setCors(request, response) {
     } else {
         response.setHeader("Access-Control-Allow-Origin", "http://localhost:5173");
     }
-    response.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-    response.setHeader("Access-Control-Allow-Headers", "Content-Type");
+    response.setHeader("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS");
+    response.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization");
+}
+
+function isOriginAuthorized(request) {
+    const origin = request.headers.origin;
+    if (!origin) return true;
+    return ALLOWED_ORIGINS.has(origin);
+}
+
+// ============================================================
+// DLLM ALERTS ENGINE V1
+// ============================================================
+
+let alertsWatchlistStore = null;
+let alertsEngine = null;
+let alertsTelegramAdapter = null;
+
+function getAlertsContext() {
+    if (!alertsEngine) {
+        alertsWatchlistStore = new WatchlistStore();
+        alertsTelegramAdapter = new TelegramDryRunAdapter({
+            watchlistStore: alertsWatchlistStore,
+            maxPreviews: 100,
+        });
+        alertsEngine = new AlertsEngine({
+            watchlistStore: alertsWatchlistStore,
+            autoStart: false,
+        });
+        alertsEngine.onEvent((event) => {
+            alertsTelegramAdapter.processEvent(event).catch((err) => {
+                console.error("[TelegramDryRun] Event processing error:", err);
+            });
+        });
+    }
+    return {
+        store: alertsWatchlistStore,
+        engine: alertsEngine,
+        telegram: alertsTelegramAdapter,
+    };
 }
 
 function json(request, response, statusCode, payload) {
@@ -7691,6 +7734,420 @@ const server = http.createServer(async (request, response) => {
             stopped,
             ...publicState(),
         });
+        return;
+    }
+    // ======================================================
+    // DLLM ALERTS V1 ENDPOINTS
+    // ======================================================
+
+    // 1. GET /api/alerts/status
+    if (request.method === "GET" && url.pathname === "/api/alerts/status") {
+        const { engine, telegram } = getAlertsContext();
+        const health = engine.getHealth();
+        json(request, response, 200, {
+            ...health,
+            bufferedEventsCount: engine.getRecentActivity().length,
+            bufferedPreviewsCount: telegram.getCount(),
+        });
+        return;
+    }
+
+    // 2. GET /api/alerts/wallets
+    if (request.method === "GET" && url.pathname === "/api/alerts/wallets") {
+        const { store } = getAlertsContext();
+        try {
+            const wallets = await store.listWallets();
+            json(request, response, 200, {
+                wallets,
+                totalCount: wallets.length,
+            });
+        } catch (err) {
+            json(request, response, 500, { error: err.message });
+        }
+        return;
+    }
+
+    // 3. POST /api/alerts/wallets
+    if (request.method === "POST" && url.pathname === "/api/alerts/wallets") {
+        if (!isOriginAuthorized(request)) {
+            json(request, response, 403, { error: "Forbidden: Unauthorized origin" });
+            return;
+        }
+        let body;
+        try {
+            body = await readJson(request);
+        } catch (err) {
+            json(request, response, 400, { error: "Invalid JSON body" });
+            return;
+        }
+
+        const { address, alias, enabled } = body || {};
+        if (!isValidSolanaAddress(address)) {
+            json(request, response, 400, { error: "Invalid Solana wallet address" });
+            return;
+        }
+        if (alias !== undefined && typeof alias !== "string") {
+            json(request, response, 400, { error: "Wallet alias must be a string" });
+            return;
+        }
+        if (enabled !== undefined && typeof enabled !== "boolean") {
+            json(request, response, 400, { error: "Wallet enabled must be a boolean" });
+            return;
+        }
+
+        const { store, engine } = getAlertsContext();
+        const exists = await store.hasWallet(address);
+        if (exists) {
+            json(request, response, 409, { error: `Wallet '${address}' already exists in watchlist` });
+            return;
+        }
+
+        const cleanAlias = alias && typeof alias === "string" && alias.trim() ? alias.trim() : undefined;
+        const isEnabled = Boolean(enabled);
+
+        try {
+            const entry = await store.addWallet({
+                address,
+                alias: cleanAlias,
+                enabled: isEnabled,
+            });
+
+            if (isEnabled && engine.getHealth().status === "RUNNING") {
+                await engine.enrollWallet(address).catch((err) => {
+                    console.error(`[Alerts] Error enrolling newly added wallet ${address}:`, err);
+                });
+            }
+
+            json(request, response, 201, { success: true, wallet: entry });
+        } catch (err) {
+            json(request, response, 500, { error: err.message });
+        }
+        return;
+    }
+
+    // Wallet sub-resource route matching
+    const alertsStartMatch = url.pathname.match(/^\/api\/alerts\/wallets\/([^/]+)\/start\/?$/);
+    const alertsPauseMatch = url.pathname.match(/^\/api\/alerts\/wallets\/([^/]+)\/pause\/?$/);
+    const alertsResumeMatch = url.pathname.match(/^\/api\/alerts\/wallets\/([^/]+)\/resume\/?$/);
+    const alertsWalletItemMatch = url.pathname.match(/^\/api\/alerts\/wallets\/([^/]+)\/?$/);
+
+    // 4. POST /api/alerts/wallets/:id/start
+    if (request.method === "POST" && alertsStartMatch) {
+        if (!isOriginAuthorized(request)) {
+            json(request, response, 403, { error: "Forbidden: Unauthorized origin" });
+            return;
+        }
+        const walletAddress = safeDecodeURIComponent(alertsStartMatch[1]);
+        if (!isValidSolanaAddress(walletAddress)) {
+            json(request, response, 400, { error: "Invalid Solana wallet address" });
+            return;
+        }
+
+        const { store, engine } = getAlertsContext();
+        const existing = await store.getWallet(walletAddress);
+        if (!existing) {
+            json(request, response, 404, { error: `Wallet '${walletAddress}' not found in watchlist` });
+            return;
+        }
+
+        try {
+            const updated = await store.enableWallet(walletAddress);
+            if (engine.getHealth().status !== "RUNNING") {
+                await engine.start();
+            } else {
+                await engine.enrollWallet(walletAddress);
+            }
+            json(request, response, 200, {
+                success: true,
+                wallet: updated,
+                engineStatus: engine.getHealth().status,
+            });
+        } catch (err) {
+            json(request, response, 500, { error: err.message });
+        }
+        return;
+    }
+
+    // 5. POST /api/alerts/wallets/:id/pause
+    if (request.method === "POST" && alertsPauseMatch) {
+        if (!isOriginAuthorized(request)) {
+            json(request, response, 403, { error: "Forbidden: Unauthorized origin" });
+            return;
+        }
+        const walletAddress = safeDecodeURIComponent(alertsPauseMatch[1]);
+        if (!isValidSolanaAddress(walletAddress)) {
+            json(request, response, 400, { error: "Invalid Solana wallet address" });
+            return;
+        }
+
+        const { store, engine } = getAlertsContext();
+        const existing = await store.getWallet(walletAddress);
+        if (!existing) {
+            json(request, response, 404, { error: `Wallet '${walletAddress}' not found in watchlist` });
+            return;
+        }
+
+        try {
+            const updated = await store.disableWallet(walletAddress);
+            engine.unenrollWallet(walletAddress);
+            json(request, response, 200, {
+                success: true,
+                wallet: updated,
+                status: "PAUSED",
+            });
+        } catch (err) {
+            json(request, response, 500, { error: err.message });
+        }
+        return;
+    }
+
+    // 6. POST /api/alerts/wallets/:id/resume
+    if (request.method === "POST" && alertsResumeMatch) {
+        if (!isOriginAuthorized(request)) {
+            json(request, response, 403, { error: "Forbidden: Unauthorized origin" });
+            return;
+        }
+        const walletAddress = safeDecodeURIComponent(alertsResumeMatch[1]);
+        if (!isValidSolanaAddress(walletAddress)) {
+            json(request, response, 400, { error: "Invalid Solana wallet address" });
+            return;
+        }
+
+        const { store, engine } = getAlertsContext();
+        const existing = await store.getWallet(walletAddress);
+        if (!existing) {
+            json(request, response, 404, { error: `Wallet '${walletAddress}' not found in watchlist` });
+            return;
+        }
+
+        try {
+            const updated = await store.enableWallet(walletAddress);
+            await engine.enrollWallet(walletAddress);
+            if (engine.getHealth().status !== "RUNNING") {
+                await engine.start();
+            }
+            json(request, response, 200, {
+                success: true,
+                wallet: updated,
+                engineStatus: engine.getHealth().status,
+            });
+        } catch (err) {
+            json(request, response, 500, { error: err.message });
+        }
+        return;
+    }
+
+    // 7. GET /api/alerts/wallets/:id
+    if (request.method === "GET" && alertsWalletItemMatch) {
+        const walletAddress = safeDecodeURIComponent(alertsWalletItemMatch[1]);
+        if (!isValidSolanaAddress(walletAddress)) {
+            json(request, response, 400, { error: "Invalid Solana wallet address" });
+            return;
+        }
+        const { store } = getAlertsContext();
+        const existing = await store.getWallet(walletAddress);
+        if (!existing) {
+            json(request, response, 404, { error: `Wallet '${walletAddress}' not found in watchlist` });
+            return;
+        }
+        json(request, response, 200, { wallet: existing });
+        return;
+    }
+
+    // 8. PATCH /api/alerts/wallets/:id
+    if (request.method === "PATCH" && alertsWalletItemMatch) {
+        if (!isOriginAuthorized(request)) {
+            json(request, response, 403, { error: "Forbidden: Unauthorized origin" });
+            return;
+        }
+        const walletAddress = safeDecodeURIComponent(alertsWalletItemMatch[1]);
+        if (!isValidSolanaAddress(walletAddress)) {
+            json(request, response, 400, { error: "Invalid Solana wallet address" });
+            return;
+        }
+
+        let body;
+        try {
+            body = await readJson(request);
+        } catch (err) {
+            json(request, response, 400, { error: "Invalid JSON body" });
+            return;
+        }
+
+        const { alias, enabled } = body || {};
+        if (alias === undefined && enabled === undefined) {
+            json(request, response, 400, { error: "At least one update field ('alias' or 'enabled') must be provided" });
+            return;
+        }
+        if (alias !== undefined && alias !== null && typeof alias !== "string") {
+            json(request, response, 400, { error: "Wallet alias must be a string or null" });
+            return;
+        }
+        if (enabled !== undefined && typeof enabled !== "boolean") {
+            json(request, response, 400, { error: "Wallet enabled must be a boolean" });
+            return;
+        }
+
+        const { store, engine } = getAlertsContext();
+        const existing = await store.getWallet(walletAddress);
+        if (!existing) {
+            json(request, response, 404, { error: `Wallet '${walletAddress}' not found in watchlist` });
+            return;
+        }
+
+        try {
+            const updated = await store.updateWallet(walletAddress, {
+                alias: alias === null ? "" : alias,
+                enabled,
+            });
+
+            if (enabled === true && engine.getHealth().status === "RUNNING") {
+                await engine.enrollWallet(walletAddress).catch((err) => {
+                    console.error(`[Alerts] Error enrolling wallet ${walletAddress}:`, err);
+                });
+            } else if (enabled === false) {
+                engine.unenrollWallet(walletAddress);
+            }
+
+            json(request, response, 200, { success: true, wallet: updated });
+        } catch (err) {
+            json(request, response, 500, { error: err.message });
+        }
+        return;
+    }
+
+    // 9. DELETE /api/alerts/wallets/:id
+    if (request.method === "DELETE" && alertsWalletItemMatch) {
+        if (!isOriginAuthorized(request)) {
+            json(request, response, 403, { error: "Forbidden: Unauthorized origin" });
+            return;
+        }
+        const walletAddress = safeDecodeURIComponent(alertsWalletItemMatch[1]);
+        if (!isValidSolanaAddress(walletAddress)) {
+            json(request, response, 400, { error: "Invalid Solana wallet address" });
+            return;
+        }
+
+        const { store, engine } = getAlertsContext();
+        const existing = await store.getWallet(walletAddress);
+        if (!existing) {
+            json(request, response, 404, { error: `Wallet '${walletAddress}' not found in watchlist` });
+            return;
+        }
+
+        try {
+            engine.unenrollWallet(walletAddress);
+            await store.removeWallet(walletAddress);
+            json(request, response, 200, { success: true, removed: walletAddress });
+        } catch (err) {
+            json(request, response, 500, { error: err.message });
+        }
+        return;
+    }
+
+    // 10. GET /api/alerts/positions
+    if (request.method === "GET" && url.pathname === "/api/alerts/positions") {
+        const walletParam = url.searchParams.get("wallet")?.trim() || null;
+        if (walletParam && !isValidSolanaAddress(walletParam)) {
+            json(request, response, 400, { error: "Invalid Solana wallet address" });
+            return;
+        }
+        const { engine } = getAlertsContext();
+        const positions = engine.getActivePositions(walletParam || undefined);
+        json(request, response, 200, {
+            positions,
+            totalCount: positions.length,
+        });
+        return;
+    }
+
+    // 11. GET /api/alerts/events
+    if (request.method === "GET" && url.pathname === "/api/alerts/events") {
+        const limitParam = Number.parseInt(url.searchParams.get("limit") || "100", 10);
+        const walletParam = url.searchParams.get("wallet")?.trim() || null;
+        const typeParam = url.searchParams.get("eventType")?.trim() || null;
+
+        if (walletParam && !isValidSolanaAddress(walletParam)) {
+            json(request, response, 400, { error: "Invalid Solana wallet address" });
+            return;
+        }
+
+        const { engine } = getAlertsContext();
+        let events = engine.getRecentActivity(Number.isFinite(limitParam) ? limitParam : 100);
+        if (walletParam) {
+            events = events.filter((e) => e.walletAddress === walletParam);
+        }
+        if (typeParam) {
+            events = events.filter((e) => e.eventType === typeParam);
+        }
+        json(request, response, 200, {
+            events,
+            totalCount: events.length,
+        });
+        return;
+    }
+
+    // 12. GET /api/alerts/previews
+    if (request.method === "GET" && url.pathname === "/api/alerts/previews") {
+        const limitParam = Number.parseInt(url.searchParams.get("limit") || "100", 10);
+        const walletParam = url.searchParams.get("wallet")?.trim() || null;
+        const typeParam = url.searchParams.get("eventType")?.trim() || null;
+
+        if (walletParam && !isValidSolanaAddress(walletParam)) {
+            json(request, response, 400, { error: "Invalid Solana wallet address" });
+            return;
+        }
+
+        const { telegram } = getAlertsContext();
+        const previews = telegram.getPreviews({
+            limit: Number.isFinite(limitParam) ? limitParam : 100,
+            wallet: walletParam || undefined,
+            eventType: typeParam || undefined,
+        });
+        json(request, response, 200, {
+            previews,
+            totalCount: previews.length,
+        });
+        return;
+    }
+
+    // Engine-level controls
+    if (request.method === "POST" && url.pathname === "/api/alerts/start") {
+        if (!isOriginAuthorized(request)) {
+            json(request, response, 403, { error: "Forbidden: Unauthorized origin" });
+            return;
+        }
+        const { engine } = getAlertsContext();
+        try {
+            await engine.start();
+            json(request, response, 200, { success: true, status: engine.getHealth().status });
+        } catch (err) {
+            json(request, response, 500, { error: err.message });
+        }
+        return;
+    }
+    if (request.method === "POST" && url.pathname === "/api/alerts/pause") {
+        if (!isOriginAuthorized(request)) {
+            json(request, response, 403, { error: "Forbidden: Unauthorized origin" });
+            return;
+        }
+        const { engine } = getAlertsContext();
+        engine.pause();
+        json(request, response, 200, { success: true, status: "PAUSED" });
+        return;
+    }
+    if (request.method === "POST" && url.pathname === "/api/alerts/resume") {
+        if (!isOriginAuthorized(request)) {
+            json(request, response, 403, { error: "Forbidden: Unauthorized origin" });
+            return;
+        }
+        const { engine } = getAlertsContext();
+        try {
+            await engine.resume();
+            json(request, response, 200, { success: true, status: engine.getHealth().status });
+        } catch (err) {
+            json(request, response, 500, { error: err.message });
+        }
         return;
     }
 

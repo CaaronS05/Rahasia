@@ -21,6 +21,7 @@ import { PortfolioPage } from "./pages/PortfolioPage";
 import { TrackPage } from "./pages/TrackPage";
 import { ActivityLogsPage } from "./pages/ActivityLogsPage";
 import { PoolInsightPage } from "./pages/PoolInsightPage";
+import { AlertsView } from "./pages/AlertsView";
 import type { Wallet, WalletDataset } from "./types";
 import {
   countUnknownActivityWallets,
@@ -289,7 +290,7 @@ export default function App() {
   const topPage = route.page;
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell page-${topPage}`}>
       <Sidebar
         activePage={topPage}
         onNavigate={(page) =>
@@ -425,6 +426,8 @@ export default function App() {
           />
         ) : route.page === "activity-logs" ? (
           <ActivityLogsPage />
+        ) : route.page === "alerts" ? (
+          <AlertsView />
         ) : (
           <div className="explorer-page">
             <div className="page-heading explorer-heading">
