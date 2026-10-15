@@ -3499,6 +3499,7 @@ function getAlertsContext() {
         alertsEngine = new AlertsEngine({
             watchlistStore: alertsWatchlistStore,
             autoStart: false,
+            pollIntervalMs: 5000,
         });
         alertsEngine.onEvent((event) => {
             alertsTelegramAdapter.processEvent(event).catch((err) => {
@@ -7922,7 +7923,7 @@ const server = http.createServer(async (request, response) => {
 
         try {
             const updated = await store.enableWallet(walletAddress);
-            await engine.enrollWallet(walletAddress);
+            await engine.resumeWallet(walletAddress);
             if (engine.getHealth().status !== "RUNNING") {
                 await engine.start();
             }

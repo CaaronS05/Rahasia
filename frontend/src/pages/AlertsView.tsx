@@ -632,26 +632,40 @@ export function AlertsView() {
         <div className="alerts-card">
           <div className="alerts-card-label">
             <Clock size={13} />
-            Last Successful Poll
+            Cadence & Last Duration
           </div>
-          <div className="alerts-card-value" style={{ fontSize: 15, paddingTop: 3 }}>
-            {formatWib(status?.lastPollAt)}
+          <div className="alerts-card-value" style={{ fontSize: 16, paddingTop: 2 }}>
+            {status?.configuredPollIntervalMs ? `${status.configuredPollIntervalMs / 1000}s target` : "5s target"}
           </div>
           <div className="alerts-card-subtext">
-            Total engine polls: {status ? status.totalPolls : 0}
+            {status?.effectivePollIntervalMs ? `Effective: ${status.effectivePollIntervalMs}ms` : "Cadence: active"}{" "}
+            {status?.lastPollDurationMs !== null && status?.lastPollDurationMs !== undefined ? `(dur: ${status.lastPollDurationMs}ms)` : ""}
+          </div>
+        </div>
+
+        <div className="alerts-card">
+          <div className="alerts-card-label">
+            <Clock size={13} />
+            Last Successful Poll
+          </div>
+          <div className="alerts-card-value" style={{ fontSize: 14, paddingTop: 3 }}>
+            {formatWib(status?.lastSuccessfulPollAt || status?.lastPollAt)}
+          </div>
+          <div className="alerts-card-subtext">
+            Cycles: {status?.totalPollsSuccessful ?? 0} ok / {status?.totalPollsPartial ?? 0} part / {status?.totalPollsFailed ?? 0} fail ({status?.totalPollsAttempted ?? status?.totalPolls ?? 0} total)
           </div>
         </div>
 
         <div className="alerts-card">
           <div className="alerts-card-label">
             <ShieldAlert size={13} />
-            RPC Health & Retries
+            RPC Health & 429 Rate Limits
           </div>
           <div className="alerts-card-value">
-            {status ? `${status.errorCount} err / ${status.retryCount} retries` : "0 / 0"}
+            {status ? `${status.rpcErrorCount ?? status.errorCount} err / ${status.http429Count ?? 0} 429s` : "0 / 0"}
           </div>
           <div className="alerts-card-subtext">
-            {status?.coverageGaps ? `${status.coverageGaps.length} coverage gaps` : "0 gaps"}
+            {status?.coverageGaps ? `${status.coverageGaps.length} coverage gaps` : "0 gaps"} ({status?.retryCount ?? 0} retries)
           </div>
         </div>
       </div>
@@ -810,6 +824,10 @@ export function AlertsView() {
                         <td>
                           {effectiveStatus === "OFFLINE" ? (
                             <span className="alerts-badge alerts-badge-red">Server Offline</span>
+                          ) : status?.walletStatus?.[w.address]?.isDegraded ? (
+                            <span className="alerts-badge alerts-badge-amber">
+                              <AlertTriangle size={10} /> Degraded ({status.walletStatus[w.address].consecutiveErrors} err)
+                            </span>
                           ) : isMonitoredInRuntime ? (
                             <span className="alerts-badge alerts-badge-green">
                               <span className="alerts-status-dot pulse" style={{ width: 5, height: 5 }} />
@@ -819,6 +837,11 @@ export function AlertsView() {
                             <span className="alerts-badge alerts-badge-amber">Engine Paused</span>
                           ) : (
                             <span className="alerts-badge alerts-badge-muted">Not Enrolled</span>
+                          )}
+                          {status?.walletStatus?.[w.address]?.hasCoverageGap && (
+                            <span className="alerts-badge alerts-badge-amber" style={{ marginLeft: 4 }} title="Coverage gap observed for wallet">
+                              Gap
+                            </span>
                           )}
                         </td>
                         <td style={{ color: "var(--muted)" }}>{formatWib(w.addedAt)}</td>

@@ -30,6 +30,26 @@ export interface AlertsStatus {
   coverageGaps: CoverageGap[];
   bufferedEventsCount: number;
   bufferedPreviewsCount: number;
+  configuredPollIntervalMs?: number;
+  effectivePollIntervalMs?: number | null;
+  lastSuccessfulPollAt?: number | null;
+  lastPollDurationMs?: number | null;
+  rpcErrorCount?: number;
+  http429Count?: number;
+  totalPollsAttempted?: number;
+  totalPollsSuccessful?: number;
+  totalPollsPartial?: number;
+  totalPollsFailed?: number;
+  walletStatus?: Record<
+    string,
+    {
+      isDegraded: boolean;
+      hasCoverageGap: boolean;
+      consecutiveErrors: number;
+      lastPollAt: number | null;
+      lastSignature: string | null;
+    }
+  >;
 }
 
 export interface WatchlistWallet {
