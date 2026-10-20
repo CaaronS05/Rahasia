@@ -1,14 +1,17 @@
 import {
   AlertCircle,
+  AlertTriangle,
   ArrowRight,
   Check,
   CheckCircle2,
   Clock,
   Copy,
   Database,
+  Eye,
   Layers3,
   Loader2,
   Radar,
+  RefreshCw,
   ScanSearch,
   ShieldCheck,
   Sparkles,
@@ -24,14 +27,17 @@ import {
   enrichSelectedWallets,
   getPoolScannerStatus,
   persistPoolScanner,
+  refreshPoolScanner,
   scanSelectedPools,
   startPoolScanner,
+  startPoolTradeOnly,
   stopPoolScanner,
   type PoolDiscoveryItem,
   type PoolDiscoveryResponse,
   type PoolScannerStage,
   type PoolScannerState,
   type PoolScannerStatus,
+  type ScanMode,
 } from "../lib/poolScannerControl";
 import "../pool-scanner-page.css";
 
@@ -43,7 +49,7 @@ export interface PoolScannerPageProps {
   startDisabled?: boolean;
 }
 
-type StepStatus = "pending" | "running" | "completed" | "stopped" | "error";
+type StepStatus = "pending" | "running" | "completed" | "skipped" | "stopped" | "error";
 
 interface StageItem {
   num: string;
@@ -91,7 +97,8 @@ function computePipelineProgress(
   status: PoolScannerStatus | undefined,
   logs: string[],
   lastActiveStepRef: React.MutableRefObject<number>,
-  isPersisted?: boolean
+  isPersisted?: boolean,
+  scanMode?: ScanMode
 ): { stages: StageItem[]; progressPercent: number } {
   const STAGES_DEF: Array<{ num: string; name: string; description: string }> = [
     {
@@ -127,8 +134,88 @@ function computePipelineProgress(
       stages: STAGES_DEF.map((s) => ({ ...s, status: "pending" as StepStatus })),
     };
   }
-
+  const isStopped = status === "stopped" || stage === "stopped";
+  const isError = status === "error" || stage === "error" || stage === "persistence_error";
   const isFullyPersisted = stage === "persisted" || isPersisted === true;
+
+  if (scanMode === "trades_only") {
+    const isFastPath = logs.some((l) => l.includes("Fast Path") || l.includes("Fast path") || l.includes("fast path"));
+    const tradeStages: StageItem[] = [
+      {
+        num: "01",
+        name: "Discover Pools",
+        description: isFastPath ? "Skipped (Existing Canonical Pool)" : "Meteora Data API",
+        status: isFastPath ? "skipped" : (stage === "discovery" && status === "running" ? "running" : "completed"),
+      },
+      {
+        num: "02",
+        name: "Extract LP Wallets",
+        description: isFastPath ? "Skipped (Existing Membership Used)" : "Selected pool · Top LPers",
+        status: isFastPath
+          ? "skipped"
+          : (stage === "extract" && status === "running"
+              ? "running"
+              : (stage === "extract_completed" || stage === "trade_history" || stage === "trade_history_completed" || stage === "persisting" || stage === "persisted" || isPersisted
+                  ? "completed"
+                  : "pending")),
+      },
+      {
+        num: "03",
+        name: "Enrich Wallets",
+        description: "Skipped (Pool Trade Only mode)",
+        status: "skipped",
+      },
+      {
+        num: "04",
+        name: "Pool Trade History",
+        description: "Exact pool closed positions",
+        status: isStopped
+          ? "stopped"
+          : isError && stage === "trade_history"
+          ? "error"
+          : stage === "trade_history" && status === "running"
+          ? "running"
+          : (stage === "trade_history_completed" || stage === "persisting" || stage === "persisted" || isPersisted)
+          ? "completed"
+          : "pending",
+      },
+      {
+        num: "05",
+        name: "Canonical Persistence",
+        description: "Update canonical Trade History",
+        status: isStopped
+          ? "stopped"
+          : isError && (stage === "persisting" || stage === "persistence_error")
+          ? "error"
+          : stage === "persisting" && status === "running"
+          ? "running"
+          : stage === "persisted" || isPersisted
+          ? "completed"
+          : "pending",
+      },
+    ];
+
+    let progressPercent = 0;
+    if (isFullyPersisted) {
+      progressPercent = 100;
+    } else if (stage === "persisting") {
+      progressPercent = 85;
+    } else if (stage === "trade_history_completed") {
+      progressPercent = 70;
+    } else if (stage === "trade_history") {
+      progressPercent = 50;
+    } else if (stage === "extract") {
+      progressPercent = 25;
+    } else if (stage === "discovery") {
+      progressPercent = 10;
+    }
+
+    return {
+      progressPercent,
+      stages: tradeStages,
+    };
+  }
+
 
   let activeStep = 1;
   if (stage === "discovery") activeStep = 1;
@@ -169,9 +256,6 @@ function computePipelineProgress(
   } else if (status === "completed") {
     progressPercent = isFullyPersisted ? 100 : 80;
   }
-
-  const isStopped = status === "stopped" || stage === "stopped";
-  const isError = status === "error" || stage === "error" || stage === "persistence_error";
 
   function getStepStatus(stepNum: number): StepStatus {
     if (isFullyPersisted) {
@@ -238,6 +322,8 @@ export function PoolScannerPage({ onDatasetRefreshed, embedded = false, startDis
   const [tradeHistoryTestLimit, setTradeHistoryTestLimit] = useState(false);
   const [tradeHistoryTestWallet, setTradeHistoryTestWallet] = useState("");
 
+  const [scanMode, setScanMode] = useState<ScanMode>("full");
+  const [selectedTradeOnlyPool, setSelectedTradeOnlyPool] = useState<string | null>(null);
   const logsContainerRef = useRef<HTMLDivElement>(null);
   const prevRunningRef = useRef(false);
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -297,6 +383,12 @@ export function PoolScannerPage({ onDatasetRefreshed, embedded = false, startDis
         }
         if (typeof s?.fabriqWorkers === "number" && s.fabriqWorkers >= 1) {
           setFabriqWorkers(String(s.fabriqWorkers));
+        }
+        if (s?.scanMode) {
+          setScanMode(s.scanMode);
+        }
+        if (s?.targetPool) {
+          setSelectedTradeOnlyPool(s.targetPool);
         }
       }
     }
@@ -407,12 +499,87 @@ export function PoolScannerPage({ onDatasetRefreshed, embedded = false, startDis
       const res = await discoverTokenPools(cleanedToken);
       setDiscoveryResult(res);
       setSelectedPoolAddresses(res.pools.map((p) => p.poolAddress));
+      if (res.pools.length > 0 && !selectedTradeOnlyPool) {
+        setSelectedTradeOnlyPool(res.pools[0].poolAddress);
+      }
     } catch (err) {
       setDiscoveryError(err instanceof Error ? err.message : String(err));
     } finally {
       setDiscoveryLoading(false);
     }
   }
+  async function handleViewExisting() {
+    if (!tokenLooksValid || discoveryLoading || isRunning) return;
+    setDiscoveryLoading(true);
+    setDiscoveryError(null);
+    try {
+      const res = await discoverTokenPools(cleanedToken);
+      setDiscoveryResult(res);
+      const existingPoolSet = new Set(state?.existingScan?.pools || []);
+      const toSelect = res.pools
+        .map((p) => p.poolAddress)
+        .filter((addr) => existingPoolSet.size === 0 || existingPoolSet.has(addr));
+      setSelectedPoolAddresses(toSelect.length > 0 ? toSelect : res.pools.map((p) => p.poolAddress));
+      if (toSelect.length > 0) {
+        setSelectedTradeOnlyPool(toSelect[0]);
+      } else if (res.pools.length > 0) {
+        setSelectedTradeOnlyPool(res.pools[0].poolAddress);
+      }
+    } catch (err) {
+      setDiscoveryError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDiscoveryLoading(false);
+    }
+  }
+
+  async function handleRefreshData() {
+    if (!tokenLooksValid || discoveryLoading || isRunning || startDisabled) return;
+    setSubmitting(true);
+    setApiError(null);
+    setDiscoveryError(null);
+    lastActiveStepRef.current = 1;
+    const workerCount = Number(workersRaw) || 8;
+    try {
+      const s = await refreshPoolScanner(cleanedToken, workerCount);
+      setState(s);
+    } catch (err) {
+      setApiError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+  async function handleFetchPoolTrades() {
+    if (!selectedTradeOnlyPool || isRunning || startDisabled || !tokenLooksValid) return;
+    setSubmitting(true);
+    setApiError(null);
+    lastActiveStepRef.current = 4;
+    const workerCount = Number(workersRaw) || 8;
+    try {
+      const s = await startPoolTradeOnly(cleanedToken, selectedTradeOnlyPool, false, workerCount);
+      setState(s);
+    } catch (err) {
+      setApiError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function handleRefreshPoolTrades() {
+    if (!selectedTradeOnlyPool || isRunning || startDisabled || !tokenLooksValid) return;
+    setSubmitting(true);
+    setApiError(null);
+    lastActiveStepRef.current = 4;
+    const workerCount = Number(workersRaw) || 8;
+    try {
+      const s = await startPoolTradeOnly(cleanedToken, selectedTradeOnlyPool, true, workerCount);
+      setState(s);
+    } catch (err) {
+      setApiError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
 
   const allPoolAddresses = useMemo(
     () => discoveryResult?.pools.map((p) => p.poolAddress) || [],
@@ -520,6 +687,15 @@ export function PoolScannerPage({ onDatasetRefreshed, embedded = false, startDis
     if (!tokenLooksValid || !workersValid || isRunning || submitting || startDisabled) {
       return;
     }
+    if (scanMode === "trades_only") {
+      if (selectedTradeOnlyPool) {
+        await handleFetchPoolTrades();
+        return;
+      }
+      await handleDiscoverPools(event);
+      return;
+    }
+
 
     setSubmitting(true);
     setApiError(null);
@@ -579,18 +755,19 @@ export function PoolScannerPage({ onDatasetRefreshed, embedded = false, startDis
         state?.status,
         state?.logs || [],
         lastActiveStepRef,
-        state?.isPersisted
+        state?.isPersisted,
+        state?.scanMode || scanMode
       ),
-    [state?.stage, state?.status, state?.logs, state?.isPersisted]
+    [state?.stage, state?.status, state?.logs, state?.isPersisted, state?.scanMode, scanMode]
   );
 
   let heroBadgeText = "Scanner ready";
   let heroBadgeClass = "pool-scanner-hero-badge";
   if (isRunning) {
-    heroBadgeText = "Scanner running";
+    heroBadgeText = state?.isRefresh ? "Token refresh running" : "Scanner running";
     heroBadgeClass = "pool-scanner-hero-badge running";
   } else if (state?.stage === "persisted" || (state?.status === "completed" && state?.isPersisted)) {
-    heroBadgeText = "Scan completed & persisted";
+    heroBadgeText = state?.isRefresh ? "Refresh completed & persisted" : "Scan completed & persisted";
     heroBadgeClass = "pool-scanner-hero-badge completed";
   } else if (state?.stage === "trade_history_completed" || (state?.status === "completed" && !state?.isPersisted)) {
     heroBadgeText = "Trade history completed";
@@ -604,6 +781,9 @@ export function PoolScannerPage({ onDatasetRefreshed, embedded = false, startDis
   } else if (isError) {
     heroBadgeText = "Scan failed";
     heroBadgeClass = "pool-scanner-hero-badge error";
+  } else if (state?.existingScan?.isExisting && state?.status === "idle") {
+    heroBadgeText = "Existing token scan detected";
+    heroBadgeClass = "pool-scanner-hero-badge";
   }
 
   let statusUi: "Ready" | "Running" | "Completed" | "Stopped" | "Error" = "Ready";
@@ -663,6 +843,35 @@ export function PoolScannerPage({ onDatasetRefreshed, embedded = false, startDis
               <h2>Scan a token</h2>
               <p>Enter a Solana token contract address to begin discovery.</p>
             </div>
+          </div>
+
+          <div className="pool-scanner-mode-selector">
+            <span className="pool-scanner-mode-label">SCAN MODE</span>
+            <div className="pool-scanner-mode-buttons">
+              <button
+                type="button"
+                className={`pool-scanner-mode-btn ${scanMode === "full" ? "active" : ""}`}
+                onClick={() => setScanMode("full")}
+                disabled={isRunning}
+              >
+                <Radar size={14} />
+                <span>Full Scan</span>
+              </button>
+              <button
+                type="button"
+                className={`pool-scanner-mode-btn ${scanMode === "trades_only" ? "active trades-only" : ""}`}
+                onClick={() => setScanMode("trades_only")}
+                disabled={isRunning}
+              >
+                <Clock size={14} />
+                <span>Pool Trade Only</span>
+              </button>
+            </div>
+            <p className="pool-scanner-mode-description">
+              {scanMode === "full"
+                ? "Full pipeline: pool discovery, LP wallet extraction, 90-day wallet analytics, and cumulative metrics."
+                : "Fast Trade History: only fetches closed positions for a selected DLMM pool. Bypasses 90-day wallet enrichment and cumulative extraction."}
+            </p>
           </div>
 
           <form className="pool-scanner-form" onSubmit={handleDiscoverPools}>
@@ -732,24 +941,76 @@ export function PoolScannerPage({ onDatasetRefreshed, embedded = false, startDis
               </div>
             ) : null}
 
-            <button
-              type="submit"
-              className="pool-scanner-start"
-              disabled={!tokenLooksValid || discoveryLoading || isRunning || startDisabled}
-            >
-              {discoveryLoading ? (
-                <>
-                  <Loader2 size={17} className="spin" />
-                  Discovering Pools...
-                </>
-              ) : (
-                <>
-                  <ScanSearch size={17} />
-                  Discover Pools
-                  <ArrowRight size={16} />
-                </>
-              )}
-            </button>
+            {state?.existingScan?.isExisting && !isRunning && state?.status === "idle" ? (
+              <div className="pool-scanner-existing-card">
+                <div className="pool-scanner-existing-info">
+                  <div className="pool-scanner-existing-title">
+                    <CheckCircle2 size={15} />
+                    <strong>Existing Token Scan Detected</strong>
+                  </div>
+                  {state.existingScan.lastScannedAt ? (
+                    <span className="pool-scanner-existing-date">
+                      Last scan: {formatDate(state.existingScan.lastScannedAt)}
+                    </span>
+                  ) : null}
+                  <div className="pool-scanner-existing-stats">
+                    <span>{state.existingScan.poolCount} pool(s)</span>
+                    <span>·</span>
+                    <span>{state.existingScan.uniqueWallets} wallet(s)</span>
+                    <span>·</span>
+                    <span>{state.existingScan.tradeCount} trade(s)</span>
+                  </div>
+                </div>
+
+                <div className="pool-scanner-existing-actions">
+                  <button
+                    type="button"
+                    className="pool-scanner-view-btn"
+                    onClick={handleViewExisting}
+                    disabled={discoveryLoading || isRunning}
+                  >
+                    {discoveryLoading ? (
+                      <Loader2 size={14} className="spin" />
+                    ) : (
+                      <Eye size={14} />
+                    )}
+                    View Existing
+                  </button>
+                  <button
+                    type="button"
+                    className="pool-scanner-start pool-scanner-refresh-btn"
+                    onClick={handleRefreshData}
+                    disabled={discoveryLoading || isRunning || startDisabled}
+                  >
+                    {submitting ? (
+                      <Loader2 size={14} className="spin" />
+                    ) : (
+                      <RefreshCw size={14} />
+                    )}
+                    Refresh Data
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                type="submit"
+                className="pool-scanner-start"
+                disabled={!tokenLooksValid || discoveryLoading || isRunning || startDisabled}
+              >
+                {discoveryLoading ? (
+                  <>
+                    <Loader2 size={17} className="spin" />
+                    Discovering Pools...
+                  </>
+                ) : (
+                  <>
+                    <ScanSearch size={17} />
+                    Discover Pools
+                    <ArrowRight size={16} />
+                  </>
+                )}
+              </button>
+            )}
           </form>
 
           {discoveryError ? (
@@ -782,32 +1043,43 @@ export function PoolScannerPage({ onDatasetRefreshed, embedded = false, startDis
               ) : (
                 <>
                   <div className="pool-discovery-controls">
-                    <div className="pool-discovery-btn-group">
-                      <button
-                        type="button"
-                        className="pool-discovery-ctrl-btn"
-                        onClick={handleSelectAll}
-                        disabled={isAllSelected}
-                      >
-                        Select All
-                      </button>
-                      <button
-                        type="button"
-                        className="pool-discovery-ctrl-btn"
-                        onClick={handleClearSelection}
-                        disabled={selectedPoolAddresses.length === 0}
-                      >
-                        Clear
-                      </button>
-                    </div>
-                    <span className="pool-discovery-selected-count">
-                      {selectedPoolAddresses.length} of {discoveryResult.poolCount} selected
-                    </span>
+                    {scanMode === "trades_only" ? (
+                      <span className="pool-discovery-selected-count">
+                        Select a DLMM pool to fetch closed-position trade history
+                      </span>
+                    ) : (
+                      <>
+                        <div className="pool-discovery-btn-group">
+                          <button
+                            type="button"
+                            className="pool-discovery-ctrl-btn"
+                            onClick={handleSelectAll}
+                            disabled={isAllSelected}
+                          >
+                            Select All
+                          </button>
+                          <button
+                            type="button"
+                            className="pool-discovery-ctrl-btn"
+                            onClick={handleClearSelection}
+                            disabled={selectedPoolAddresses.length === 0}
+                          >
+                            Clear
+                          </button>
+                        </div>
+                        <span className="pool-discovery-selected-count">
+                          {selectedPoolAddresses.length} of {discoveryResult.poolCount} selected
+                        </span>
+                      </>
+                    )}
                   </div>
 
                   <div className="pool-discovery-list">
                     {discoveryResult.pools.map((p) => {
-                      const isSelected = selectedPoolAddresses.includes(p.poolAddress);
+                      const isExisting = Boolean(state?.existingScan?.pools?.includes(p.poolAddress));
+                      const isSelected = scanMode === "trades_only"
+                        ? selectedTradeOnlyPool === p.poolAddress
+                        : selectedPoolAddresses.includes(p.poolAddress);
                       const shortPool = `${p.poolAddress.slice(0, 4)}...${p.poolAddress.slice(-4)}`;
                       const feeDisplay = p.baseFeePct !== null ? `${p.baseFeePct.toFixed(2)}%` : "—";
                       const binDisplay = p.binStep !== null ? String(p.binStep) : "—";
@@ -816,13 +1088,27 @@ export function PoolScannerPage({ onDatasetRefreshed, embedded = false, startDis
                         <label
                           key={p.poolAddress}
                           className={`pool-discovery-item ${isSelected ? "selected" : ""}`}
+                          onClick={() => {
+                            if (scanMode === "trades_only") {
+                              setSelectedTradeOnlyPool(p.poolAddress);
+                            }
+                          }}
                         >
                           <div className="pool-discovery-checkbox-wrap">
-                            <input
-                              type="checkbox"
-                              checked={isSelected}
-                              onChange={() => handleTogglePool(p.poolAddress)}
-                            />
+                            {scanMode === "trades_only" ? (
+                              <input
+                                type="radio"
+                                name="trade-only-pool"
+                                checked={isSelected}
+                                onChange={() => setSelectedTradeOnlyPool(p.poolAddress)}
+                              />
+                            ) : (
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={() => handleTogglePool(p.poolAddress)}
+                              />
+                            )}
                           </div>
                           <div className="pool-discovery-item-body">
                             <div className="pool-discovery-item-top">
@@ -831,6 +1117,11 @@ export function PoolScannerPage({ onDatasetRefreshed, embedded = false, startDis
                                 <span className={`pool-discovery-quote-tag quote-${(p.quoteSymbol || "quote").toLowerCase()}`}>
                                   {p.quoteSymbol || (p.pair.toUpperCase().includes("USDC") ? "USDC" : "SOL")}
                                 </span>
+                                {isExisting ? (
+                                  <span className="existing-pool-badge">
+                                    <CheckCircle2 size={10} /> In Master
+                                  </span>
+                                ) : null}
                               </div>
                               <span className="pool-discovery-address" title={p.poolAddress}>
                                 <span className="pool-discovery-field-label">Pool</span> {shortPool}
@@ -853,36 +1144,86 @@ export function PoolScannerPage({ onDatasetRefreshed, embedded = false, startDis
                   </div>
 
                   <div className="pool-discovery-actions">
-                    <button
-                      type="button"
-                      className={`pool-scanner-start pool-discovery-scan-btn ${
-                        selectedPoolAddresses.length === 0 ||
-                        discoveryLoading ||
-                        isRunning ||
-                        startDisabled
-                          ? "disabled"
-                          : ""
-                      }`}
-                      disabled={
-                        selectedPoolAddresses.length === 0 ||
-                        discoveryLoading ||
-                        isRunning ||
-                        startDisabled
-                      }
-                      onClick={handleScanSelectedPools}
-                    >
-                      {submitting && state?.stage === "extract" ? (
-                        <>
-                          <Loader2 size={16} className="spin" />
-                          Starting Selected Scan...
-                        </>
-                      ) : (
-                        <>
-                          <Radar size={16} />
-                          Scan Selected Pools ({selectedPoolAddresses.length})
-                        </>
-                      )}
-                    </button>
+                    {scanMode === "trades_only" ? (
+                      <div className="pool-trade-only-action-box">
+                        {Boolean(selectedTradeOnlyPool && state?.existingScan?.pools?.includes(selectedTradeOnlyPool)) && (
+                          <div className="pool-trade-only-notice">
+                            <ShieldCheck size={14} className="text-green" />
+                            <span>Fast Path: Target pool membership already available. Wallets outside this snapshot are not included.</span>
+                          </div>
+                        )}
+                        {Boolean(selectedTradeOnlyPool && state?.existingScan?.pools?.includes(selectedTradeOnlyPool)) ? (
+                          <button
+                            type="button"
+                            className="pool-scanner-start pool-discovery-scan-btn refresh-trades-btn"
+                            disabled={!selectedTradeOnlyPool || discoveryLoading || isRunning || startDisabled}
+                            onClick={handleRefreshPoolTrades}
+                          >
+                            {submitting && isRunning ? (
+                              <>
+                                <Loader2 size={16} className="spin" />
+                                Refreshing Pool Trades...
+                              </>
+                            ) : (
+                              <>
+                                <RefreshCw size={16} />
+                                Refresh Pool Trades ({selectedTradeOnlyPool ? `${selectedTradeOnlyPool.slice(0, 4)}...${selectedTradeOnlyPool.slice(-4)}` : "Select a pool"})
+                              </>
+                            )}
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            className="pool-scanner-start pool-discovery-scan-btn fetch-trades-btn"
+                            disabled={!selectedTradeOnlyPool || discoveryLoading || isRunning || startDisabled}
+                            onClick={handleFetchPoolTrades}
+                          >
+                            {submitting && isRunning ? (
+                              <>
+                                <Loader2 size={16} className="spin" />
+                                Fetching Pool Trades...
+                              </>
+                            ) : (
+                              <>
+                                <Clock size={16} />
+                                Fetch Pool Trades ({selectedTradeOnlyPool ? `${selectedTradeOnlyPool.slice(0, 4)}...${selectedTradeOnlyPool.slice(-4)}` : "Select a pool"})
+                              </>
+                            )}
+                          </button>
+                        )}
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        className={`pool-scanner-start pool-discovery-scan-btn ${
+                          selectedPoolAddresses.length === 0 ||
+                          discoveryLoading ||
+                          isRunning ||
+                          startDisabled
+                            ? "disabled"
+                            : ""
+                        }`}
+                        disabled={
+                          selectedPoolAddresses.length === 0 ||
+                          discoveryLoading ||
+                          isRunning ||
+                          startDisabled
+                        }
+                        onClick={handleScanSelectedPools}
+                      >
+                        {submitting && state?.stage === "extract" ? (
+                          <>
+                            <Loader2 size={16} className="spin" />
+                            Starting Selected Scan...
+                          </>
+                        ) : (
+                          <>
+                            <Radar size={16} />
+                            Scan Selected Pools ({selectedPoolAddresses.length})
+                          </>
+                        )}
+                      </button>
+                    )}
                   </div>
                 </>
               )}
@@ -1022,7 +1363,111 @@ export function PoolScannerPage({ onDatasetRefreshed, embedded = false, startDis
               {state?.finishedAt ? formatDate(state.finishedAt) : "—"}
             </span>
           </div>
+          {state?.isRefresh ? (
+            <div className="pool-scanner-meta-item">
+              <span className="pool-scanner-meta-label">RUN TYPE</span>
+              <span className="pool-scanner-meta-value text-green">
+                Refresh Run
+              </span>
+            </div>
+          ) : null}
+          {state?.scanMode === "trades_only" ? (
+            <div className="pool-scanner-meta-item">
+              <span className="pool-scanner-meta-label">MODE</span>
+              <span className="pool-scanner-meta-value text-cyan">
+                Pool Trade Only
+              </span>
+            </div>
+          ) : null}
+          {state?.targetPool ? (
+            <div className="pool-scanner-meta-item">
+              <span className="pool-scanner-meta-label">TARGET POOL</span>
+              <span className="pool-scanner-meta-value mono" title={state.targetPool}>
+                {state.targetPool.slice(0, 4)}...{state.targetPool.slice(-4)}
+              </span>
+            </div>
+          ) : null}
         </div>
+        {((state?.tradeHistoryFailedWallets || 0) > 0 || (state?.cumulativeUnavailableWallets || 0) > 0) && (
+          <div className="pool-scanner-warning-banner">
+            <AlertTriangle size={15} />
+            <div>
+              <strong>Partial Warnings:</strong>{" "}
+              {state?.tradeHistoryFailedWallets ? `${state.tradeHistoryFailedWallets} wallet(s) failed trade history. ` : ""}
+              {state?.cumulativeUnavailableWallets ? `${state.cumulativeUnavailableWallets} wallet(s) Fabriq cumulative unavailable (historical data retained).` : ""}
+            </div>
+          </div>
+        )}
+        {state?.tradeOnlyNotice && (
+          <div className="pool-scanner-notice-banner">
+            <ShieldCheck size={15} />
+            <div>
+              <strong>Trade Only Notice:</strong> {state.tradeOnlyNotice}
+            </div>
+          </div>
+        )}
+
+        {(state?.scannedPoolsAdded !== undefined || state?.membershipsAdded !== undefined || state?.tradesAdded !== undefined) &&
+         (state?.stage === "persisted" || (state?.status === "completed" && state?.isPersisted)) && (
+          <div className="pool-scanner-diff-summary-card">
+            <div className="diff-summary-title">
+              <Database size={15} className="text-green" />
+              <strong>Canonical Persistence Summary</strong>
+            </div>
+            <div className="diff-summary-grid">
+              <div className="diff-summary-item">
+                <span className="diff-label">POOLS</span>
+                <strong>+{state.scannedPoolsAdded ?? 0}</strong>
+                <small>{state.scannedPoolsUpdated ?? 0} updated</small>
+              </div>
+              <div className="diff-summary-item">
+                <span className="diff-label">MEMBERSHIPS</span>
+                <strong>+{state.membershipsAdded ?? 0}</strong>
+                <small>{state.membershipsUpdated ?? 0} updated</small>
+              </div>
+              <div className="diff-summary-item">
+                <span className="diff-label">TRADES</span>
+                <strong>+{state.tradesAdded ?? 0}</strong>
+                <small>{state.tradesUpdated ?? 0} updated</small>
+              </div>
+              <div className="diff-summary-item">
+                <span className="diff-label">CUMULATIVE AGGS</span>
+                <strong>+{state.aggregatesAdded ?? 0}</strong>
+                <small>{state.aggregatesUpdated ?? 0} updated</small>
+              </div>
+            </div>
+          </div>
+        )}
+        {state?.scanMode === "trades_only" && (state?.stage === "persisted" || (state?.status === "completed" && state?.isPersisted)) && (
+          <div className="pool-scanner-diff-summary-card trade-only-summary">
+            <div className="diff-summary-title">
+              <Clock size={15} className="text-cyan" />
+              <strong>Pool Trade Only Persistence Summary</strong>
+            </div>
+            <div className="diff-summary-grid">
+              <div className="diff-summary-item">
+                <span className="diff-label">WALLETS PROCESSED</span>
+                <strong>{state.tradeHistoryCompletedWallets ?? 0} / {state.tradeHistoryTotalWallets ?? 0}</strong>
+                <small>{state.tradeHistoryFailedWallets ? `${state.tradeHistoryFailedWallets} failed` : "all successful"}</small>
+              </div>
+              <div className="diff-summary-item">
+                <span className="diff-label">TRADES FETCHED</span>
+                <strong>{state.tradeHistoryTotalTrades ?? 0}</strong>
+                <small>from Fabriq</small>
+              </div>
+              <div className="diff-summary-item">
+                <span className="diff-label">CANONICAL TRADES</span>
+                <strong>+{state.tradesAdded ?? 0}</strong>
+                <small>{state.tradesUpdated ?? 0} updated</small>
+              </div>
+              <div className="diff-summary-item">
+                <span className="diff-label">DURATION</span>
+                <strong>{state.tradeDurationSeconds ? `${state.tradeDurationSeconds}s` : "—"}</strong>
+                <small>Fabriq fetch</small>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Selected Pools Extraction Card (Step 3B) */}
         {(state?.stage === "extract" ||
@@ -1093,7 +1538,9 @@ export function PoolScannerPage({ onDatasetRefreshed, embedded = false, startDis
           (state?.status === "completed" && (state?.uniqueWallets || 0) > 0)) &&
           !isRunning &&
           state?.stage !== "fabriq" &&
-          state?.stage !== "fabriq_completed") ? (
+          state?.stage !== "fabriq_completed" &&
+          scanMode !== "trades_only" &&
+          state?.scanMode !== "trades_only") ? (
           <div className="pool-scanner-enrich-trigger-card">
             <div className="enrich-trigger-info">
               <Sparkles size={16} className="text-green" />
@@ -1127,7 +1574,7 @@ export function PoolScannerPage({ onDatasetRefreshed, embedded = false, startDis
         ) : null}
 
         {/* Fabriq Enrichment Progress Card (Step 3C-A) */}
-        {(state?.stage === "fabriq" || state?.stage === "fabriq_completed") ? (
+        {(state?.stage === "fabriq" || state?.stage === "fabriq_completed") && state?.scanMode !== "trades_only" ? (
           <div className="pool-scanner-extract-card fabriq-enrich-card">
             <div className="extract-card-header">
               <div className="extract-card-title">
@@ -1181,7 +1628,9 @@ export function PoolScannerPage({ onDatasetRefreshed, embedded = false, startDis
            state?.stage === "extract_completed" ||
            (state?.status === "completed" && (state?.uniqueWallets || 0) > 0)) &&
           !isRunning &&
-          state?.stage !== "trade_history") ? (
+          state?.stage !== "trade_history" &&
+          scanMode !== "trades_only" &&
+          state?.scanMode !== "trades_only") ? (
           <div className="pool-scanner-enrich-trigger-card trade-history-trigger-card">
             <div className="enrich-trigger-info">
               <Clock size={16} className="text-cyan" />
@@ -1400,6 +1849,11 @@ export function PoolScannerPage({ onDatasetRefreshed, embedded = false, startDis
                       <>
                         <CheckCircle2 size={12} />
                         <span>Completed</span>
+                      </>
+                    ) : st.status === "skipped" ? (
+                      <>
+                        <ArrowRight size={12} />
+                        <span>Skipped</span>
                       </>
                     ) : st.status === "running" ? (
                       <>

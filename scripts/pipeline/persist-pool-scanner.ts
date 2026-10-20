@@ -110,6 +110,58 @@ interface PoolTradeHistoryArtifact {
     pools?: TradeHistoryPool[];
     [key: string]: unknown;
 }
+interface PoolCumulativeAggregateArtifactItem {
+    poolAddress: string;
+    wallet: string;
+    positionCount?: number | null;
+    cumulativePnlUsd?: number | null;
+    cumulativePnlPct?: number | null;
+    cumulativeDurationSeconds?: number | null;
+    earliestOpenedAt?: string | null;
+    latestClosedAt?: string | null;
+    totalAddUsd?: number | null;
+    totalRemUsd?: number | null;
+    totalFeeUsd?: number | null;
+    pair?: string;
+    source?: string;
+    selectionFingerprint?: string;
+    updatedAt?: string;
+    [key: string]: unknown;
+}
+
+interface PoolCumulativeHistoryArtifact {
+    version?: string;
+    tokenMint?: string;
+    selectionFingerprint?: string;
+    generatedAt?: string;
+    aggregates?: PoolCumulativeAggregateArtifactItem[];
+    [key: string]: unknown;
+}
+
+interface FabriqPoolCumulativeAggregateRecord {
+    poolAddress: string;
+    wallet: string;
+    positionCount: number | null;
+    cumulativePnlUsd: number | null;
+    cumulativePnlPct: number | null;
+    cumulativeDurationSeconds: number | null;
+    earliestOpenedAt: string | null;
+    latestClosedAt: string | null;
+    totalAddUsd: number | null;
+    totalRemUsd: number | null;
+    totalFeeUsd: number | null;
+    pair?: string;
+    source: "Fabriq";
+    selectionFingerprint: string;
+    updatedAt: string;
+}
+
+interface PoolCumulativeHistoryFile {
+    version: "v1";
+    updatedAt: string;
+    aggregates: FabriqPoolCumulativeAggregateRecord[];
+}
+
 
 interface ScannedPoolRecord {
     poolAddress: string;
@@ -122,6 +174,7 @@ interface ScannedPoolRecord {
     tradeCount: number;
     firstScannedAt: string;
     lastScannedAt: string;
+    lastTradeRefreshAt?: string;
 }
 
 interface ScannedPoolsFile {
@@ -139,6 +192,8 @@ interface PoolWalletMembershipRecord {
     tradeCount: number;
     selectionFingerprint: string;
     updatedAt: string;
+    isLatestSnapshot?: boolean;
+    isHistorical?: boolean;
 }
 
 interface PoolWalletMembershipFile {
@@ -169,14 +224,14 @@ interface ParsedCliArgs {
     token: string;
     targetPool: string | null;
     dryRun: boolean;
+    tradesOnly: boolean;
 }
-
 function parseCliArgs(): ParsedCliArgs {
     const args = process.argv.slice(2);
     let token = "";
     let targetPool: string | null = null;
     let dryRun = false;
-
+    let tradesOnly = false;
     for (let i = 0; i < args.length; i++) {
         const arg = args[i];
         if (arg === "--token") {
@@ -191,6 +246,8 @@ function parseCliArgs(): ParsedCliArgs {
             targetPool = arg.slice("--pool=".length);
         } else if (arg === "--dry-run") {
             dryRun = true;
+        } else if (arg === "--trades-only" || arg === "--trade-only") {
+            tradesOnly = true;
         }
     }
 
@@ -200,7 +257,7 @@ function parseCliArgs(): ParsedCliArgs {
         );
     }
 
-    return { token, targetPool: targetPool ? targetPool.trim() : null, dryRun };
+    return { token, targetPool: targetPool ? targetPool.trim() : null, dryRun, tradesOnly };
 }
 function getErrorMessage(err: unknown): string {
     if (err instanceof Error) return err.message;
@@ -244,9 +301,171 @@ function deepEqual(a: unknown, b: unknown): boolean {
     return true;
 }
 
-async function main() {
-    const { token, targetPool, dryRun } = parseCliArgs();
+async function persistTradesOnly({ token, targetPool, dryRun }: { token: string; targetPool: string | null; dryRun: boolean }) {
+    if (!targetPool) {
+        throw new Error("Missing required argument: --pool <POOL_ADDRESS> when --trades-only is specified");
+    }
 
+    const selectedScanDir = path.resolve(`data/discovery/pool-scanner/${token}/selected-scan`);
+    const poolTradeHistoryPath = path.join(selectedScanDir, "pool-trade-history.json");
+    const scanStatePath = path.join(selectedScanDir, "scan-state.json");
+
+    let poolTradeHistory: PoolTradeHistoryArtifact;
+    try {
+        poolTradeHistory = JSON.parse(await readFile(poolTradeHistoryPath, "utf8")) as PoolTradeHistoryArtifact;
+    } catch (err: unknown) {
+        throw new Error(`Validation failed: pool-trade-history.json does not exist or is invalid at ${poolTradeHistoryPath}: ${getErrorMessage(err)}`);
+    }
+
+    const thPools = poolTradeHistory.pools ?? [];
+    const targetThPool = thPools.find((p) => p.poolAddress === targetPool);
+    if (!targetThPool) {
+        throw new Error(`Validation failed: Target pool ${targetPool} not found in ${poolTradeHistoryPath}`);
+    }
+
+    if (targetThPool.membershipWalletCount !== targetThPool.processedWalletCount) {
+        throw new Error(
+            `Validation failed: Incomplete trade history for pool ${targetPool}: processed ${targetThPool.processedWalletCount} of ${targetThPool.membershipWalletCount} wallets`
+        );
+    }
+
+    let scanArtifactTimestamp = poolTradeHistory.generatedAt;
+    try {
+        const scanState = JSON.parse(await readFile(scanStatePath, "utf8")) as ScanStateArtifact;
+        scanArtifactTimestamp = scanState.completedAt || scanState.updatedAt || scanArtifactTimestamp;
+    } catch {}
+    if (!scanArtifactTimestamp) {
+        scanArtifactTimestamp = new Date().toISOString();
+    }
+
+    const MASTER_DIR = path.resolve("data/master");
+    const canonicalPoolTradeHistoryPath = path.join(MASTER_DIR, "pool-trade-history.json");
+    const scannedPoolsPath = path.join(MASTER_DIR, "scanned-pools.json");
+
+    const existingTrades = await loadExistingJsonOrDefault<PoolTradeHistoryFile>(
+        canonicalPoolTradeHistoryPath,
+        { version: "v1", updatedAt: scanArtifactTimestamp, trades: [] }
+    );
+
+    const tradesMap = new Map<string, PoolTradeHistoryRecord>();
+    for (const t of existingTrades.trades || []) {
+        tradesMap.set(`${t.poolAddress}::${t.wallet}::${t.positionId}`, t);
+    }
+
+    let tradesToAdd = 0;
+    let tradesToUpdate = 0;
+    const fingerprint = poolTradeHistory.selectionFingerprint || "";
+
+    for (const w of targetThPool.wallets || []) {
+        const wAddr = w.wallet;
+        for (const tr of w.trades || []) {
+            if (!tr.positionId) continue;
+            const key = `${targetPool}::${wAddr}::${tr.positionId}`;
+            const existing = tradesMap.get(key);
+
+            const incomingRecord: PoolTradeHistoryRecord = {
+                poolAddress: targetPool,
+                wallet: wAddr,
+                positionId: tr.positionId,
+                openedAt: tr.openedAt !== undefined ? tr.openedAt : null,
+                closedAt: tr.closedAt !== undefined ? tr.closedAt : null,
+                durationSeconds: tr.durationSeconds !== undefined ? tr.durationSeconds : null,
+                pnlUsd: tr.pnlUsd !== undefined ? tr.pnlUsd : null,
+                pnlPct: tr.pnlPct !== undefined ? tr.pnlPct : null,
+                selectionFingerprint: fingerprint || existing?.selectionFingerprint || "",
+            };
+
+            if (existing) {
+                if (!deepEqual(existing, incomingRecord)) {
+                    tradesToUpdate++;
+                    tradesMap.set(key, incomingRecord);
+                }
+            } else {
+                tradesToAdd++;
+                tradesMap.set(key, incomingRecord);
+            }
+        }
+    }
+
+    const nextTradesList = Array.from(tradesMap.values()).sort((a, b) => {
+        const poolComp = a.poolAddress.localeCompare(b.poolAddress);
+        if (poolComp !== 0) return poolComp;
+
+        const walletComp = a.wallet.localeCompare(b.wallet);
+        if (walletComp !== 0) return walletComp;
+
+        if (a.closedAt === null && b.closedAt !== null) return 1;
+        if (a.closedAt !== null && b.closedAt === null) return -1;
+        if (a.closedAt !== null && b.closedAt !== null) {
+            const closedComp = b.closedAt.localeCompare(a.closedAt);
+            if (closedComp !== 0) return closedComp;
+        }
+
+        return a.positionId.localeCompare(b.positionId);
+    });
+
+    const totalTradesForPool = nextTradesList.filter((t) => t.poolAddress === targetPool).length;
+
+    const existingScannedPools = await loadExistingJsonOrDefault<ScannedPoolsFile>(
+        scannedPoolsPath,
+        { version: "v1", updatedAt: scanArtifactTimestamp, pools: [] }
+    );
+
+    let poolFound = false;
+    for (const p of existingScannedPools.pools || []) {
+        if (p.poolAddress === targetPool) {
+            p.tradeCount = totalTradesForPool;
+            p.lastTradeRefreshAt = scanArtifactTimestamp;
+            poolFound = true;
+            break;
+        }
+    }
+    if (!poolFound) {
+        existingScannedPools.pools.push({
+            poolAddress: targetPool,
+            tokenMint: token,
+            pair: "",
+            binStep: 0,
+            baseFeePct: 0,
+            selectionFingerprint: fingerprint,
+            walletCount: targetThPool.membershipWalletCount ?? 0,
+            tradeCount: totalTradesForPool,
+            firstScannedAt: scanArtifactTimestamp,
+            lastScannedAt: scanArtifactTimestamp,
+            lastTradeRefreshAt: scanArtifactTimestamp,
+        });
+    }
+
+    console.log(`\n========================================`);
+    console.log(`STEP 3D-A PERSISTENCE (POOL TRADE ONLY)`);
+    console.log(`========================================`);
+    console.log(`Token:       ${token}`);
+    console.log(`Target Pool: ${targetPool}`);
+    console.log(`Total Trades for Pool: ${totalTradesForPool}`);
+    console.log(`Trades written: ${nextTradesList.length} (added: ${tradesToAdd}, updated: ${tradesToUpdate})`);
+    console.log(`Scanned pools written: ${existingScannedPools.pools.length} (added: ${poolFound ? 0 : 1}, updated: ${poolFound ? 1 : 0})`);
+    console.log(`========================================`);
+
+    if (!dryRun) {
+        const tmpTrades = `${canonicalPoolTradeHistoryPath}.tmp.${Date.now()}`;
+        const tmpPools = `${scannedPoolsPath}.tmp.${Date.now()}`;
+        await writeFile(tmpTrades, JSON.stringify({ version: "v1", updatedAt: scanArtifactTimestamp, trades: nextTradesList }, null, 2), "utf8");
+        await rename(tmpTrades, canonicalPoolTradeHistoryPath);
+
+        await writeFile(tmpPools, JSON.stringify({ version: "v1", updatedAt: scanArtifactTimestamp, pools: existingScannedPools.pools }, null, 2), "utf8");
+        await rename(tmpPools, scannedPoolsPath);
+    }
+
+    console.log(`STEP 3D-A PERSISTENCE COMPLETE`);
+}
+
+async function main() {
+    const { token, targetPool, dryRun, tradesOnly } = parseCliArgs();
+
+    if (tradesOnly) {
+        await persistTradesOnly({ token, targetPool, dryRun });
+        return;
+    }
     const selectedScanDir = path.resolve(
         `data/discovery/pool-scanner/${token}/selected-scan`
     );
@@ -255,6 +474,7 @@ async function main() {
     const scanStatePath = path.join(selectedScanDir, "scan-state.json");
     const poolWalletsPath = path.join(selectedScanDir, "pool-wallets.json");
     const poolTradeHistoryPath = path.join(selectedScanDir, "pool-trade-history.json");
+    const poolCumulativeHistoryPath = path.join(selectedScanDir, "pool-cumulative-history.json");
 
     // ==================================================
     // 1-4. Validate artifact existence and load
@@ -263,6 +483,7 @@ async function main() {
     let scanState: ScanStateArtifact;
     let poolWallets: PoolWalletsArtifact;
     let poolTradeHistory: PoolTradeHistoryArtifact;
+    let poolCumulativeHistory: PoolCumulativeHistoryArtifact | null = null;
 
     try {
         selection = JSON.parse(await readFile(selectionPath, "utf8")) as SelectionArtifact;
@@ -287,6 +508,13 @@ async function main() {
     } catch (err: unknown) {
         throw new Error(`Validation failed: pool-trade-history.json does not exist or is invalid at ${poolTradeHistoryPath}: ${getErrorMessage(err)}`);
     }
+    try {
+        const rawCum = await readFile(poolCumulativeHistoryPath, "utf8");
+        poolCumulativeHistory = JSON.parse(rawCum) as PoolCumulativeHistoryArtifact;
+    } catch {
+        // Optional sidecar artifact
+    }
+
 
     // ==================================================
     // 5. tokenMint agrees across artifacts where present
@@ -534,6 +762,7 @@ async function main() {
     const scannedPoolsPath = path.join(MASTER_DIR, "scanned-pools.json");
     const poolWalletMembershipPath = path.join(MASTER_DIR, "pool-wallet-membership.json");
     const canonicalPoolTradeHistoryPath = path.join(MASTER_DIR, "pool-trade-history.json");
+    const canonicalPoolCumulativeHistoryPath = path.join(MASTER_DIR, "pool-cumulative-history.json");
 
     const existingScannedPools = await loadExistingJsonOrDefault<ScannedPoolsFile>(
         scannedPoolsPath,
@@ -547,6 +776,11 @@ async function main() {
         canonicalPoolTradeHistoryPath,
         { version: "v1", updatedAt: scanArtifactTimestamp, trades: [] }
     );
+    const existingCumulative = await loadExistingJsonOrDefault<PoolCumulativeHistoryFile>(
+        canonicalPoolCumulativeHistoryPath,
+        { version: "v1", updatedAt: scanArtifactTimestamp, aggregates: [] }
+    );
+
 
     // ==================================================
     // Prepare Canonical 1: scanned-pools.json
@@ -607,12 +841,14 @@ async function main() {
         membershipMap.set(`${m.poolAddress}::${m.wallet}`, m);
     }
 
-    // When scoped to a target pool, remove previous membership records for that pool so disappearing wallets are purged
-    if (targetPool) {
-        for (const [key, m] of membershipMap.entries()) {
-            if (m.poolAddress === targetPool) {
-                membershipMap.delete(key);
-            }
+    // Mark existing memberships for scanned pools as historical before applying incoming latest snapshot
+    const scannedPoolSet = new Set(
+        targetPool ? [targetPool] : selectedPoolsFromSelection.map((p) => p.poolAddress)
+    );
+    for (const [key, m] of membershipMap.entries()) {
+        if (scannedPoolSet.has(m.poolAddress)) {
+            m.isLatestSnapshot = false;
+            m.isHistorical = true;
         }
     }
     let membershipsToAdd = 0;
@@ -635,8 +871,9 @@ async function main() {
                 tradeCount,
                 selectionFingerprint: fingerprint,
                 updatedAt: scanArtifactTimestamp,
+                isLatestSnapshot: true,
+                isHistorical: false,
             };
-
             if (existing) {
                 if (!deepEqual(existing, incomingRecord)) {
                     membershipsToUpdate++;
@@ -662,14 +899,6 @@ async function main() {
         tradesMap.set(`${t.poolAddress}::${t.wallet}::${t.positionId}`, t);
     }
 
-    // When scoped to a target pool, remove previous trade records for that pool to replace with latest snapshot
-    if (targetPool) {
-        for (const [key, t] of tradesMap.entries()) {
-            if (t.poolAddress === targetPool) {
-                tradesMap.delete(key);
-            }
-        }
-    }
     let tradesToAdd = 0;
     let tradesToUpdate = 0;
 
@@ -705,6 +934,65 @@ async function main() {
             }
         }
     }
+    // ==================================================
+    // Prepare Canonical 4 (Sidecar): pool-cumulative-history.json
+    // ==================================================
+    const cumulativeMap = new Map<string, FabriqPoolCumulativeAggregateRecord>();
+    for (const a of existingCumulative.aggregates || []) {
+        cumulativeMap.set(`${a.poolAddress}::${a.wallet}`, a);
+    }
+
+    const hasIncomingCumulative = Boolean(
+        poolCumulativeHistory &&
+        Array.isArray(poolCumulativeHistory.aggregates) &&
+        poolCumulativeHistory.aggregates.length > 0
+    );
+
+
+    let cumulativeToAdd = 0;
+    let cumulativeToUpdate = 0;
+
+    if (poolCumulativeHistory && Array.isArray(poolCumulativeHistory.aggregates)) {
+        for (const agg of poolCumulativeHistory.aggregates) {
+            if (!agg.poolAddress || !agg.wallet) continue;
+            const key = `${agg.poolAddress}::${agg.wallet}`;
+            const existing = cumulativeMap.get(key);
+            const incomingRecord: FabriqPoolCumulativeAggregateRecord = {
+                poolAddress: agg.poolAddress,
+                wallet: agg.wallet,
+                positionCount: agg.positionCount !== undefined ? agg.positionCount : null,
+                cumulativePnlUsd: agg.cumulativePnlUsd !== undefined ? agg.cumulativePnlUsd : null,
+                cumulativePnlPct: agg.cumulativePnlPct !== undefined ? agg.cumulativePnlPct : null,
+                cumulativeDurationSeconds: agg.cumulativeDurationSeconds !== undefined ? agg.cumulativeDurationSeconds : null,
+                earliestOpenedAt: agg.earliestOpenedAt !== undefined ? agg.earliestOpenedAt : null,
+                latestClosedAt: agg.latestClosedAt !== undefined ? agg.latestClosedAt : null,
+                totalAddUsd: agg.totalAddUsd !== undefined ? agg.totalAddUsd : null,
+                totalRemUsd: agg.totalRemUsd !== undefined ? agg.totalRemUsd : null,
+                totalFeeUsd: agg.totalFeeUsd !== undefined ? agg.totalFeeUsd : null,
+                pair: agg.pair,
+                source: "Fabriq",
+                selectionFingerprint: fingerprint,
+                updatedAt: scanArtifactTimestamp,
+            };
+
+            if (existing) {
+                if (!deepEqual(existing, incomingRecord)) {
+                    cumulativeToUpdate++;
+                    cumulativeMap.set(key, incomingRecord);
+                }
+            } else {
+                cumulativeToAdd++;
+                cumulativeMap.set(key, incomingRecord);
+            }
+        }
+    }
+
+    const nextCumulativeList = Array.from(cumulativeMap.values()).sort((a, b) => {
+        const poolComp = a.poolAddress.localeCompare(b.poolAddress);
+        if (poolComp !== 0) return poolComp;
+        return a.wallet.localeCompare(b.wallet);
+    });
+
     const nextTradesList = Array.from(tradesMap.values()).sort((a, b) => {
         const poolComp = a.poolAddress.localeCompare(b.poolAddress);
         if (poolComp !== 0) return poolComp;
@@ -803,6 +1091,17 @@ async function main() {
         updatedAt: tradesRootUpdatedAt,
         trades: nextTradesList,
     };
+    const cumulativeChanged = cumulativeToAdd > 0 || cumulativeToUpdate > 0;
+    const cumulativeRootUpdatedAt = cumulativeChanged
+        ? scanArtifactTimestamp
+        : (existingCumulative.updatedAt || scanArtifactTimestamp);
+
+    const finalCumulativeFile: PoolCumulativeHistoryFile = {
+        version: "v1",
+        updatedAt: cumulativeRootUpdatedAt,
+        aggregates: nextCumulativeList,
+    };
+
 
     // 2. Validate final outputs again
     if (!Array.isArray(finalScannedPoolsFile.pools) || finalScannedPoolsFile.pools.length === 0) {
@@ -821,6 +1120,7 @@ async function main() {
     const tmpScannedPoolsPath = path.join(MASTER_DIR, `scanned-pools.${nonce}.tmp`);
     const tmpMembershipPath = path.join(MASTER_DIR, `pool-wallet-membership.${nonce}.tmp`);
     const tmpTradesPath = path.join(MASTER_DIR, `pool-trade-history.${nonce}.tmp`);
+    const tmpCumulativePath = path.join(MASTER_DIR, `pool-cumulative-history.${nonce}.tmp`);
 
     const writtenTmpFiles: string[] = [];
 
@@ -833,17 +1133,30 @@ async function main() {
 
         await writeFile(tmpTradesPath, JSON.stringify(finalTradeHistoryFile, null, 2), "utf8");
         writtenTmpFiles.push(tmpTradesPath);
+        if (hasIncomingCumulative) {
+            await writeFile(tmpCumulativePath, JSON.stringify(finalCumulativeFile, null, 2), "utf8");
+            writtenTmpFiles.push(tmpCumulativePath);
+        }
+
 
         // Atomic rename of all three
         await rename(tmpScannedPoolsPath, scannedPoolsPath);
         await rename(tmpMembershipPath, poolWalletMembershipPath);
         await rename(tmpTradesPath, canonicalPoolTradeHistoryPath);
+        if (hasIncomingCumulative) {
+            await rename(tmpCumulativePath, canonicalPoolCumulativeHistoryPath);
+        }
+
 
         console.log("STEP 3D-A PERSISTENCE COMPLETE");
         console.log(`Token: ${token}`);
         console.log(`Scanned pools written: ${finalScannedPoolsFile.pools.length} (added: ${scannedPoolsToAdd}, updated: ${scannedPoolsToUpdate})`);
         console.log(`Memberships written: ${finalMembershipFile.memberships.length} (added: ${membershipsToAdd}, updated: ${membershipsToUpdate})`);
         console.log(`Trades written: ${finalTradeHistoryFile.trades.length} (added: ${tradesToAdd}, updated: ${tradesToUpdate})`);
+        if (hasIncomingCumulative) {
+            console.log(`Cumulative aggregates written: ${finalCumulativeFile.aggregates.length} (added: ${cumulativeToAdd}, updated: ${cumulativeToUpdate})`);
+        }
+
     } catch (writeErr) {
         // Clean temporary files on failure
         for (const tmpFile of writtenTmpFiles) {

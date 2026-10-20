@@ -42,7 +42,8 @@ export type CdpErrorCode =
     | "AUTH_SESSION_ERROR"
     | "CLOUDFLARE_WAITING"
     | "FABRIQ_API_ERROR"
-    | "RATE_LIMITED";
+    | "RATE_LIMITED"
+    | "DATA_NOT_FOUND";
 
 export function stripAnsi(str: string): string {
     if (typeof str !== "string") return String(str ?? "");
@@ -309,6 +310,7 @@ export async function getFabriqPage(log?: (msg: string) => void, customCdpUrl?: 
                 throw new FabriqCdpError({
                     code: isTimeout ? "CDP_PROTOCOL_TIMEOUT" : "CDP_SESSION_DISCONNECTED",
                     stageNumber: 3,
+                    stageName: "CDP protocol initialization",
                     message: `CDP protocol initialization failed after ${connectionAttempt} attempts: ${lastCdpError instanceof Error ? lastCdpError.message : String(lastCdpError)}`,
                     elapsedMs: Date.now() - t0,
                     recommendedAction: isTimeout
@@ -539,6 +541,12 @@ export function isFabriqDlmmPool(rowOrPool: any): boolean {
     const dex = String(pool?.dex || rowOrPool?.dex || "").trim().toUpperCase();
     return dex === "METEORA_DLMM" || dex === "DLMM" || dex.includes("DLMM");
 }
+export function parseSafeNumber(val: unknown): number | null {
+    if (val === undefined || val === null || val === "") return null;
+    const num = Number(val);
+    return Number.isFinite(num) ? num : null;
+}
+
 
 export interface FabriqPoolMetadata {
     binStep?: number | null;
@@ -547,19 +555,19 @@ export interface FabriqPoolMetadata {
 
 export interface FabriqPoolRecord {
     pool_id: string;
-    position_count?: number;
-    position_count_wallet?: number;
-    position_count_hawkfi?: number;
-    total_add_usd?: number;
-    total_add_sol?: number;
-    total_rem_usd?: number;
-    total_rem_sol?: number;
-    total_fee_usd?: number;
-    total_fee_sol?: number;
-    total_pnl_usd?: number;
-    total_pnl_sol?: number;
-    total_pnl_pct_usd?: number;
-    total_pnl_pct_sol?: number;
+    position_count?: number | null;
+    position_count_wallet?: number | null;
+    position_count_hawkfi?: number | null;
+    total_add_usd?: number | null;
+    total_add_sol?: number | null;
+    total_rem_usd?: number | null;
+    total_rem_sol?: number | null;
+    total_fee_usd?: number | null;
+    total_fee_sol?: number | null;
+    total_pnl_usd?: number | null;
+    total_pnl_sol?: number | null;
+    total_pnl_pct_usd?: number | null;
+    total_pnl_pct_sol?: number | null;
     latest_close_ts?: string | number | null;
     earliest_open_ts?: string | number | null;
     duration?: number | null;
@@ -1106,22 +1114,22 @@ export async function fetchFabriqClosedPositionHistory(
 
             rawFabriqPools.push({
                 pool_id: String(poolId),
-                position_count: Number(row.position_count ?? 0),
-                position_count_wallet: Number(row.position_count_wallet ?? 0),
-                position_count_hawkfi: Number(row.position_count_hawkfi ?? 0),
-                total_add_usd: Number(row.total_add_usd ?? 0),
-                total_add_sol: Number(row.total_add_sol ?? 0),
-                total_rem_usd: Number(row.total_rem_usd ?? 0),
-                total_rem_sol: Number(row.total_rem_sol ?? 0),
-                total_fee_usd: Number(row.total_fee_usd ?? 0),
-                total_fee_sol: Number(row.total_fee_sol ?? 0),
-                total_pnl_usd: Number(row.total_pnl_usd ?? 0),
-                total_pnl_sol: Number(row.total_pnl_sol ?? 0),
-                total_pnl_pct_usd: Number(row.total_pnl_pct_usd ?? 0),
-                total_pnl_pct_sol: Number(row.total_pnl_pct_sol ?? 0),
+                position_count: parseSafeNumber(row.position_count),
+                position_count_wallet: parseSafeNumber(row.position_count_wallet),
+                position_count_hawkfi: parseSafeNumber(row.position_count_hawkfi),
+                total_add_usd: parseSafeNumber(row.total_add_usd),
+                total_add_sol: parseSafeNumber(row.total_add_sol),
+                total_rem_usd: parseSafeNumber(row.total_rem_usd),
+                total_rem_sol: parseSafeNumber(row.total_rem_sol),
+                total_fee_usd: parseSafeNumber(row.total_fee_usd),
+                total_fee_sol: parseSafeNumber(row.total_fee_sol),
+                total_pnl_usd: parseSafeNumber(row.total_pnl_usd),
+                total_pnl_sol: parseSafeNumber(row.total_pnl_sol),
+                total_pnl_pct_usd: parseSafeNumber(row.total_pnl_pct_usd),
+                total_pnl_pct_sol: parseSafeNumber(row.total_pnl_pct_sol),
                 latest_close_ts: row.latest_close_ts ?? null,
                 earliest_open_ts: row.earliest_open_ts ?? null,
-                duration: row.duration !== undefined ? Number(row.duration) : null,
+                duration: parseSafeNumber(row.duration),
                 pool: row.pool,
                 parsedParams,
             });

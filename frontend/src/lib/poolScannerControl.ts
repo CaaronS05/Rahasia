@@ -1,5 +1,7 @@
 export const POOL_SCANNER_API_BASE = "http://127.0.0.1:8787";
 
+export type ScanMode = "full" | "trades_only";
+
 export type PoolScannerStatus =
   | "idle"
   | "running"
@@ -31,9 +33,24 @@ export interface CurrentPoolInfo {
   poolAddress: string;
 }
 
+export interface ExistingScanInfo {
+  isExisting: boolean;
+  isPersisted: boolean;
+  lastScannedAt: string | null;
+  poolCount: number;
+  pools: string[];
+  uniqueWallets: number;
+  tradeCount: number;
+  fabriqCompleted: number;
+}
+
 export interface PoolScannerState {
   status: PoolScannerStatus;
   stage: PoolScannerStage;
+  scanMode?: ScanMode;
+  targetPool?: string | null;
+  tradeOnlyNotice?: string | null;
+  tradeDurationSeconds?: number | null;
   tokenCa: string | null;
   fabriqWorkers?: number;
   startedAt: string | null;
@@ -48,6 +65,10 @@ export interface PoolScannerState {
   stage2Complete?: boolean;
   pipelineComplete?: boolean;
   isPersisted?: boolean;
+  existingScan?: ExistingScanInfo | null;
+  isRefresh?: boolean;
+  refreshStartedAt?: string | null;
+  refreshRunId?: string | null;
   selectedPools?: string[];
   selectedPoolCount?: number;
   completedPoolCount?: number;
@@ -63,6 +84,22 @@ export interface PoolScannerState {
   tradeHistoryCompletedWallets?: number;
   tradeHistoryFailedWallets?: number;
   tradeHistoryTotalTrades?: number;
+  cumulativeTotalWallets?: number;
+  cumulativeCompletedWallets?: number;
+  cumulativeUnavailableWallets?: number;
+  cumulativeTotalAggregates?: number;
+  scannedPoolsTotal?: number;
+  scannedPoolsAdded?: number;
+  scannedPoolsUpdated?: number;
+  membershipsTotal?: number;
+  membershipsAdded?: number;
+  membershipsUpdated?: number;
+  tradesTotal?: number;
+  tradesAdded?: number;
+  tradesUpdated?: number;
+  aggregatesTotal?: number;
+  aggregatesAdded?: number;
+  aggregatesUpdated?: number;
 }
 export interface PoolRefreshState {
   poolAddress: string | null;
@@ -247,12 +284,20 @@ export async function buildPoolTradeHistory(
   tokenCa: string,
   workers = 2,
   wallet?: string,
-  limit?: number
+  limit?: number,
+  poolAddress?: string,
+  tradesOnly?: boolean
 ): Promise<PoolScannerState> {
   const body: Record<string, unknown> = {
     tokenCa: tokenCa.trim(),
     workers,
   };
+  if (poolAddress && typeof poolAddress === "string" && poolAddress.trim()) {
+    body.poolAddress = poolAddress.trim();
+  }
+  if (tradesOnly) {
+    body.tradesOnly = true;
+  }
   if (wallet && typeof wallet === "string" && wallet.trim()) {
     body.wallet = wallet.trim();
   }
@@ -296,4 +341,59 @@ export async function persistPoolScanner(tokenCa: string): Promise<PoolScannerSt
   return payload;
 }
 
+export async function refreshPoolScanner(
+  tokenCa: string,
+  fabriqWorkers = 8,
+  poolAddresses?: string[]
+): Promise<PoolScannerState> {
+  const body: Record<string, unknown> = {
+    tokenCa: tokenCa.trim(),
+    fabriqWorkers,
+  };
+  if (poolAddresses && poolAddresses.length > 0) {
+    body.poolAddresses = poolAddresses;
+  }
+  const response = await fetch(`${POOL_SCANNER_API_BASE}/api/pool-scanner/refresh`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(
+      payload?.error || `Pool Scanner refresh failed with status ${response.status}`
+    );
+  }
+  return payload;
+}
+export async function startPoolTradeOnly(
+  tokenCa: string,
+  poolAddress: string,
+  refresh = false,
+  workers = 8
+): Promise<PoolScannerState> {
+  const response = await fetch(`${POOL_SCANNER_API_BASE}/api/pool-scanner/trade-only`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      tokenCa: tokenCa.trim(),
+      poolAddress: poolAddress.trim(),
+      refresh,
+      workers,
+    }),
+  });
+
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(
+      payload?.error || `Pool Trade Only start failed with status ${response.status}`
+    );
+  }
+  return payload;
+}
 

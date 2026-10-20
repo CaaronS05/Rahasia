@@ -13,7 +13,7 @@ function parseArgs() {
   const args = process.argv.slice(2);
   let poolAddress = null;
   let workers = null;
-
+  let tradesOnly = false;
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === "--pool" && args[i + 1]) {
@@ -32,6 +32,8 @@ function parseArgs() {
       if (Number.isInteger(parsed) && parsed >= 1) {
         workers = parsed;
       }
+    } else if (arg === "--trades-only" || arg === "--trade-only") {
+      tradesOnly = true;
     }
   }
 
@@ -51,7 +53,7 @@ function parseArgs() {
     );
   }
 
-  return { poolAddress, workers };
+  return { poolAddress, workers, tradesOnly };
 }
 
 function runSubprocess(cmd, args, stepName) {
@@ -79,7 +81,7 @@ function runSubprocess(cmd, args, stepName) {
 }
 
 async function main() {
-  const { poolAddress, workers } = parseArgs();
+  const { poolAddress, workers, tradesOnly } = parseArgs();
 
   console.log("========================================");
   console.log("EXACT POOL REFRESH ORCHESTRATOR");
@@ -119,6 +121,91 @@ async function main() {
   console.log(`----------------------------------------`);
 
   console.log(`[REFRESH_POOL] START pool="${poolAddress}" token="${tokenMint}" pair="${pair}"`);
+  if (tradesOnly) {
+    console.log(`[REFRESH_POOL] Mode: POOL TRADE ONLY`);
+    let hasValidMembership = false;
+    let membershipCount = 0;
+    try {
+      const rawM = await fs.readFile(path.join(ROOT, "data/master/pool-wallet-membership.json"), "utf8");
+      const mData = JSON.parse(rawM);
+      const poolMemberships = (mData?.memberships || []).filter(
+        (m) => m?.poolAddress === poolAddress && m?.isLatestSnapshot !== false
+      );
+      if (poolMemberships.length > 0) {
+        hasValidMembership = true;
+        membershipCount = poolMemberships.length;
+      }
+    } catch {}
+
+    if (hasValidMembership) {
+      console.log(`[REFRESH_POOL] Fast path: using ${membershipCount} existing membership wallets.`);
+      console.log(`[REFRESH_POOL] Notice: New wallets outside this membership snapshot are not included.`);
+      console.log(`[REFRESH_POOL] STAGE scanning (SKIPPED - existing membership used)`);
+    } else {
+      console.log(`[REFRESH_POOL] No valid membership found. Running minimal LP extraction...`);
+      console.log(`[REFRESH_POOL] STAGE scanning`);
+      await runSubprocess(
+        process.execPath,
+        [
+          "scripts/pool/scan-selected-pools.mjs",
+          "--token",
+          tokenMint,
+          "--pool",
+          poolAddress,
+          "--refresh",
+        ],
+        "SCANNING"
+      );
+    }
+
+    console.log(`[REFRESH_POOL] STAGE enriching (SKIPPED - pool trade only mode)`);
+
+    // Stage 3: TRADE_HISTORY
+    console.log(`[REFRESH_POOL] STAGE trade_history`);
+    await runSubprocess(
+      process.execPath,
+      [
+        "--experimental-strip-types",
+        "scripts/pool/build-pool-trade-history.ts",
+        "--token",
+        tokenMint,
+        "--pool",
+        poolAddress,
+        "--refresh",
+        "--workers",
+        String(workers),
+      ],
+      "TRADE_HISTORY"
+    );
+
+    console.log(`[REFRESH_POOL] STAGE cumulative (SKIPPED - pool trade only mode)`);
+
+    // Stage 4: PERSISTING
+    console.log(`[REFRESH_POOL] STAGE persisting`);
+    await runSubprocess(
+      process.execPath,
+      [
+        "--experimental-strip-types",
+        "scripts/pipeline/persist-pool-scanner.ts",
+        "--token",
+        tokenMint,
+        "--pool",
+        poolAddress,
+        "--trades-only",
+      ],
+      "PERSISTING"
+    );
+
+    console.log(`[REFRESH_POOL] STAGE syncing (SKIPPED - pool trade only mode)`);
+    console.log(`[REFRESH_POOL] STAGE publishing (SKIPPED - pool trade only mode)`);
+
+    console.log(`[REFRESH_POOL] COMPLETE pool="${poolAddress}"`);
+    console.log("========================================");
+    console.log("EXACT POOL TRADE ONLY REFRESH COMPLETE");
+    console.log("========================================");
+    return;
+  }
+
 
   // Stage 1: SCANNING
   console.log(`[REFRESH_POOL] STAGE scanning`);
@@ -165,6 +252,24 @@ async function main() {
     ],
     "TRADE_HISTORY"
   );
+  // Stage 3B: CUMULATIVE
+  console.log(`[REFRESH_POOL] STAGE cumulative`);
+  try {
+    await runSubprocess(
+      process.execPath,
+      [
+        "--experimental-strip-types",
+        "scripts/pool/extract-pool-cumulative.ts",
+        "--token",
+        tokenMint,
+        "--refresh",
+      ],
+      "CUMULATIVE"
+    );
+  } catch (cumErr) {
+    console.warn(`[REFRESH_POOL] Cumulative extraction warning (trade history remains intact):`, cumErr);
+  }
+
 
   // Stage 4: PERSISTING
   console.log(`[REFRESH_POOL] STAGE persisting`);

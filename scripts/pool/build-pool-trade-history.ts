@@ -2,6 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { fabriqFetch } from "../discovery/core/fabriq-position-history.ts";
+import {
+  fetchWalletPoolCumulativeAggregates,
+  type FabriqPoolCumulativeAggregate,
+} from "../analytics/fabriq-analytics-client.ts";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -20,6 +24,7 @@ export interface WalletTradeHistory {
   wallet: string;
   tradeCount: number;
   trades: NormalizedTrade[];
+  cumulative?: FabriqPoolCumulativeAggregate | null;
 }
 
 export type RunScope = "wallet" | "limit" | "full";
@@ -56,18 +61,66 @@ export interface WalletCheckpoint {
   pools: {
     poolAddress: string;
     trades: NormalizedTrade[];
+    cumulative?: FabriqPoolCumulativeAggregate | null;
   }[];
   fetchedAt: string;
   error?: string;
 }
 
-function parseSafeNumber(val: any): number | null {
+export interface PoolCumulativeHistoryOutput {
+  version: "v1";
+  tokenMint: string;
+  selectionFingerprint: string;
+  generatedAt: string;
+  runScope: RunScope;
+  isFullDataset: boolean;
+  membershipWalletCount: number;
+  processedWalletCount: number;
+  poolCount: number;
+  aggregateCount: number;
+  aggregates: FabriqPoolCumulativeAggregate[];
+}
+
+interface RawPoolWallet {
+  wallet: string;
+  pnlUsd?: number | null;
+  winRate?: number | null;
+  positions?: number | null;
+}
+
+interface RawPoolEntry {
+  poolAddress: string;
+  pair?: string;
+  binStep?: number | null;
+  baseFeePct?: number | null;
+  wallets?: RawPoolWallet[];
+}
+
+interface CanonicalPoolRecord {
+  poolAddress: string;
+  tokenMint?: string;
+  pair?: string;
+  binStep?: number | null;
+  baseFeePct?: number | null;
+  selectionFingerprint?: string;
+}
+
+interface CanonicalMembershipRecord {
+  poolAddress: string;
+  wallet: string;
+  pnlUsd?: number | null;
+  winRate?: number | null;
+  positions?: number | null;
+  isLatestSnapshot?: boolean;
+}
+
+function parseSafeNumber(val: unknown): number | null {
   if (val === undefined || val === null || val === "") return null;
   const num = Number(val);
   return Number.isFinite(num) ? num : null;
 }
 
-function parseSafeDate(val: any): { iso: string; ms: number } | null {
+function parseSafeDate(val: unknown): { iso: string; ms: number } | null {
   if (val === undefined || val === null || val === "") return null;
   let d: Date;
   if (typeof val === "number") {
@@ -79,7 +132,7 @@ function parseSafeDate(val: any): { iso: string; ms: number } | null {
       const ms = num < 10_000_000_000 ? num * 1000 : num;
       d = new Date(ms);
     } else {
-      d = new Date(val);
+      d = new Date(val as string | number);
     }
   }
   const ms = d.getTime();
@@ -110,13 +163,14 @@ function sortTrades(a: NormalizedTrade, b: NormalizedTrade): number {
   return a.positionId.localeCompare(b.positionId);
 }
 
-function normalizeTrade(pos: any): NormalizedTrade | null {
+function normalizeTrade(rawPos: unknown): NormalizedTrade | null {
+  const pos = rawPos && typeof rawPos === "object" ? (rawPos as Record<string, unknown>) : null;
   const positionId =
     pos?.id !== undefined && pos?.id !== null ? String(pos.id).trim() : "";
   if (!positionId) return null;
 
-  const openedDate = parseSafeDate(pos.opened_at);
-  const closedDate = parseSafeDate(pos.latest_close_ts);
+  const openedDate = parseSafeDate(pos!.opened_at);
+  const closedDate = parseSafeDate(pos!.latest_close_ts);
 
   // Closed positions only: must have valid closedAt
   if (!closedDate) return null;
@@ -129,8 +183,8 @@ function normalizeTrade(pos: any): NormalizedTrade | null {
     closedDate?.ms ?? null
   );
 
-  const pnlUsd = parseSafeNumber(pos.total_pnl_usd);
-  const pnlPct = parseSafeNumber(pos.total_pnl_pct_usd);
+  const pnlUsd = parseSafeNumber(pos!.total_pnl_usd);
+  const pnlPct = parseSafeNumber(pos!.total_pnl_pct_usd);
 
   return {
     positionId,
@@ -142,7 +196,7 @@ function normalizeTrade(pos: any): NormalizedTrade | null {
   };
 }
 
-async function atomicWriteJson(filePath: string, data: any): Promise<void> {
+async function atomicWriteJson(filePath: string, data: unknown): Promise<void> {
   const tmp = `${filePath}.tmp.${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   await fs.writeFile(tmp, JSON.stringify(data, null, 2), "utf8");
   await fs.rename(tmp, filePath);
@@ -151,16 +205,21 @@ async function atomicWriteJson(filePath: string, data: any): Promise<void> {
 function parseCliArgs() {
   const args = process.argv.slice(2);
   let tokenCA: string | null = null;
+  let targetPool: string | null = null;
   let targetWallet: string | null = null;
   let limit: number | null = null;
   let workers = 2;
   let refresh = false;
-
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === "--token" && args[i + 1]) {
       tokenCA = args[i + 1].trim();
       i++;
+    } else if (arg === "--pool" && args[i + 1]) {
+      targetPool = args[i + 1].trim();
+      i++;
+    } else if (arg.startsWith("--pool=")) {
+      targetPool = arg.slice("--pool=".length).trim();
     } else if (arg === "--wallet" && args[i + 1]) {
       targetWallet = args[i + 1].trim();
       i++;
@@ -185,11 +244,11 @@ function parseCliArgs() {
     tokenCA = process.env.TOKEN_CA.trim();
   }
 
-  return { tokenCA, targetWallet, limit, workers, refresh };
+  return { tokenCA, targetPool, targetWallet, limit, workers, refresh };
 }
 
 async function main() {
-  const { tokenCA, targetWallet, limit, workers, refresh } = parseCliArgs();
+  const { tokenCA, targetPool, targetWallet, limit, workers, refresh } = parseCliArgs();
 
   if (!tokenCA) {
     throw new Error("Token CA is required. Use --token <TOKEN_CA>");
@@ -201,49 +260,153 @@ async function main() {
     tokenCA,
     "selected-scan"
   );
+  let selectionFingerprint = "";
+  let rawPools: RawPoolEntry[] = [];
 
   const scanStatePath = path.join(selectedScanDir, "scan-state.json");
-  let scanState: any;
-  try {
-    const raw = await fs.readFile(scanStatePath, "utf8");
-    scanState = JSON.parse(raw);
-  } catch {
-    throw new Error(
-      `scan-state.json not found in ${selectedScanDir}. Please complete Step 3B first.`
-    );
-  }
-
-  if (scanState?.status !== "completed") {
-    throw new Error(
-      `Selected pool scan is not completed (current status: ${scanState?.status}). Please complete Step 3B first.`
-    );
-  }
-
-  const selectionFingerprint = scanState?.selectionFingerprint;
-  if (!selectionFingerprint || typeof selectionFingerprint !== "string") {
-    throw new Error(
-      `selectionFingerprint missing or invalid in scan-state.json.`
-    );
-  }
-
   const poolWalletsPath = path.join(selectedScanDir, "pool-wallets.json");
-  let poolWalletsData: any;
+  let hasSelectedScan = false;
+
   try {
-    const raw = await fs.readFile(poolWalletsPath, "utf8");
-    poolWalletsData = JSON.parse(raw);
+    const rawState = await fs.readFile(scanStatePath, "utf8");
+    const scanState = JSON.parse(rawState);
+    if (scanState?.selectionFingerprint && scanState?.status === "completed") {
+      selectionFingerprint = scanState.selectionFingerprint;
+      const rawPw = await fs.readFile(poolWalletsPath, "utf8");
+      const pwData = JSON.parse(rawPw);
+      if (Array.isArray(pwData?.pools)) {
+        rawPools = pwData.pools as RawPoolEntry[];
+        hasSelectedScan = true;
+      }
+    }
   } catch {
-    throw new Error(
-      `pool-wallets.json not found in ${selectedScanDir}. Please complete Step 3B first.`
-    );
+    // selected-scan artifacts missing or incomplete
   }
 
-  const rawPools: any[] = Array.isArray(poolWalletsData?.pools)
-    ? poolWalletsData.pools
-    : [];
+  if (targetPool && hasSelectedScan) {
+    const matched = rawPools.filter((p) => p?.poolAddress === targetPool);
+    if (matched.length > 0) {
+      rawPools = matched;
+    } else {
+      hasSelectedScan = false;
+    }
+  }
+
+  // Existing Pool Fast Path: if targetPool is specified and not in selected-scan, load from canonical master
+  if (targetPool && (!hasSelectedScan || rawPools.length === 0)) {
+    const scannedPoolsPath = path.resolve(ROOT, "data/master/scanned-pools.json");
+    const membershipPath = path.resolve(ROOT, "data/master/pool-wallet-membership.json");
+
+    let canonicalPool: CanonicalPoolRecord | null = null;
+    try {
+      const rawSp = await fs.readFile(scannedPoolsPath, "utf8");
+      const spData = JSON.parse(rawSp) as { pools?: CanonicalPoolRecord[] };
+      canonicalPool = (spData?.pools || []).find((p) => p?.poolAddress === targetPool) || null;
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      throw new Error(`Failed to read canonical pools: ${errMsg}`);
+    }
+
+    if (!canonicalPool) {
+      throw new Error(
+        `Pool ${targetPool} not found in selected-scan or canonical scanned-pools.json. Please run minimal LP Wallet Extraction first.`
+      );
+    }
+
+    let memberships: CanonicalMembershipRecord[] = [];
+    try {
+      const rawM = await fs.readFile(membershipPath, "utf8");
+      const mData = JSON.parse(rawM) as { memberships?: CanonicalMembershipRecord[] };
+      memberships = (mData?.memberships || []).filter(
+        (m) => m?.poolAddress === targetPool && m?.isLatestSnapshot !== false
+      );
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      throw new Error(`Failed to read canonical pool memberships: ${errMsg}`);
+    }
+
+    if (memberships.length === 0) {
+      throw new Error(
+        `No valid wallet membership found for pool ${targetPool}. Please run minimal LP Wallet Extraction first.`
+      );
+    }
+
+    selectionFingerprint =
+      canonicalPool.selectionFingerprint ||
+      `canonical_${targetPool.slice(0, 16)}`;
+
+    rawPools = [
+      {
+        poolAddress: targetPool,
+        pair: canonicalPool.pair || "",
+        binStep: canonicalPool.binStep ?? null,
+        baseFeePct: canonicalPool.baseFeePct ?? null,
+        wallets: memberships.map((m) => ({
+          wallet: m.wallet,
+          pnlUsd: m.pnlUsd,
+          winRate: m.winRate,
+          positions: m.positions,
+        })),
+      },
+    ];
+
+    await fs.mkdir(selectedScanDir, { recursive: true });
+    const selectionPath = path.join(selectedScanDir, "selection.json");
+    try {
+      await fs.access(selectionPath);
+    } catch {
+      await atomicWriteJson(selectionPath, {
+        version: "v1",
+        tokenMint: tokenCA,
+        selectionFingerprint,
+        createdAt: new Date().toISOString(),
+        selectedPoolCount: 1,
+        pools: [
+          {
+            poolAddress: targetPool,
+            pair: canonicalPool.pair || "",
+            binStep: canonicalPool.binStep ?? 0,
+            baseFeePct: canonicalPool.baseFeePct ?? 0,
+          },
+        ],
+      });
+    }
+
+    try {
+      await fs.access(scanStatePath);
+    } catch {
+      await atomicWriteJson(scanStatePath, {
+        version: "v1",
+        tokenMint: tokenCA,
+        selectionFingerprint,
+        status: "completed",
+        selectedPoolCount: 1,
+        completedPoolCount: 1,
+        pendingPoolCount: 0,
+        selectedPoolAddresses: [targetPool],
+        completedPoolAddresses: [targetPool],
+        completedAt: new Date().toISOString(),
+      });
+    }
+
+    try {
+      await fs.access(poolWalletsPath);
+    } catch {
+      await atomicWriteJson(poolWalletsPath, {
+        version: "v1",
+        tokenMint: tokenCA,
+        updatedAt: new Date().toISOString(),
+        pools: rawPools,
+      });
+    }
+  }
+
+  if (!selectionFingerprint) {
+    throw new Error(`selectionFingerprint missing or invalid in scan-state.json.`);
+  }
   if (rawPools.length === 0) {
     throw new Error(`No pools found in pool-wallets.json.`);
   }
-
   // Build wallet -> Set<poolAddress> mapping from authoritative pool-wallets.json
   const walletToPoolsMap = new Map<string, Set<string>>();
   const allPoolAddresses: string[] = [];
@@ -290,6 +453,12 @@ async function main() {
   let completedWallets = 0;
   let failedWallets = 0;
   let totalTradesCount = 0;
+  let checkpointsReused = 0;
+  let networkRequests = 0;
+  let retriesCount = 0;
+  let http500Count = 0;
+  let http429Count = 0;
+  const stageStartTimeMs = Date.now();
 
   const walletResults = new Map<string, WalletCheckpoint>();
 
@@ -319,6 +488,16 @@ async function main() {
   console.log(`Checkpoints:           ${checkpointDir}`);
   console.log(`======================================\n`);
 
+  let previousState: Record<string, unknown> | null = null;
+  try {
+    const rawState = await fs.readFile(stateFilePath, "utf8");
+    previousState = JSON.parse(rawState);
+  } catch {}
+
+  const refreshCutoff = refresh
+    ? (previousState?.status === "in_progress" && previousState?.refreshCutoff ? previousState.refreshCutoff : startedAt)
+    : null;
+
   async function updateStateFile(status: "in_progress" | "completed" | "error") {
     const now = new Date().toISOString();
     const stateContent = {
@@ -332,6 +511,8 @@ async function main() {
       totalTrades: totalTradesCount,
       workers,
       startedAt,
+      refresh,
+      ...(refreshCutoff ? { refreshCutoff } : {}),
       updatedAt: now,
       ...(status === "completed" ? { completedAt: now } : {}),
     };
@@ -344,33 +525,39 @@ async function main() {
     const checkpointFile = path.join(checkpointDir, `${wallet}.json`);
     const poolAddresses = Array.from(walletToPoolsMap.get(wallet) || []).sort();
 
-    // 1. Try reading existing completed checkpoint (only if not refreshing)
-    if (!refresh) {
-      try {
-        const raw = await fs.readFile(checkpointFile, "utf8");
-        const cp: WalletCheckpoint = JSON.parse(raw);
-        if (
-          cp?.version === "v1" &&
-          cp?.selectionFingerprint === selectionFingerprint &&
-          cp?.wallet === wallet &&
-          cp?.status === "completed" &&
-          Array.isArray(cp?.pools)
-        ) {
-          walletResults.set(wallet, cp);
-          completedWallets++;
-          const tradesInCp = cp.pools.reduce((acc, p) => acc + (p.trades?.length || 0), 0);
-          totalTradesCount += tradesInCp;
-          console.log(
-            `[W${index}/${total}] [CHECKPOINT] ${wallet} (${tradesInCp} trades in ${cp.pools.length} pools)`
-          );
-          console.log(
-            `[TRADE_HISTORY] PROGRESS completed=${completedWallets} total=${total} failed=${failedWallets} trades=${totalTradesCount}`
-          );
-          return;
-        }
-      } catch {
-        // no valid checkpoint yet, proceed to fetch
+    // 1. Try reading existing completed checkpoint
+    // If not refreshing: reuse any completed checkpoint.
+    // If refreshing: only reuse checkpoint if it was fetched in this refresh run (fetchedAt >= refreshCutoff).
+    try {
+      const raw = await fs.readFile(checkpointFile, "utf8");
+      const cp: WalletCheckpoint = JSON.parse(raw);
+      const isFresh = Boolean(refreshCutoff && cp?.fetchedAt && cp.fetchedAt >= refreshCutoff);
+      const hasTargetPool = !targetPool || cp?.pools?.some((p) => p.poolAddress === targetPool);
+      const canReuse =
+        cp?.version === "v1" &&
+        cp?.selectionFingerprint === selectionFingerprint &&
+        cp?.wallet === wallet &&
+        cp?.status === "completed" &&
+        Array.isArray(cp?.pools) &&
+        hasTargetPool &&
+        (!refresh || isFresh);
+
+      if (canReuse) {
+        walletResults.set(wallet, cp);
+        completedWallets++;
+        checkpointsReused++;
+        const tradesInCp = cp.pools.reduce((acc, p) => acc + (p.trades?.length || 0), 0);
+        totalTradesCount += tradesInCp;
+        console.log(
+          `[W${index}/${total}] [CHECKPOINT REUSED] ${wallet} (${tradesInCp} trades in ${cp.pools.length} pools)`
+        );
+        console.log(
+          `[TRADE_HISTORY] PROGRESS completed=${completedWallets} total=${total} failed=${failedWallets} trades=${totalTradesCount}`
+        );
+        return;
       }
+    } catch {
+      // no valid checkpoint yet, proceed to fetch
     }
 
     // 2. Query Fabriq for this wallet scoped to associated pools
@@ -397,13 +584,44 @@ async function main() {
       console.log(
         `[W${index}/${total}] Fetching positions for ${wallet} (pools: ${poolAddresses.join(",")})...`
       );
-      const resJson = await fabriqFetch<any>(
+      networkRequests++;
+      const resJson = await fabriqFetch<unknown>(
         `/history/${wallet}/positions-by-pool`,
         params,
-        { onLog: (msg) => console.log(`  [FABRIQ] ${msg}`) }
+        {
+          onLog: (msg) => {
+            if (msg.includes("500") || msg.includes("Server error 5")) http500Count++;
+            if (msg.includes("429") || msg.includes("RATE_LIMITED")) http429Count++;
+            console.log(`  [FABRIQ] ${msg}`);
+          },
+          onRetry: ({ status }: { status?: number }) => {
+            retriesCount++;
+            if (status !== undefined && status >= 500) http500Count++;
+            if (status === 429) http429Count++;
+          },
+        }
       );
 
-      const resData = resJson?.data ?? resJson;
+      // Preserve existing cumulative aggregate from previous checkpoint if available
+      const existingCumulativeMap = new Map<string, FabriqPoolCumulativeAggregate>();
+      try {
+        const rawExisting = await fs.readFile(checkpointFile, "utf8");
+        const parsedExisting = JSON.parse(rawExisting);
+        if (Array.isArray(parsedExisting?.pools)) {
+          for (const p of parsedExisting.pools) {
+            if (p?.poolAddress && p?.cumulative) {
+              existingCumulativeMap.set(p.poolAddress, p.cumulative);
+            }
+          }
+        }
+      } catch {
+        // no existing checkpoint to preserve cumulative from
+      }
+
+      let resData: unknown = resJson;
+      if (resJson && typeof resJson === "object" && "data" in resJson) {
+        resData = resJson.data;
+      }
 
       if (resData && typeof resData === "object" && !Array.isArray(resData)) {
         for (const [poolId, posList] of Object.entries(resData)) {
@@ -420,8 +638,10 @@ async function main() {
         }
       } else if (Array.isArray(resData)) {
         for (const pos of resData) {
+          const posObj = pos && typeof pos === "object" ? (pos as Record<string, unknown>) : null;
+          const poolObj = posObj?.pool && typeof posObj.pool === "object" ? (posObj.pool as Record<string, unknown>) : null;
           const poolId = String(
-            pos.pool_id || pos.poolId || pos.pool?.id || pos.pool?.address || ""
+            posObj?.pool_id || posObj?.poolId || poolObj?.id || poolObj?.address || ""
           );
           if (!allowedPoolIds.has(poolId)) continue;
           const mapForPool = poolTradesMap.get(poolId);
@@ -438,23 +658,41 @@ async function main() {
         const trades = Array.from(
           poolTradesMap.get(poolAddress)?.values() || []
         ).sort(sortTrades);
+        const cumulative = existingCumulativeMap.get(poolAddress) ?? null;
         return {
           poolAddress,
           trades,
+          cumulative,
         };
       });
 
       const walletTradesCount = poolsData.reduce((acc, p) => acc + p.trades.length, 0);
+
+      // Preserve existing pools from previous checkpoint if available so other pool data is not lost
+      const existingPoolsMap = new Map<string, { poolAddress: string; trades: NormalizedTrade[]; cumulative?: FabriqPoolCumulativeAggregate | null }>();
+      try {
+        const rawExisting = await fs.readFile(checkpointFile, "utf8");
+        const parsedExisting = JSON.parse(rawExisting) as WalletCheckpoint;
+        if (Array.isArray(parsedExisting?.pools)) {
+          for (const p of parsedExisting.pools) {
+            if (p?.poolAddress) existingPoolsMap.set(p.poolAddress, p);
+          }
+        }
+      } catch {
+        // no existing checkpoint to preserve
+      }
+      for (const p of poolsData) {
+        existingPoolsMap.set(p.poolAddress, p);
+      }
 
       const checkpointData: WalletCheckpoint = {
         version: "v1",
         selectionFingerprint,
         wallet,
         status: "completed",
-        pools: poolsData,
+        pools: Array.from(existingPoolsMap.values()),
         fetchedAt: new Date().toISOString(),
       };
-
       await atomicWriteJson(checkpointFile, checkpointData);
       walletResults.set(wallet, checkpointData);
 
@@ -467,9 +705,10 @@ async function main() {
       console.log(
         `[TRADE_HISTORY] PROGRESS completed=${completedWallets} total=${total} failed=${failedWallets} trades=${totalTradesCount}`
       );
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const errObj = err instanceof Error ? err : new Error(String(err));
       failedWallets++;
-      const errMsg = err?.message || String(err);
+      const errMsg = err instanceof Error ? err.message : String(err);
       console.error(`[W${index}/${total}] [FAIL] ${wallet}: ${errMsg}`);
       console.log(
         `[TRADE_HISTORY] PROGRESS completed=${completedWallets} total=${total} failed=${failedWallets} trades=${totalTradesCount}`
@@ -510,7 +749,7 @@ async function main() {
   for (const poolAddress of uniquePools) {
     const rawPool = rawPools.find((p) => p.poolAddress === poolAddress);
     const membershipWallets = Array.isArray(rawPool?.wallets)
-      ? rawPool.wallets.map((w: any) => String(w.wallet).trim()).filter(Boolean)
+      ? rawPool.wallets.map((w) => String(w.wallet).trim()).filter(Boolean)
       : [];
 
     const targetMembershipWallets = membershipWallets
@@ -533,8 +772,7 @@ async function main() {
             parsed?.wallet === wallet &&
             parsed?.status === "completed"
           ) {
-            cp = parsed;
-            walletResults.set(wallet, cp);
+            cp = parsed as WalletCheckpoint;
           }
         } catch {
           // not found or not completed
@@ -543,15 +781,16 @@ async function main() {
 
       const poolObj = cp?.pools?.find((p) => p.poolAddress === poolAddress);
       const trades = poolObj?.trades || [];
+      const cumulative = poolObj?.cumulative ?? null;
       poolTradesCount += trades.length;
 
       walletsList.push({
         wallet,
         tradeCount: trades.length,
         trades,
+        cumulative,
       });
     }
-
     finalPoolEntries.push({
       poolAddress,
       membershipWalletCount: membershipWallets.length,
@@ -584,8 +823,74 @@ async function main() {
   };
 
   const finalOutputPath = path.join(selectedScanDir, "pool-trade-history.json");
+  if (targetPool) {
+    try {
+      const rawExisting = await fs.readFile(finalOutputPath, "utf8");
+      const parsedExisting = JSON.parse(rawExisting) as PoolTradeHistoryOutput;
+      if (Array.isArray(parsedExisting?.pools)) {
+        for (const ep of parsedExisting.pools) {
+          if (ep?.poolAddress && ep.poolAddress !== targetPool && !finalPoolEntries.some((p) => p.poolAddress === ep.poolAddress)) {
+            finalPoolEntries.push(ep);
+          }
+        }
+      }
+    } catch {
+      // no existing output to merge
+    }
+  }
+
   await atomicWriteJson(finalOutputPath, finalOutput);
 
+  if (!targetPool) {
+    // Preserve existing cumulative aggregates from previous file or checkpoints (Full Scan mode only)
+    const cumulativeMap = new Map<string, FabriqPoolCumulativeAggregate>();
+    const cumulativeOutputPath = path.join(selectedScanDir, "pool-cumulative-history.json");
+    try {
+      const rawExisting = await fs.readFile(cumulativeOutputPath, "utf8");
+      const parsedExisting = JSON.parse(rawExisting) as PoolCumulativeHistoryOutput;
+      if (Array.isArray(parsedExisting?.aggregates)) {
+        for (const a of parsedExisting.aggregates) {
+          if (a?.poolAddress && a?.wallet) {
+            cumulativeMap.set(`${a.poolAddress}::${a.wallet}`, a);
+          }
+        }
+      }
+    } catch {
+      // no existing cumulative history file
+    }
+
+    for (const poolEntry of finalPoolEntries) {
+      for (const w of poolEntry.wallets) {
+        if (w.cumulative) {
+          cumulativeMap.set(`${w.cumulative.poolAddress}::${w.cumulative.wallet}`, {
+            ...w.cumulative,
+            selectionFingerprint,
+          });
+        }
+      }
+    }
+
+    const allAggregates = Array.from(cumulativeMap.values());
+    const finalCumulativeOutput: PoolCumulativeHistoryOutput = {
+      version: "v1",
+      tokenMint: tokenCA,
+      selectionFingerprint,
+      generatedAt: new Date().toISOString(),
+      runScope,
+      isFullDataset,
+      membershipWalletCount,
+      processedWalletCount,
+      poolCount: finalPoolEntries.length,
+      aggregateCount: allAggregates.length,
+      aggregates: allAggregates,
+    };
+
+    if (allAggregates.length > 0) {
+      await atomicWriteJson(cumulativeOutputPath, finalCumulativeOutput);
+    }
+  }
+
+  const stageDurationSec = ((Date.now() - stageStartTimeMs) / 1000).toFixed(1);
   console.log(`\n======================================`);
   console.log(`POOL TRADE HISTORY COMPLETE (STEP 3C-B)`);
   console.log(`======================================`);
@@ -601,6 +906,14 @@ async function main() {
     `[TRADE_HISTORY] COMPLETE totalWallets=${walletsToProcess.length} totalTrades=${finalOutput.tradeCount}`
   );
 
+  console.log(`\n--- Trade History Performance Metrics ---`);
+  console.log(`Duration:              ${stageDurationSec}s`);
+  console.log(`Checkpoints Reused:    ${checkpointsReused}`);
+  console.log(`Network Requests:      ${networkRequests}`);
+  console.log(`Retries:               ${retriesCount}`);
+  console.log(`HTTP 500 Server Err:   ${http500Count}`);
+  console.log(`HTTP 429 Rate Limits:  ${http429Count}`);
+  console.log(`-----------------------------------------\n`);
   process.exit(0);
 }
 

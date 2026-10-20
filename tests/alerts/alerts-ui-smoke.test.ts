@@ -101,6 +101,7 @@ describe("DLLM Alerts UI Smoke & Integration Test Suite", () => {
             totalPolls: 24,
             totalEventsEmitted: 4,
             lastPollAt: Date.now() - 5000,
+            lastSuccessfulPollAt: Date.now() - 5000,
             retryCount: 0,
             errorCount: 0,
             coverageGaps: [],
@@ -216,11 +217,19 @@ describe("DLLM Alerts UI Smoke & Integration Test Suite", () => {
     const titleText = await page.textContent(".alerts-title");
     assert.match(titleText || "", /Alerts & Active Positions/, "Header must show Alerts & Active Positions");
 
-    // 2. Tab 1: Watched Wallets
-    assert.ok(await page.isVisible("text=Alpha Whale"), "Wallet alias must be visible");
-    assert.ok(await page.isVisible("text=Config: Enabled"), "Config: Enabled status must be visible");
-    assert.ok(await page.isVisible("text=Config: Disabled"), "Config: Disabled status must be visible");
-    assert.ok(await page.isVisible("text=Actively Monitored"), "Actively Monitored runtime state must be visible");
+    assert.ok(await page.isVisible("text=Last Successful Poll:"), "Last Successful Poll label must be visible");
+    const walletFilterText = await page.locator(".alerts-filters-left select").first().textContent();
+    assert.match(walletFilterText || "", /All Monitored Wallets \(2 wallets\)/, "Wallet filter must present wallet count, not position count");
+
+    // 2. Default View: Active Positions
+    await page.waitForSelector(".alerts-pos-card", { timeout: 3000 });
+    assert.ok(await page.isVisible(`text=${VALID_POS.slice(0, 4)}`), "Active position address must be visible");
+    assert.ok(await page.isVisible("text=V2"), "Position version V2 must be visible");
+    assert.ok(await page.locator(".alerts-pos-card").locator("text=Alpha Whale").isVisible(), "Wallet alias must be visible on position card");
+    assert.ok(await page.isVisible("text=DLMM SDK v2 (Compatible)"), "Protocol compatibility indicator must be visible");
+    assert.ok(await page.locator(".alerts-pos-card .alerts-pos-primary-pool").isVisible(), "Primary pool address container must be prominent");
+    assert.ok(await page.locator(".alerts-pos-card a:has-text('Inspect Pool')").isVisible(), "Inspect Pool action must be preserved");
+    assert.ok(await page.locator(".alerts-pos-card a:has-text('Explorer')").isVisible(), "Explorer action must be preserved");
 
     // Check no horizontal overflow on desktop
     const desktopPageScrollWidth = await page.evaluate(() => {
@@ -228,12 +237,17 @@ describe("DLLM Alerts UI Smoke & Integration Test Suite", () => {
       return el ? el.scrollWidth <= el.clientWidth + 2 : true;
     });
     assert.strictEqual(desktopPageScrollWidth, true, "Desktop alerts-page must not have container overflow");
-    // 3. Tab 2: Active Positions
-    await page.locator(".alerts-tab:has-text('Active Positions')").click();
-    await page.waitForTimeout(300);
-    assert.ok(await page.isVisible(`text=${VALID_POS.slice(0, 4)}`), "Active position address must be visible");
-    assert.ok(await page.isVisible("text=V2"), "Position version V2 must be visible");
+    const desktopPosScreenshot = path.join(tmpScreenshotsDir, "desktop-positions.png");
+    await page.screenshot({ path: desktopPosScreenshot, fullPage: true });
+    try { fs.copyFileSync(desktopPosScreenshot, "/tmp/dllm-alerts-desktop-positions.png"); } catch {}
 
+    // 3. Tab: Watched Wallets
+    await page.locator(".alerts-tab:has-text('Wallet Watchlist')").click();
+    await page.waitForTimeout(300);
+    assert.ok(await page.locator(".alerts-table").locator("text=Alpha Whale").isVisible(), "Wallet alias must be visible");
+    assert.ok(await page.isVisible("text=Config: Enabled"), "Config: Enabled status must be visible");
+    assert.ok(await page.isVisible("text=Config: Disabled"), "Config: Disabled status must be visible");
+    assert.ok(await page.isVisible("text=Actively Monitored"), "Actively Monitored runtime state must be visible");
     // 4. Tab 3: Recent Activity & Evidence Drawer
     await page.locator(".alerts-tab:has-text('Recent Activity')").click();
     await page.waitForTimeout(300);
@@ -264,6 +278,7 @@ describe("DLLM Alerts UI Smoke & Integration Test Suite", () => {
     const desktopScreenshotPath = path.join(tmpScreenshotsDir, "desktop-alerts.png");
     await page.screenshot({ path: desktopScreenshotPath, fullPage: true });
     assert.ok(fs.existsSync(desktopScreenshotPath), "Desktop screenshot must be saved successfully");
+    try { fs.copyFileSync(desktopScreenshotPath, "/tmp/dllm-alerts-desktop.png"); } catch {}
 
     await page.close();
   });
@@ -308,12 +323,32 @@ describe("DLLM Alerts UI Smoke & Integration Test Suite", () => {
             totalCount: 1,
           }),
         });
+      } else if (url.includes("/api/alerts/positions")) {
+        await route.fulfill({
+          status: 200,
+          headers: CORS_HEADERS,
+          contentType: "application/json",
+          body: JSON.stringify({
+            positions: [
+              {
+                positionAddress: VALID_POS,
+                owner: VALID_WALLET_1,
+                poolAddress: VALID_POOL,
+                version: "V2",
+                hasLiquidity: true,
+                discoveredAt: Date.now() - 3600000,
+                lastUpdatedAt: Date.now() - 120000,
+              },
+            ],
+            totalCount: 1,
+          }),
+        });
       } else {
         await route.fulfill({
           status: 200,
           headers: CORS_HEADERS,
           contentType: "application/json",
-          body: JSON.stringify({ positions: [], events: [], previews: [], totalCount: 0 }),
+          body: JSON.stringify({ events: [], previews: [], totalCount: 0 }),
         });
       }
     });
@@ -321,7 +356,22 @@ describe("DLLM Alerts UI Smoke & Integration Test Suite", () => {
     await page.goto(`${baseUrl}/alerts`, { waitUntil: "networkidle" });
 
     assert.ok(await page.isVisible(".alerts-title"), "Title must be visible on mobile");
-    assert.ok(await page.isVisible("text=Mobile Tester"), "Wallet alias must be visible on mobile");
+    // Check no horizontal overflow on mobile at 375px
+    const mobilePageScrollWidth = await page.evaluate(() => {
+      const el = document.querySelector(".alerts-page");
+      return el ? el.scrollWidth <= el.clientWidth + 2 : true;
+    });
+    assert.strictEqual(mobilePageScrollWidth, true, "Mobile alerts-page must not have container overflow at 375px");
+    const mobilePosScreenshot = path.join(tmpScreenshotsDir, "mobile-positions.png");
+    await page.screenshot({ path: mobilePosScreenshot, fullPage: true });
+    try { fs.copyFileSync(mobilePosScreenshot, "/tmp/dllm-alerts-mobile-positions.png"); } catch {}
+
+
+    // Switch to Wallet Watchlist tab
+    await page.locator(".alerts-tab:has-text('Wallet Watchlist')").click();
+    await page.waitForTimeout(300);
+
+    assert.ok(await page.locator(".alerts-table").locator("text=Mobile Tester").isVisible(), "Wallet alias must be visible on mobile");
 
     const hasTableScrollWrapper = await page.evaluate(() => {
       const scrollWrap = document.querySelector(".alerts-table-container");
@@ -332,6 +382,7 @@ describe("DLLM Alerts UI Smoke & Integration Test Suite", () => {
     const mobileScreenshotPath = path.join(tmpScreenshotsDir, "mobile-alerts.png");
     await page.screenshot({ path: mobileScreenshotPath, fullPage: true });
     assert.ok(fs.existsSync(mobileScreenshotPath), "Mobile screenshot must be saved successfully");
+    try { fs.copyFileSync(mobileScreenshotPath, "/tmp/dllm-alerts-mobile.png"); } catch {}
 
     await page.close();
   });
@@ -411,6 +462,119 @@ describe("DLLM Alerts UI Smoke & Integration Test Suite", () => {
 
     const isOfflineBannerVisible = await page.isVisible(".alerts-banner-error");
     assert.strictEqual(isOfflineBannerVisible, true, "Offline error banner must appear when backend status fails");
+
+    // 3. Paused State: RPC Health displays 'Monitoring Paused', not '100% Operational', and last sync timestamp is visible
+    await page.route("**/api/alerts/status", async (route) => {
+      await route.fulfill({
+        status: 200,
+        headers: CORS_HEADERS,
+        contentType: "application/json",
+        body: JSON.stringify({
+          status: "PAUSED",
+          isDegraded: false,
+          sdkCompatible: true,
+          monitoredWalletsCount: 0,
+          activePositionsCount: 0,
+          totalPolls: 15,
+          totalEventsEmitted: 0,
+          lastPollAt: Date.now() - 30000,
+          lastSuccessfulPollAt: Date.now() - 30000,
+          retryCount: 0,
+          errorCount: 0,
+          rpcErrorCount: 0,
+          http429Count: 0,
+          coverageGaps: [],
+          bufferedEventsCount: 0,
+          bufferedPreviewsCount: 0,
+        }),
+      });
+    });
+
+    await page.locator("button:has-text('Refresh')").first().click();
+    await page.waitForTimeout(500);
+
+    assert.ok(await page.isVisible("text=Monitoring Paused"), "PAUSED status must display Monitoring Paused");
+    assert.strictEqual(await page.isVisible("text=100% Operational"), false, "PAUSED status must not display 100% Operational");
+    assert.ok(await page.isVisible("text=Last sync:"), "Last successful sync timestamp must be visible when paused");
+
+    // 4. Stale Polling State: RUNNING with stale lastSuccessfulPollAt shows STALE warning banner, badge, and RPC state
+    await page.route("**/api/alerts/status", async (route) => {
+      await route.fulfill({
+        status: 200,
+        headers: CORS_HEADERS,
+        contentType: "application/json",
+        body: JSON.stringify({
+          status: "RUNNING",
+          isDegraded: false,
+          sdkCompatible: true,
+          monitoredWalletsCount: 2,
+          activePositionsCount: 1,
+          totalPolls: 30,
+          totalEventsEmitted: 4,
+          configuredPollIntervalMs: 5000,
+          lastPollAt: Date.now() - 45000,
+          lastSuccessfulPollAt: Date.now() - 45000,
+          retryCount: 0,
+          errorCount: 0,
+          rpcErrorCount: 0,
+          http429Count: 0,
+          totalPollsSuccessful: 29,
+          coverageGaps: [],
+          bufferedEventsCount: 0,
+          bufferedPreviewsCount: 0,
+        }),
+      });
+    });
+
+    await page.locator("button:has-text('Refresh')").first().click();
+    await page.waitForTimeout(500);
+
+    assert.ok(await page.isVisible("text=Monitoring Freshness Warning:"), "Stale polling warning banner must appear");
+    assert.ok(await page.isVisible(".alerts-stale-tag:has-text('STALE')"), "STALE badge must appear in telemetry strip");
+    assert.ok(await page.isVisible("text=Stale Polling"), "RPC Health card must display Stale Polling instead of 100% Operational");
+    assert.strictEqual(await page.isVisible("text=100% Operational"), false, "100% Operational must not be shown when stale");
+
+    // 5. RUNNING with lastSuccessfulPollAt=null and non-null lastPollAt displays 'Awaiting First Successful Poll'
+    await page.route("**/api/alerts/status", async (route) => {
+      await route.fulfill({
+        status: 200,
+        headers: CORS_HEADERS,
+        contentType: "application/json",
+        body: JSON.stringify({
+          status: "RUNNING",
+          isDegraded: false,
+          sdkCompatible: true,
+          monitoredWalletsCount: 2,
+          activePositionsCount: 1,
+          totalPolls: 5,
+          totalPollsAttempted: 5,
+          totalPollsFailed: 5,
+          totalEventsEmitted: 0,
+          configuredPollIntervalMs: 5000,
+          lastPollAt: Date.now() - 2000,
+          lastSuccessfulPollAt: null,
+          retryCount: 3,
+          errorCount: 5,
+          rpcErrorCount: 0,
+          http429Count: 0,
+          totalPollsSuccessful: 0,
+          coverageGaps: [],
+          bufferedEventsCount: 0,
+          bufferedPreviewsCount: 0,
+        }),
+      });
+    });
+
+    await page.locator("button:has-text('Refresh')").first().click();
+    await page.waitForTimeout(500);
+
+    assert.ok(await page.isVisible("text=Awaiting First Successful Poll"), "Telemetry strip must display 'Awaiting First Successful Poll'");
+    const stripValueText = await page.locator(".alerts-strip-value").nth(1).textContent();
+    assert.strictEqual(stripValueText?.trim(), "Awaiting First Successful Poll", "Strip value must be exactly Awaiting First Successful Poll");
+
+    const awaitingScreenshotPath = path.join(tmpScreenshotsDir, "desktop-awaiting-first-poll.png");
+    await page.screenshot({ path: awaitingScreenshotPath, fullPage: true });
+    try { fs.copyFileSync(awaitingScreenshotPath, "/tmp/dllm-alerts-desktop-awaiting-first-poll.png"); } catch {}
 
     await page.close();
   });

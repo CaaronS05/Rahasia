@@ -16,6 +16,11 @@ import {
   pauseAlertsEngine,
   resumeAlertsEngine,
   ALERTS_API_BASE,
+  getRpcHealthPresentation,
+  getProtocolIndicator,
+  isPollingStale,
+  formatWib,
+  formatLastSuccessfulPoll,
   type AlertsStatus,
   type WatchlistWallet,
   type ActivePosition,
@@ -303,6 +308,202 @@ describe("DLLM Alerts UI & API Client Suite", () => {
       assert.notStrictEqual(mockPreview.status, "SENT");
       assert.match(mockPreview.messageText, /\[DRY-RUN PREVIEW\]/);
       assert.match(mockPreview.explorerUrl, /^https:\/\/explorer\.solana\.com\/tx\//);
+    });
+
+    it("RPC health presentation: PAUSED displays 'Monitoring Paused', not '100% Operational'", () => {
+      const mockStatus: AlertsStatus = {
+        status: "PAUSED",
+        isDegraded: false,
+        sdkCompatible: true,
+        monitoredWalletsCount: 0,
+        activePositionsCount: 1,
+        totalPolls: 10,
+        totalEventsEmitted: 2,
+        lastPollAt: Date.now(),
+        retryCount: 0,
+        errorCount: 0,
+        rpcErrorCount: 0,
+        http429Count: 0,
+        coverageGaps: [],
+        bufferedEventsCount: 0,
+        bufferedPreviewsCount: 0,
+      };
+
+      const pausedPresentation = getRpcHealthPresentation("PAUSED", mockStatus);
+      assert.strictEqual(pausedPresentation.label, "Monitoring Paused");
+      assert.notStrictEqual(pausedPresentation.label, "100% Operational");
+
+      const runningPresentation = getRpcHealthPresentation("RUNNING", mockStatus);
+      assert.strictEqual(runningPresentation.label, "100% Operational");
+
+      const degradedPresentation = getRpcHealthPresentation("DEGRADED", { ...mockStatus, rpcErrorCount: 2 });
+      assert.strictEqual(degradedPresentation.label, "Degraded (2 errors)");
+
+      const offlinePresentation = getRpcHealthPresentation("OFFLINE", mockStatus);
+      assert.strictEqual(offlinePresentation.label, "Offline");
+
+      const nullStatusPresentation = getRpcHealthPresentation("OFFLINE", null);
+      assert.strictEqual(nullStatusPresentation.label, "Offline");
+    });
+
+    it("RPC health presentation: detects STALE polling during RUNNING state", () => {
+      const now = Date.now();
+      const staleStatus: AlertsStatus = {
+        status: "RUNNING",
+        isDegraded: false,
+        sdkCompatible: true,
+        monitoredWalletsCount: 1,
+        activePositionsCount: 1,
+        totalPolls: 10,
+        totalEventsEmitted: 2,
+        configuredPollIntervalMs: 5000,
+        lastSuccessfulPollAt: now - 30000,
+        lastPollAt: now - 30000,
+        retryCount: 0,
+        errorCount: 0,
+        rpcErrorCount: 0,
+        http429Count: 0,
+        coverageGaps: [],
+        bufferedEventsCount: 0,
+        bufferedPreviewsCount: 0,
+      };
+
+      assert.strictEqual(isPollingStale(staleStatus, now), true);
+      const stalePresentation = getRpcHealthPresentation("RUNNING", staleStatus, now);
+      assert.strictEqual(stalePresentation.label, "Stale Polling");
+      assert.notStrictEqual(stalePresentation.label, "100% Operational");
+    });
+
+    it("RPC health presentation: distinguishes current operational state from historical success & past errors", () => {
+      const now = Date.now();
+      const runningWithHistoricalErrors: AlertsStatus = {
+        status: "RUNNING",
+        isDegraded: false,
+        sdkCompatible: true,
+        monitoredWalletsCount: 1,
+        activePositionsCount: 1,
+        totalPolls: 50,
+        totalEventsEmitted: 2,
+        configuredPollIntervalMs: 5000,
+        lastSuccessfulPollAt: now - 2000,
+        lastPollAt: now - 2000,
+        retryCount: 2,
+        errorCount: 1,
+        rpcErrorCount: 1,
+        http429Count: 1,
+        totalPollsSuccessful: 48,
+        coverageGaps: [],
+        bufferedEventsCount: 0,
+        bufferedPreviewsCount: 0,
+      };
+
+      assert.strictEqual(isPollingStale(runningWithHistoricalErrors, now), false);
+      const result = getRpcHealthPresentation("RUNNING", runningWithHistoricalErrors, now);
+      assert.strictEqual(result.label, "Operational (Past Errors)");
+      assert.strictEqual(result.color, "var(--green, #55d69d)");
+    });
+
+    it("Protocol indicator: accurately reflects compatible vs verified evidence", () => {
+      const mockCompatible: AlertsStatus = {
+        status: "RUNNING",
+        isDegraded: false,
+        sdkCompatible: true,
+        monitoredWalletsCount: 1,
+        activePositionsCount: 1,
+        totalPolls: 5,
+        totalEventsEmitted: 1,
+        lastPollAt: Date.now(),
+        retryCount: 0,
+        errorCount: 0,
+        coverageGaps: [],
+        bufferedEventsCount: 0,
+        bufferedPreviewsCount: 0,
+      };
+
+      // Compatible without runtime verified evidence must not claim Verified
+      const compatibleResult = getProtocolIndicator(mockCompatible);
+      assert.strictEqual(compatibleResult.label, "DLMM SDK v2 (Compatible)");
+
+      // Verified when supported by runtime evidence
+      const verifiedResult = getProtocolIndicator({ ...mockCompatible, sdkVerified: true } as any);
+      assert.strictEqual(verifiedResult.label, "DLMM SDK v2 (Verified)");
+
+      // Neither compatible nor verified
+      const idlResult = getProtocolIndicator({ ...mockCompatible, sdkCompatible: false });
+      assert.strictEqual(idlResult.label, "Meteora IDL Core");
+
+      const nullResult = getProtocolIndicator(null);
+      assert.strictEqual(nullResult.label, "—");
+    });
+
+    it("Last Successful Poll presentation: displays 'Awaiting First Successful Poll' when lastSuccessfulPollAt is null and lastPollAt is non-null during RUNNING", () => {
+      const now = Date.now();
+      const runningWithNullSuccess: AlertsStatus = {
+        status: "RUNNING",
+        isDegraded: false,
+        sdkCompatible: true,
+        monitoredWalletsCount: 2,
+        activePositionsCount: 1,
+        totalPolls: 5,
+        totalPollsAttempted: 5,
+        totalPollsFailed: 5,
+        totalEventsEmitted: 0,
+        configuredPollIntervalMs: 5000,
+        lastSuccessfulPollAt: null,
+        lastPollAt: now - 2000,
+        retryCount: 3,
+        errorCount: 5,
+        rpcErrorCount: 0,
+        http429Count: 0,
+        coverageGaps: [],
+        bufferedEventsCount: 0,
+        bufferedPreviewsCount: 0,
+      };
+
+      // 1. Must display 'Awaiting First Successful Poll' and never substitute lastPollAt
+      const displayValue = formatLastSuccessfulPoll(runningWithNullSuccess);
+      assert.strictEqual(displayValue, "Awaiting First Successful Poll");
+      assert.notStrictEqual(displayValue, formatWib(runningWithNullSuccess.lastPollAt));
+
+      // 2. Direct timestamp call with null or undefined also yields 'Awaiting First Successful Poll'
+      assert.strictEqual(
+        formatLastSuccessfulPoll(runningWithNullSuccess.lastSuccessfulPollAt),
+        "Awaiting First Successful Poll"
+      );
+      assert.strictEqual(formatLastSuccessfulPoll(null), "Awaiting First Successful Poll");
+      assert.strictEqual(formatLastSuccessfulPoll(undefined), "Awaiting First Successful Poll");
+
+      // 3. When lastSuccessfulPollAt is present, formatWib is used
+      const successTs = now - 4000;
+      const runningWithSuccess: AlertsStatus = {
+        ...runningWithNullSuccess,
+        lastSuccessfulPollAt: successTs,
+      };
+      assert.strictEqual(formatLastSuccessfulPoll(runningWithSuccess), formatWib(successTs));
+
+      // 4. Preserves STALE detection when attempts are recent vs exceeding cadence threshold
+      assert.strictEqual(isPollingStale(runningWithNullSuccess, now), false);
+      const staleRunningWithNullSuccess: AlertsStatus = {
+        ...runningWithNullSuccess,
+        lastPollAt: now - 35000,
+      };
+      assert.strictEqual(isPollingStale(staleRunningWithNullSuccess, now), true);
+
+      // 5. Preserves RPC health presentation for RUNNING with recent poll attempt
+      const health = getRpcHealthPresentation("RUNNING", runningWithNullSuccess, now);
+      assert.strictEqual(health.label, "100% Operational");
+
+      // 6. Preserves RPC health presentation for RUNNING with stale poll attempt
+      const staleHealth = getRpcHealthPresentation("RUNNING", staleRunningWithNullSuccess, now);
+      assert.strictEqual(staleHealth.label, "Stale Polling");
+
+      // 7. Preserves DEGRADED status presentation
+      const degradedHealth = getRpcHealthPresentation(
+        "DEGRADED",
+        { ...runningWithNullSuccess, rpcErrorCount: 2 },
+        now
+      );
+      assert.strictEqual(degradedHealth.label, "Degraded (2 errors)");
     });
   });
 });

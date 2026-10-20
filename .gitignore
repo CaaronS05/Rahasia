@@ -1,14 +1,20 @@
 node_modules/
-.env
 dist/
-output/*.csv
-output/*.json
+.env
+.env.*
+!.env.example
 
 # macOS
 .DS_Store
 
 # Temporary files
 *.tmp
+*.log
+.tmp-screenshots/
+
+# Build artifacts
+output/*.csv
+output/*.json
 
 # Local / generated datasets
 /data/
@@ -17,3 +23,11 @@ output/*.json
 # Generated frontend datasets
 frontend/public/data/*.json
 
+# Browser profiles / CDP sessions
+chrome-profile/
+chromium-profile/
+.cdp-session/
+
+# Backups and archives
+*.bak
+*.backup

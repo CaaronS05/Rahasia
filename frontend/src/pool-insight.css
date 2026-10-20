@@ -212,6 +212,8 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
   padding: 14px 20px;
   border-bottom: 1px solid var(--border);
   min-height: 50px;
@@ -661,7 +663,7 @@
   margin-bottom: 16px;
 }
 
-@media (max-width: 860px) {
+@media (max-width: 960px) {
   .pool-trade-filter-grid {
     grid-template-columns: 1fr;
   }
@@ -726,6 +728,39 @@
   font-size: 12px;
   color: var(--muted);
   user-select: none;
+}
+
+.pool-duration-range-inputs {
+  gap: 6px;
+}
+
+.pool-duration-pair {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+}
+
+.pool-duration-input {
+  padding: 0 4px;
+  text-align: center;
+}
+
+.pool-duration-input::placeholder {
+  font-size: 11px;
+}
+
+@media (max-width: 380px) {
+  .pool-duration-range-inputs {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+  }
+
+  .pool-duration-range-inputs .pool-range-sep {
+    display: none;
+  }
 }
 
 .pool-trade-filter-actions {
@@ -818,6 +853,130 @@
   padding: 0 10px !important;
   font-size: 11px !important;
 }
+
+.pool-trade-filter-mode-row {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+  margin-bottom: 14px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.pool-mode-buttons {
+  display: inline-flex;
+  gap: 4px;
+  background: rgba(255, 255, 255, 0.03);
+  padding: 3px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+
+.pool-mode-btn {
+  background: transparent;
+  border: 0;
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 120ms ease;
+}
+
+.pool-mode-btn:hover:not(:disabled) {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.pool-mode-btn.active {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.1);
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+.pool-filter-subtabs {
+  display: flex;
+  gap: 6px;
+  padding: 10px 16px;
+  background: rgba(0, 0, 0, 0.15);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.pool-filter-subtab-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  padding: 6px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 120ms ease;
+}
+
+.pool-filter-subtab-btn:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.pool-filter-subtab-btn.active {
+  color: var(--green);
+  background: rgba(85, 214, 157, 0.08);
+  border-color: rgba(85, 214, 157, 0.25);
+}
+
+.filter-time-window {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.filter-time-window .time-sep {
+  color: rgba(255, 255, 255, 0.25);
+}
+.filter-source-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: rgba(99, 102, 241, 0.12);
+  border: 1px solid rgba(99, 102, 241, 0.3);
+  color: #a5b4fc;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.filter-capital-flows {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 11px;
+}
+
+.filter-capital-flows .flow-add {
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.filter-capital-flows .flow-rem {
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.filter-capital-flows .fee-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--green);
+}
+
 
 /* Token Groups Table & Nested Pools */
 .token-groups-table {
@@ -942,4 +1101,156 @@
 
 .cell-muted {
   color: var(--muted);
+}
+
+/* Pool Explorer Search Toolbar */
+.pool-search-box {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.pool-search-icon {
+  position: absolute;
+  left: 9px;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.pool-search-input {
+  height: 28px;
+  width: 190px;
+  background: rgba(0, 0, 0, 0.28);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0 26px 0 28px;
+  font-size: 11px;
+  color: var(--text);
+  font-family: inherit;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+
+.pool-search-input:focus {
+  outline: none;
+  border-color: rgba(255, 255, 255, 0.25);
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.pool-search-input::placeholder {
+  color: rgba(255, 255, 255, 0.3);
+  font-size: 11px;
+}
+
+.pool-search-clear-btn {
+  position: absolute;
+  right: 6px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  cursor: pointer;
+  transition: all 120ms ease;
+}
+
+.pool-search-clear-btn:hover {
+  background: rgba(255, 255, 255, 0.2);
+  color: var(--text);
+}
+
+.pool-search-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 40px 20px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.pool-search-reset-btn {
+  height: 28px !important;
+  padding: 0 12px !important;
+  font-size: 11px !important;
+}
+
+@media (max-width: 640px) {
+  html:has(.page-pools),
+  body:has(.page-pools),
+  body:has(.page-pools) #root {
+    min-width: 0 !important;
+    overflow-x: hidden;
+  }
+
+  .app-shell.page-pools {
+    min-width: 0 !important;
+    overflow-x: hidden;
+  }
+
+  .app-shell.page-pools .main-content {
+    margin-left: 0 !important;
+    padding: 12px !important;
+    min-width: 0 !important;
+    max-width: 100vw !important;
+    overflow-x: hidden;
+  }
+
+  .app-shell.page-pools .sidebar {
+    display: none !important;
+  }
+
+  .app-shell.page-pools .topbar {
+    overflow-x: auto;
+    max-width: 100%;
+  }
+
+  .pool-explorer-page,
+  .pool-insight-page {
+    min-width: 0 !important;
+    max-width: 100% !important;
+    overflow-x: hidden;
+  }
+
+  .pool-insight-table-card {
+    min-width: 0 !important;
+    max-width: 100% !important;
+  }
+
+  .pool-insight-table-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+    padding: 12px 14px;
+    max-width: 100%;
+    box-sizing: border-box;
+  }
+
+  .pool-insight-table-toolbar-left {
+    justify-content: space-between;
+    width: 100%;
+  }
+
+  .pool-insight-table-toolbar-right {
+    width: 100%;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .pool-search-box {
+    flex: 1 1 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+  }
+
+  .pool-search-input {
+    width: 100%;
+    box-sizing: border-box;
+  }
 }

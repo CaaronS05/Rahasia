@@ -341,3 +341,117 @@ export async function resumeAlertsEngine(): Promise<{ success: boolean; status: 
     }
   );
 }
+
+export function isPollingStale(
+  status: AlertsStatus | null | undefined,
+  now = Date.now()
+): boolean {
+  if (!status) return false;
+  const effectiveStatus = status.status;
+  if (effectiveStatus !== "RUNNING" && effectiveStatus !== "DEGRADED") {
+    return false;
+  }
+
+  const cadence = status.configuredPollIntervalMs ?? 5000;
+  const threshold = Math.max(cadence * 3, 15000);
+
+  const lastSuccessful = status.lastSuccessfulPollAt;
+  if (typeof lastSuccessful === "number" && lastSuccessful > 0) {
+    return now - lastSuccessful > threshold;
+  }
+
+  const lastAttempt = status.lastPollAt;
+  if (typeof lastAttempt === "number" && lastAttempt > 0) {
+    return now - lastAttempt > threshold;
+  }
+
+  if ((status.totalPolls > 0 || (status.totalPollsAttempted ?? 0) > 0) && !lastSuccessful && !lastAttempt) {
+    return true;
+  }
+
+  return false;
+}
+
+export function getRpcHealthPresentation(
+  effectiveStatus: EngineStatus,
+  status: AlertsStatus | null,
+  now = Date.now()
+): { label: string; color: string } {
+  if (!status || effectiveStatus === "OFFLINE") {
+    return { label: "Offline", color: "var(--red, #f44336)" };
+  }
+  if (effectiveStatus === "PAUSED") {
+    return { label: "Monitoring Paused", color: "var(--amber, #f1c84d)" };
+  }
+  if (effectiveStatus === "DEGRADED") {
+    if (isPollingStale(status, now)) {
+      return { label: "Degraded (Stale)", color: "var(--amber, #f1c84d)" };
+    }
+    const errorCount = status.rpcErrorCount ?? 0;
+    return {
+      label: errorCount > 0 ? `Degraded (${errorCount} errors)` : "Degraded Polling",
+      color: "var(--amber, #f1c84d)",
+    };
+  }
+  if (effectiveStatus === "RUNNING") {
+    if (isPollingStale(status, now)) {
+      return { label: "Stale Polling", color: "var(--amber, #f1c84d)" };
+    }
+    const errorCount = status.rpcErrorCount ?? 0;
+    const rateLimitCount = status.http429Count ?? 0;
+    if (errorCount === 0 && rateLimitCount === 0) {
+      return { label: "100% Operational", color: "var(--green, #55d69d)" };
+    }
+    return { label: "Operational (Past Errors)", color: "var(--green, #55d69d)" };
+  }
+  if (effectiveStatus === "INITIALIZING") {
+    return { label: "Initializing", color: "var(--blue, #5ba4e6)" };
+  }
+  if (effectiveStatus === "STOPPED") {
+    return { label: "Engine Stopped", color: "var(--muted, #8c8882)" };
+  }
+  return { label: "Idle", color: "var(--muted, #8c8882)" };
+}
+
+export function getProtocolIndicator(
+  status: AlertsStatus | null
+): { label: string; color: string } {
+  if (!status) return { label: "—", color: "var(--muted, #8c8882)" };
+  if ((status as any)?.sdkVerified) {
+    return { label: "DLMM SDK v2 (Verified)", color: "var(--green, #55d69d)" };
+  }
+  if (status.sdkCompatible) {
+    return { label: "DLMM SDK v2 (Compatible)", color: "var(--green, #55d69d)" };
+  }
+  return { label: "Meteora IDL Core", color: "var(--muted, #8c8882)" };
+}
+
+export function formatWib(timestamp: number | null | undefined): string {
+  if (!timestamp || timestamp <= 0) return "—";
+  const d = new Date(timestamp);
+  if (isNaN(d.getTime())) return "—";
+  return (
+    new Intl.DateTimeFormat("en-GB", {
+      timeZone: "Asia/Jakarta",
+      day: "2-digit",
+      month: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    }).format(d) + " WIB"
+  );
+}
+
+export function formatLastSuccessfulPoll(
+  statusOrTimestamp: AlertsStatus | number | null | undefined
+): string {
+  const ts =
+    typeof statusOrTimestamp === "number"
+      ? statusOrTimestamp
+      : statusOrTimestamp?.lastSuccessfulPollAt;
+  if (typeof ts === "number" && ts > 0) {
+    return formatWib(ts);
+  }
+  return "Awaiting First Successful Poll";
+}

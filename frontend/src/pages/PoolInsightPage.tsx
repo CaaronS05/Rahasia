@@ -11,6 +11,7 @@ import {
   Layers3,
   Loader2,
   RefreshCw,
+  Search,
   Sparkles,
   X,
 } from "lucide-react";
@@ -21,21 +22,27 @@ import {
   fetchPoolWalletTrades,
   fetchScannedPools,
   filterPoolTrades,
+  filterTokenGroups,
   formatPct,
   formatUsd,
   getPoolRefreshStatus,
+  groupPoolsByToken,
+  refreshWalletCumulative,
   startPoolRefresh,
+  type MatchedCumulativeGroup,
   type PoolDetailResponse,
   type PoolRefreshStage,
   type PoolTradeFilterResponse,
+  type PoolTradeMatchMode,
   type PoolWalletItem,
   type PoolWalletSortKey,
   type PoolWalletTradeItem,
   type ScannedPoolItem,
   type SortOrder,
+  type TokenPoolGroup,
 } from "../lib/poolInsight";
 
-export { formatUsd, formatPct };
+export { formatUsd, formatPct, groupPoolsByToken, filterTokenGroups, type TokenPoolGroup };
 import { shortWallet } from "../lib/format";
 import "../pool-insight.css";
 
@@ -92,8 +99,8 @@ function getRefreshStageLabel(stage: PoolRefreshStage | null): string {
 }
 
 
-function formatDuration(seconds: number): string {
-  if (!Number.isFinite(seconds) || seconds < 0) return "—";
+function formatDuration(seconds: number | null | undefined): string {
+  if (seconds === null || seconds === undefined || !Number.isFinite(seconds) || seconds < 0) return "—";
   const sec = Math.floor(seconds);
   if (sec < 60) return `${sec}s`;
   const mins = Math.floor(sec / 60);
@@ -104,7 +111,10 @@ function formatDuration(seconds: number): string {
   const hours = Math.floor(mins / 60);
   const remMin = mins % 60;
   if (hours < 24) {
-    return remMin > 0 ? `${hours}h ${remMin}m` : `${hours}h`;
+    const parts = [`${hours}h`];
+    if (remMin > 0) parts.push(`${remMin}m`);
+    if (remSec > 0) parts.push(`${remSec}s`);
+    return parts.join(" ");
   }
   const days = Math.floor(hours / 24);
   const remHours = hours % 24;
@@ -136,62 +146,6 @@ function CopyButton({ text, label = "Copy address" }: { text: string; label?: st
       {copied ? <Check size={11} /> : <Copy size={11} />}
     </button>
   );
-}
-export interface TokenPoolGroup {
-  groupKey: string;
-  tokenMint: string;
-  tokenName: string;
-  pools: ScannedPoolItem[];
-  poolCount: number;
-  mostRecentScanAt: string;
-}
-
-export function groupPoolsByToken(pools: ScannedPoolItem[]): TokenPoolGroup[] {
-  const groupMap = new Map<string, TokenPoolGroup>();
-
-  for (const pool of pools) {
-    const mint = pool.tokenMint?.trim();
-
-    // Grouping rules:
-    // 1. Group by exact tokenMint, NOT symbol or pair name.
-    // 2. Only group pools with the same actual token mint and corresponding SOL pairing.
-    // 3. Two tokens with the same symbol but different mint addresses must remain separate groups.
-    // 4. Never merge pool records or their underlying data.
-    // 5. Preserve all individual pool addresses.
-    // 6. If tokenMint is unavailable, avoid incorrect grouping: keep that pool as a separate entry.
-    let key: string;
-    if (!mint) {
-      key = `unminted:${pool.poolAddress}`;
-    } else {
-      const pairUpper = (pool.pair || "").trim().toUpperCase();
-      const isSolPair = pairUpper.endsWith("/SOL") || pairUpper.endsWith("-SOL");
-      key = isSolPair ? `mint:${mint}:SOL` : `mint:${mint}:${pairUpper}`;
-    }
-
-    const existing = groupMap.get(key);
-    if (!existing) {
-      groupMap.set(key, {
-        groupKey: key,
-        tokenMint: mint || "",
-        tokenName: pool.pair?.trim() || "Unknown Token",
-        pools: [pool],
-        poolCount: 1,
-        mostRecentScanAt: pool.lastScannedAt || pool.firstScannedAt || "",
-      });
-    } else {
-      existing.pools.push(pool);
-      existing.poolCount = existing.pools.length;
-      if (
-        pool.lastScannedAt &&
-        (!existing.mostRecentScanAt ||
-          Date.parse(pool.lastScannedAt) > Date.parse(existing.mostRecentScanAt))
-      ) {
-        existing.mostRecentScanAt = pool.lastScannedAt;
-      }
-    }
-  }
-
-  return Array.from(groupMap.values());
 }
 
 export function PoolInsightPage() {
@@ -251,8 +205,13 @@ export function PoolInsightPage() {
   const [loadingPools, setLoadingPools] = useState(true);
   const [poolsError, setPoolsError] = useState<string | null>(null);
   const [expandedGroupKeys, setExpandedGroupKeys] = useState<Set<string>>(new Set());
+  const [searchQuery, setSearchQuery] = useState("");
 
   const tokenGroups = useMemo(() => groupPoolsByToken(pools), [pools]);
+  const visibleGroups = useMemo(
+    () => filterTokenGroups(tokenGroups, searchQuery),
+    [tokenGroups, searchQuery]
+  );
 
   const toggleGroup = useCallback((groupKey: string) => {
     setExpandedGroupKeys((prev) => {
@@ -266,14 +225,31 @@ export function PoolInsightPage() {
     });
   }, []);
 
+  const allVisibleExpanded = useMemo(() => {
+    if (visibleGroups.length === 0) return false;
+    return visibleGroups.every((g) => expandedGroupKeys.has(g.groupKey));
+  }, [visibleGroups, expandedGroupKeys]);
+
   const handleToggleAllGroups = useCallback(() => {
-    if (tokenGroups.length === 0) return;
-    if (expandedGroupKeys.size === tokenGroups.length) {
-      setExpandedGroupKeys(new Set());
+    if (visibleGroups.length === 0) return;
+    if (allVisibleExpanded) {
+      setExpandedGroupKeys((prev) => {
+        const next = new Set(prev);
+        for (const g of visibleGroups) {
+          next.delete(g.groupKey);
+        }
+        return next;
+      });
     } else {
-      setExpandedGroupKeys(new Set(tokenGroups.map((g) => g.groupKey)));
+      setExpandedGroupKeys((prev) => {
+        const next = new Set(prev);
+        for (const g of visibleGroups) {
+          next.add(g.groupKey);
+        }
+        return next;
+      });
     }
-  }, [tokenGroups, expandedGroupKeys.size]);
+  }, [visibleGroups, allVisibleExpanded]);
 
   // Keep token group expanded if a pool within it is currently selected
   useEffect(() => {
@@ -318,18 +294,29 @@ export function PoolInsightPage() {
 
 
   // Trade Filter state
-  const [minDurationInput, setMinDurationInput] = useState<string>("");
-  const [maxDurationInput, setMaxDurationInput] = useState<string>("");
+  const [minDurationHours, setMinDurationHours] = useState<string>("");
+  const [minDurationMinutes, setMinDurationMinutes] = useState<string>("");
+  const [maxDurationHours, setMaxDurationHours] = useState<string>("");
+  const [maxDurationMinutes, setMaxDurationMinutes] = useState<string>("");
   const [minPnlUsdInput, setMinPnlUsdInput] = useState<string>("");
   const [maxPnlUsdInput, setMaxPnlUsdInput] = useState<string>("");
   const [minPnlPctInput, setMinPnlPctInput] = useState<string>("");
   const [maxPnlPctInput, setMaxPnlPctInput] = useState<string>("");
+  const [matchMode, setMatchMode] = useState<PoolTradeMatchMode>("individual");
+  const [bothResultsTab, setBothResultsTab] = useState<"individual" | "cumulative">("individual");
 
   const [isFiltering, setIsFiltering] = useState(false);
   const [filterError, setFilterError] = useState<string | null>(null);
   const [filterValidationMsg, setFilterValidationMsg] = useState<string | null>(null);
   const [filterResponse, setFilterResponse] = useState<PoolTradeFilterResponse | null>(null);
   const [expandedWallets, setExpandedWallets] = useState<Set<string>>(new Set());
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const [targetedWalletInput, setTargetedWalletInput] = useState<string>("");
+  const [isRefreshingCumulative, setIsRefreshingCumulative] = useState<boolean>(false);
+  const [targetedRefreshStatus, setTargetedRefreshStatus] = useState<{
+    type: "success" | "error";
+    message: string;
+  } | null>(null);
   // Reset drilldown and refresh state whenever selected pool changes or is deselected
   useEffect(() => {
     setSelectedWalletForTrades(null);
@@ -340,17 +327,25 @@ export function PoolInsightPage() {
     setRefreshStage(null);
     setRefreshError(null);
     setRefreshSuccess(false);
-    setMinDurationInput("");
-    setMaxDurationInput("");
+    setMinDurationHours("");
+    setMinDurationMinutes("");
+    setMaxDurationHours("");
+    setMaxDurationMinutes("");
     setMinPnlUsdInput("");
     setMaxPnlUsdInput("");
     setMinPnlPctInput("");
     setMaxPnlPctInput("");
+    setMatchMode("individual");
+    setBothResultsTab("individual");
     setFilterError(null);
     setFilterValidationMsg(null);
     setFilterResponse(null);
     setIsFiltering(false);
     setExpandedWallets(new Set());
+    setExpandedGroups(new Set());
+    setTargetedWalletInput("");
+    setIsRefreshingCumulative(false);
+    setTargetedRefreshStatus(null);
   }, [selectedPoolAddress]);
 
   // Load trades for selected pool + wallet with stale-response protection
@@ -548,18 +543,41 @@ export function PoolInsightPage() {
     setFilterValidationMsg(null);
     setFilterError(null);
 
-    const minDurStr = minDurationInput.trim();
-    const maxDurStr = maxDurationInput.trim();
+    const minHStr = minDurationHours.trim();
+    const minMStr = minDurationMinutes.trim();
+    const maxHStr = maxDurationHours.trim();
+    const maxMStr = maxDurationMinutes.trim();
     const minUsdStr = minPnlUsdInput.trim();
     const maxUsdStr = maxPnlUsdInput.trim();
     const minPctStr = minPnlPctInput.trim();
     const maxPctStr = maxPnlPctInput.trim();
 
+    const hasMinDur = Boolean(minHStr || minMStr);
+    const hasMaxDur = Boolean(maxHStr || maxMStr);
+
     // Empty filter validation: require at least one filter
-    if (!minDurStr && !maxDurStr && !minUsdStr && !maxUsdStr && !minPctStr && !maxPctStr) {
+    if (!hasMinDur && !hasMaxDur && !minUsdStr && !maxUsdStr && !minPctStr && !maxPctStr) {
       setFilterValidationMsg("Set at least one filter.");
       return;
     }
+
+    const parseDurationField = (
+      valStr: string,
+      fieldName: string,
+      maxVal?: number
+    ): number => {
+      if (!/^\d+$/.test(valStr)) {
+        throw new Error(`${fieldName} must be a non-negative integer`);
+      }
+      const val = Number(valStr);
+      if (!Number.isSafeInteger(val) || val < 0) {
+        throw new Error(`${fieldName} must be a non-negative integer`);
+      }
+      if (maxVal !== undefined && val > maxVal) {
+        throw new Error(`${fieldName} must be between 0 and ${maxVal}`);
+      }
+      return val;
+    };
 
     const parseNum = (str: string, fieldName: string): number | null => {
       if (!str) return null;
@@ -578,8 +596,19 @@ export function PoolInsightPage() {
     let maxPct: number | null = null;
 
     try {
-      minDur = parseNum(minDurStr, "Min duration");
-      maxDur = parseNum(maxDurStr, "Max duration");
+      if (hasMinDur) {
+        const h = minHStr ? parseDurationField(minHStr, "Minimum hours") : 0;
+        const m = minMStr ? parseDurationField(minMStr, "Minimum minutes", 59) : 0;
+        minDur = h * 60 + m;
+      }
+      if (hasMaxDur) {
+        const h = maxHStr ? parseDurationField(maxHStr, "Maximum hours") : 0;
+        const m = maxMStr ? parseDurationField(maxMStr, "Maximum minutes", 59) : 0;
+        maxDur = h * 60 + m;
+      }
+      if (minDur !== null && maxDur !== null && minDur > maxDur) {
+        throw new Error("Minimum duration cannot be greater than maximum duration");
+      }
       minUsd = parseNum(minUsdStr, "Min PnL USD");
       maxUsd = parseNum(maxUsdStr, "Max PnL USD");
       minPct = parseNum(minPctStr, "Min PnL %");
@@ -600,9 +629,26 @@ export function PoolInsightPage() {
         maxPnlUsd: maxUsd,
         minPnlPct: minPct,
         maxPnlPct: maxPct,
+        matchMode,
       });
       setFilterResponse(response);
       setExpandedWallets(new Set());
+      setExpandedGroups(new Set());
+      if (matchMode === "cumulative") {
+        setBothResultsTab("cumulative");
+      } else if (matchMode === "both") {
+        const indCount = response.wallets?.length ?? response.matchedTradeCount ?? 0;
+        const cumCount = response.cumulativeGroups?.length ?? response.matchedGroupCount ?? 0;
+        if (indCount > 0) {
+          setBothResultsTab("individual");
+        } else if (cumCount > 0) {
+          setBothResultsTab("cumulative");
+        } else {
+          setBothResultsTab("individual");
+        }
+      } else {
+        setBothResultsTab("individual");
+      }
     } catch (err) {
       setFilterError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -611,16 +657,52 @@ export function PoolInsightPage() {
   };
 
   const handleClearFilter = () => {
-    setMinDurationInput("");
-    setMaxDurationInput("");
+    setMinDurationHours("");
+    setMinDurationMinutes("");
+    setMaxDurationHours("");
+    setMaxDurationMinutes("");
     setMinPnlUsdInput("");
     setMaxPnlUsdInput("");
     setMinPnlPctInput("");
     setMaxPnlPctInput("");
+    setMatchMode("individual");
+    setBothResultsTab("individual");
     setFilterValidationMsg(null);
     setFilterError(null);
     setFilterResponse(null);
     setExpandedWallets(new Set());
+    setExpandedGroups(new Set());
+  };
+
+  const handleTargetedCumulativeRefresh = async (walletOverride?: string) => {
+    if (!selectedPoolAddress) return;
+    const targetWallet = (walletOverride || targetedWalletInput).trim();
+    if (!targetWallet) {
+      setTargetedRefreshStatus({
+        type: "error",
+        message: "Please enter a valid wallet address to refresh.",
+      });
+      return;
+    }
+
+    setIsRefreshingCumulative(true);
+    setTargetedRefreshStatus(null);
+
+    try {
+      await refreshWalletCumulative(selectedPoolAddress, targetWallet);
+      setTargetedRefreshStatus({
+        type: "success",
+        message: `Successfully refreshed Fabriq cumulative aggregate for ${shortWallet(targetWallet, 6, 4)}.`,
+      });
+      await handleApplyFilter();
+    } catch (err) {
+      setTargetedRefreshStatus({
+        type: "error",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setIsRefreshingCumulative(false);
+    }
   };
 
   const toggleWalletExpanded = (wallet: string) => {
@@ -635,12 +717,44 @@ export function PoolInsightPage() {
     });
   };
 
+  const toggleGroupExpanded = (groupId: string) => {
+    setExpandedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(groupId)) {
+        next.delete(groupId);
+      } else {
+        next.add(groupId);
+      }
+      return next;
+    });
+  };
+
   const handleToggleAllExpanded = () => {
     if (!filterResponse) return;
-    if (expandedWallets.size === filterResponse.wallets.length) {
-      setExpandedWallets(new Set());
+    const activeMode: PoolTradeMatchMode =
+      filterResponse.filters?.matchMode ?? matchMode ?? "individual";
+    const isViewingCumulative =
+      activeMode === "cumulative" ||
+      (activeMode === "both" && bothResultsTab === "cumulative");
+
+    if (isViewingCumulative) {
+      const groups = Array.isArray(filterResponse.cumulativeGroups)
+        ? filterResponse.cumulativeGroups
+        : [];
+      if (expandedGroups.size === groups.length) {
+        setExpandedGroups(new Set());
+      } else {
+        setExpandedGroups(new Set(groups.map((g) => g.groupId)));
+      }
     } else {
-      setExpandedWallets(new Set(filterResponse.wallets.map((w) => w.wallet)));
+      const wList = Array.isArray(filterResponse.wallets)
+        ? filterResponse.wallets
+        : [];
+      if (expandedWallets.size === wList.length) {
+        setExpandedWallets(new Set());
+      } else {
+        setExpandedWallets(new Set(wList.map((w) => w.wallet)));
+      }
     }
   };
 
@@ -806,40 +920,104 @@ export function PoolInsightPage() {
                 <h4>Trade Filter</h4>
               </div>
               <span className="pool-trade-filter-subtitle">
-                Find wallets based on individual trade characteristics. All active conditions must be satisfied by the same trade.
+                {matchMode === "individual"
+                  ? "Find wallets based on individual trade characteristics. All active conditions must be satisfied by the same trade."
+                  : matchMode === "cumulative"
+                  ? "Find wallets based on official Fabriq cumulative DLMM position performance for this pool. All active conditions apply to the same Fabriq aggregate."
+                  : "Find wallets based on individual trades and Fabriq cumulative pool aggregates."}
               </span>
+            </div>
+
+            <div className="pool-trade-filter-mode-row">
+              <div className="pool-trade-filter-group">
+                <label className="pool-trade-filter-label">Match Mode</label>
+                <div className="pool-mode-buttons" role="group" aria-label="Match Mode">
+                  <button
+                    type="button"
+                    className={`pool-mode-btn ${matchMode === "individual" ? "active" : ""}`}
+                    onClick={() => setMatchMode("individual")}
+                  >
+                    Individual
+                  </button>
+                  <button
+                    type="button"
+                    className={`pool-mode-btn ${matchMode === "cumulative" ? "active" : ""}`}
+                    onClick={() => setMatchMode("cumulative")}
+                  >
+                    Cumulative
+                  </button>
+                  <button
+                    type="button"
+                    className={`pool-mode-btn ${matchMode === "both" ? "active" : ""}`}
+                    onClick={() => setMatchMode("both")}
+                  >
+                    Both
+                  </button>
+                </div>
+              </div>
+
             </div>
 
             <div className="pool-trade-filter-grid">
               <div className="pool-trade-filter-group">
-                <label className="pool-trade-filter-label">Trade Duration (minutes)</label>
-                <div className="pool-range-inputs">
-                  <input
-                    type="number"
-                    min="0"
-                    step="any"
-                    placeholder="Min"
-                    value={minDurationInput}
-                    onChange={(e) => setMinDurationInput(e.target.value)}
-                    className="pool-filter-input"
-                    aria-label="Minimum duration in minutes"
-                  />
+                <label className="pool-trade-filter-label">
+                  {matchMode === "individual" ? "Trade Duration" : matchMode === "cumulative" ? "Fabriq Duration" : "Duration"}
+                </label>
+                <div className="pool-range-inputs pool-duration-range-inputs">
+                  <div className="pool-duration-pair">
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      placeholder="Min h"
+                      value={minDurationHours}
+                      onChange={(e) => setMinDurationHours(e.target.value)}
+                      className="pool-filter-input pool-duration-input"
+                      aria-label="Minimum duration hours"
+                    />
+                    <input
+                      type="number"
+                      min="0"
+                      max="59"
+                      step="1"
+                      placeholder="Min m"
+                      value={minDurationMinutes}
+                      onChange={(e) => setMinDurationMinutes(e.target.value)}
+                      className="pool-filter-input pool-duration-input"
+                      aria-label="Minimum duration minutes"
+                    />
+                  </div>
                   <span className="pool-range-sep">–</span>
-                  <input
-                    type="number"
-                    min="0"
-                    step="any"
-                    placeholder="Max"
-                    value={maxDurationInput}
-                    onChange={(e) => setMaxDurationInput(e.target.value)}
-                    className="pool-filter-input"
-                    aria-label="Maximum duration in minutes"
-                  />
+                  <div className="pool-duration-pair">
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      placeholder="Max h"
+                      value={maxDurationHours}
+                      onChange={(e) => setMaxDurationHours(e.target.value)}
+                      className="pool-filter-input pool-duration-input"
+                      aria-label="Maximum duration hours"
+                    />
+                    <input
+                      type="number"
+                      min="0"
+                      max="59"
+                      step="1"
+                      placeholder="Max m"
+                      value={maxDurationMinutes}
+                      onChange={(e) => setMaxDurationMinutes(e.target.value)}
+                      className="pool-filter-input pool-duration-input"
+                      aria-label="Maximum duration minutes"
+                    />
+                  </div>
                 </div>
               </div>
 
               <div className="pool-trade-filter-group">
-                <label className="pool-trade-filter-label">Trade PnL (USD)</label>
+                <label className="pool-trade-filter-label">
+                  {matchMode === "individual" ? "Trade PnL (USD)" : matchMode === "cumulative" ? "Cumulative PnL (USD)" : "PnL (USD)"}
+                </label>
                 <div className="pool-range-inputs">
                   <input
                     type="number"
@@ -864,7 +1042,9 @@ export function PoolInsightPage() {
               </div>
 
               <div className="pool-trade-filter-group">
-                <label className="pool-trade-filter-label">Trade PnL %</label>
+                <label className="pool-trade-filter-label">
+                  {matchMode === "individual" ? "Trade PnL %" : matchMode === "cumulative" ? "Cumulative PnL %" : "PnL %"}
+                </label>
                 <div className="pool-range-inputs">
                   <input
                     type="number"
@@ -949,12 +1129,198 @@ export function PoolInsightPage() {
               <Loader2 className="spin" size={15} style={{ marginRight: 8, verticalAlign: "middle" }} />
               Filtering trades...
             </div>
-          ) : filterResponse ? (
-            filterResponse.matchedWalletCount === 0 ? (
-              <div className="state-card" style={{ marginTop: 16 }}>
-                No trades match these filters.
-              </div>
-            ) : (
+          ) : filterResponse ? (() => {
+            const activeMode: PoolTradeMatchMode =
+              filterResponse.filters?.matchMode ?? matchMode ?? "individual";
+            const filterWallets = Array.isArray(filterResponse.wallets) ? filterResponse.wallets : [];
+            const filterGroups = Array.isArray(filterResponse.cumulativeGroups) ? filterResponse.cumulativeGroups : [];
+
+            const isCompletelyEmpty =
+              activeMode === "individual"
+                ? filterWallets.length === 0
+                : activeMode === "cumulative"
+                ? filterGroups.length === 0
+                : filterWallets.length === 0 && filterGroups.length === 0;
+
+            if (isCompletelyEmpty) {
+              if (activeMode === "cumulative") {
+                if (filterResponse.cumulativeStatus === "unavailable") {
+                  return (
+                    <div className="state-card" style={{ marginTop: 16 }}>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 10, alignItems: "center", padding: "14px 0" }}>
+                        <strong style={{ color: "var(--text)", fontSize: 13 }}>
+                          Fabriq Cumulative Aggregates Unavailable
+                        </strong>
+                        <span style={{ color: "var(--muted)", fontSize: 12, maxWidth: 500, textAlign: "center" }}>
+                          Official Fabriq cumulative aggregate data has not been extracted for this pool yet. You can refresh a single wallet's aggregate directly from Fabriq via CDP bridge without rescanning the pool.
+                        </span>
+                        <div style={{ display: "flex", gap: 8, marginTop: 4, width: "100%", maxWidth: 460 }}>
+                          <input
+                            type="text"
+                            placeholder="Wallet address to refresh (e.g. 73ZALH...)"
+                            value={targetedWalletInput}
+                            onChange={(e) => setTargetedWalletInput(e.target.value)}
+                            className="pool-filter-input"
+                            style={{ fontSize: 12, height: 34 }}
+                            disabled={isRefreshingCumulative}
+                          />
+                          <button
+                            type="button"
+                            className="primary-button"
+                            onClick={() => handleTargetedCumulativeRefresh()}
+                            disabled={isRefreshingCumulative || !targetedWalletInput.trim()}
+                            style={{ height: 34, fontSize: 11, padding: "0 12px", whiteSpace: "nowrap" }}
+                          >
+                            {isRefreshingCumulative ? (
+                              <>
+                                <Loader2 className="spin" size={12} style={{ marginRight: 5 }} />
+                                Refreshing...
+                              </>
+                            ) : (
+                              <>
+                                <RefreshCw size={12} style={{ marginRight: 5 }} />
+                                Refresh Fabriq Aggregate
+                              </>
+                            )}
+                          </button>
+                        </div>
+                        {targetedRefreshStatus && (
+                          <div style={{ fontSize: 12, color: targetedRefreshStatus.type === "success" ? "var(--green)" : "#ef4444" }}>
+                            {targetedRefreshStatus.message}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                }
+
+                return (
+                  <div className="state-card" style={{ marginTop: 16 }}>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "center", padding: "14px 0" }}>
+                      <strong style={{ color: "var(--text)", fontSize: 13 }}>
+                        No Fabriq cumulative groups match these filters
+                      </strong>
+                      <span style={{ color: "var(--muted)", fontSize: 12, maxWidth: 480, textAlign: "center" }}>
+                        {(filterResponse.totalPoolAggregates ?? 0).toLocaleString()} Fabriq cumulative {filterResponse.totalPoolAggregates === 1 ? "record" : "records"} evaluated for this pool, but none satisfied all active filter conditions.
+                      </span>
+                      {filterResponse.cumulativeStatus === "stale" && (
+                        <span className="alerts-badge alerts-badge-amber" style={{ fontSize: 10, padding: "2px 8px" }}>
+                          Stored aggregates are older than 24h
+                        </span>
+                      )}
+                      <div style={{ display: "flex", gap: 8, marginTop: 4, width: "100%", maxWidth: 460 }}>
+                        <input
+                          type="text"
+                          placeholder="Refresh specific wallet (e.g. 73ZALH...)"
+                          value={targetedWalletInput}
+                          onChange={(e) => setTargetedWalletInput(e.target.value)}
+                          className="pool-filter-input"
+                          style={{ fontSize: 12, height: 34 }}
+                          disabled={isRefreshingCumulative}
+                        />
+                        <button
+                          type="button"
+                          className="primary-button"
+                          onClick={() => handleTargetedCumulativeRefresh()}
+                          disabled={isRefreshingCumulative || !targetedWalletInput.trim()}
+                          style={{ height: 34, fontSize: 11, padding: "0 12px", whiteSpace: "nowrap" }}
+                        >
+                          {isRefreshingCumulative ? (
+                            <>
+                              <Loader2 className="spin" size={12} style={{ marginRight: 5 }} />
+                              Refreshing...
+                            </>
+                          ) : (
+                            <>
+                              <RefreshCw size={12} style={{ marginRight: 5 }} />
+                              Refresh Fabriq Aggregate
+                            </>
+                          )}
+                        </button>
+                      </div>
+                      {targetedRefreshStatus && (
+                        <div style={{ fontSize: 12, color: targetedRefreshStatus.type === "success" ? "var(--green)" : "#ef4444" }}>
+                          {targetedRefreshStatus.message}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              }
+
+              if (activeMode === "individual") {
+                return (
+                  <div className="state-card" style={{ marginTop: 16 }}>
+                    No individual trades match these filters.
+                  </div>
+                );
+              }
+
+              return (
+                <div className="state-card" style={{ marginTop: 16 }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "center", padding: "14px 0" }}>
+                    <strong style={{ color: "var(--text)", fontSize: 13 }}>
+                      No trades or Fabriq cumulative groups match these filters
+                    </strong>
+                    {filterResponse.cumulativeStatus === "unavailable" && (
+                      <span style={{ color: "var(--muted)", fontSize: 12, maxWidth: 480, textAlign: "center" }}>
+                        Fabriq cumulative aggregates have not been extracted for this pool yet.
+                      </span>
+                    )}
+                    <div style={{ display: "flex", gap: 8, marginTop: 4, width: "100%", maxWidth: 460 }}>
+                      <input
+                        type="text"
+                        placeholder="Refresh specific wallet (e.g. 73ZALH...)"
+                        value={targetedWalletInput}
+                        onChange={(e) => setTargetedWalletInput(e.target.value)}
+                        className="pool-filter-input"
+                        style={{ fontSize: 12, height: 34 }}
+                        disabled={isRefreshingCumulative}
+                      />
+                      <button
+                        type="button"
+                        className="primary-button"
+                        onClick={() => handleTargetedCumulativeRefresh()}
+                        disabled={isRefreshingCumulative || !targetedWalletInput.trim()}
+                        style={{ height: 34, fontSize: 11, padding: "0 12px", whiteSpace: "nowrap" }}
+                      >
+                        {isRefreshingCumulative ? (
+                          <>
+                            <Loader2 className="spin" size={12} style={{ marginRight: 5 }} />
+                            Refreshing...
+                          </>
+                        ) : (
+                          <>
+                            <RefreshCw size={12} style={{ marginRight: 5 }} />
+                            Refresh Fabriq Aggregate
+                          </>
+                        )}
+                      </button>
+                    </div>
+                    {targetedRefreshStatus && (
+                      <div style={{ fontSize: 12, color: targetedRefreshStatus.type === "success" ? "var(--green)" : "#ef4444" }}>
+                        {targetedRefreshStatus.message}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            }
+
+            const uniqueCumWallets = new Set(filterGroups.map((g) => g.wallet));
+            const uniqueIndWallets = new Set(filterWallets.map((w) => w.wallet));
+            const combinedWalletCount =
+              activeMode === "individual"
+                ? filterWallets.length
+                : activeMode === "cumulative"
+                ? uniqueCumWallets.size
+                : new Set([...uniqueIndWallets, ...uniqueCumWallets]).size;
+
+            const isViewingCumulative =
+              activeMode === "cumulative" ||
+              (activeMode === "both" && bothResultsTab === "cumulative");
+
+            return (
               <section
                 className="pool-insight-table-card"
                 style={{ marginTop: 16 }}
@@ -963,145 +1329,530 @@ export function PoolInsightPage() {
                 <div className="pool-insight-table-toolbar">
                   <div className="pool-insight-table-toolbar-left">
                     <strong>
-                      {filterResponse.matchedWalletCount.toLocaleString()}{" "}
-                      {filterResponse.matchedWalletCount === 1 ? "wallet" : "wallets"} found
+                      {combinedWalletCount.toLocaleString()}{" "}
+                      {combinedWalletCount === 1 ? "wallet" : "wallets"} found
                     </strong>
-                    <span>
-                      {filterResponse.matchedTradeCount.toLocaleString()} matching{" "}
-                      {filterResponse.matchedTradeCount === 1 ? "trade" : "trades"}
-                    </span>
+                    {activeMode === "individual" && (
+                      <span>
+                        {(filterResponse.matchedTradeCount ?? 0).toLocaleString()} matching{" "}
+                        {filterResponse.matchedTradeCount === 1 ? "trade" : "trades"}
+                      </span>
+                    )}
+                    {activeMode === "cumulative" && (
+                      <span>
+                        {filterGroups.length.toLocaleString()} matching Fabriq cumulative{" "}
+                        {filterGroups.length === 1 ? "group" : "groups"}
+                      </span>
+                    )}
+                    {activeMode === "both" && (
+                      <span>
+                        {(filterResponse.matchedTradeCount ?? 0).toLocaleString()} individual trades,{" "}
+                        {filterGroups.length.toLocaleString()} cumulative groups
+                      </span>
+                    )}
                   </div>
-                  <div className="pool-insight-table-toolbar-right">
+                  <div className="pool-insight-table-toolbar-right" style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    {isViewingCumulative && (
+                      <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                        <input
+                          type="text"
+                          placeholder="Target wallet..."
+                          value={targetedWalletInput}
+                          onChange={(e) => setTargetedWalletInput(e.target.value)}
+                          className="pool-filter-input"
+                          style={{ height: 28, fontSize: 11, width: 140 }}
+                          disabled={isRefreshingCumulative}
+                        />
+                        <button
+                          type="button"
+                          className="secondary-button"
+                          onClick={() => handleTargetedCumulativeRefresh()}
+                          disabled={isRefreshingCumulative || !targetedWalletInput.trim()}
+                          style={{ height: 28, fontSize: 11, padding: "0 8px" }}
+                          title="Refresh Fabriq cumulative aggregate for entered wallet"
+                        >
+                          {isRefreshingCumulative ? (
+                            <Loader2 className="spin" size={12} />
+                          ) : (
+                            <>
+                              <RefreshCw size={11} style={{ marginRight: 4 }} />
+                              Refresh
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    )}
                     <button
                       type="button"
                       className="secondary-button filter-toggle-all-btn"
                       onClick={handleToggleAllExpanded}
                     >
-                      {expandedWallets.size === filterResponse.wallets.length
+                      {isViewingCumulative
+                        ? expandedGroups.size === filterGroups.length
+                          ? "Collapse All"
+                          : "Expand All"
+                        : expandedWallets.size === filterWallets.length
                         ? "Collapse All"
                         : "Expand All"}
                     </button>
                   </div>
                 </div>
 
-                <div style={{ overflowX: "auto" }}>
-                  <table className="pool-insight-table filter-results-table">
-                    <thead>
-                      <tr>
-                        <th style={{ width: 40 }}></th>
-                        <th>WALLET</th>
-                        <th className="cell-number">MATCHED TRADES</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filterResponse.wallets.map((item) => {
-                        const isExpanded = expandedWallets.has(item.wallet);
-                        return (
-                          <Fragment key={item.wallet}>
-                            <tr
-                              className={`filter-wallet-row ${isExpanded ? "expanded" : ""}`}
-                              onClick={() => toggleWalletExpanded(item.wallet)}
-                              style={{ cursor: "pointer" }}
-                            >
-                              <td style={{ width: 40, textAlign: "center" }}>
-                                <button
-                                  type="button"
-                                  className="filter-expand-btn"
-                                  aria-label={isExpanded ? "Collapse trades" : "Expand trades"}
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    toggleWalletExpanded(item.wallet);
-                                  }}
+                {activeMode === "both" && (
+                  <div className="pool-filter-subtabs">
+                    <button
+                      type="button"
+                      className={`pool-filter-subtab-btn ${bothResultsTab === "individual" ? "active" : ""}`}
+                      onClick={() => setBothResultsTab("individual")}
+                    >
+                      Individual Trades ({filterWallets.length > 0 ? (filterResponse.matchedTradeCount ?? 0) : 0})
+                    </button>
+                    <button
+                      type="button"
+                      className={`pool-filter-subtab-btn ${bothResultsTab === "cumulative" ? "active" : ""}`}
+                      onClick={() => setBothResultsTab("cumulative")}
+                    >
+                      Fabriq Cumulative ({filterGroups.length})
+                    </button>
+                  </div>
+                )}
+
+                {/* Individual View */}
+                {(activeMode === "individual" ||
+                  (activeMode === "both" && bothResultsTab === "individual")) && (
+                  filterWallets.length === 0 ? (
+                    <div className="state-card" style={{ margin: 16 }}>
+                      No individual trades match these filters.
+                    </div>
+                  ) : (
+                    <div style={{ overflowX: "auto" }}>
+                      <table className="pool-insight-table filter-results-table">
+                        <thead>
+                          <tr>
+                            <th style={{ width: 40 }}></th>
+                            <th>WALLET</th>
+                            <th className="cell-number">MATCHED TRADES</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {filterWallets.map((item) => {
+                            const isExpanded = expandedWallets.has(item.wallet);
+                            return (
+                              <Fragment key={item.wallet}>
+                                <tr
+                                  className={`filter-wallet-row ${isExpanded ? "expanded" : ""}`}
+                                  onClick={() => toggleWalletExpanded(item.wallet)}
+                                  style={{ cursor: "pointer" }}
                                 >
-                                  {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                                </button>
-                              </td>
-                              <td>
-                                <div className="cell-address">
-                                  <span>{shortWallet(item.wallet, 6, 4)}</span>
-                                  <CopyButton text={item.wallet} label="Copy wallet address" />
-                                </div>
-                              </td>
-                              <td className="cell-number">
-                                <span className="matched-trades-badge">
-                                  {item.matchedTradeCount}{" "}
-                                  {item.matchedTradeCount === 1 ? "trade" : "trades"}
-                                </span>
-                              </td>
-                            </tr>
-                            {isExpanded && (
-                              <tr className="filter-wallet-details-row">
-                                <td colSpan={3} style={{ padding: 0 }}>
-                                  <div className="filter-wallet-trades-wrapper">
-                                    <table className="filter-nested-trades-table">
-                                      <thead>
-                                        <tr>
-                                          <th>POSITION</th>
-                                          <th>OPENED</th>
-                                          <th>CLOSED</th>
-                                          <th className="cell-number">DURATION</th>
-                                          <th className="cell-number">PNL</th>
-                                          <th className="cell-number">PNL %</th>
-                                        </tr>
-                                      </thead>
-                                      <tbody>
-                                        {item.trades.map((t) => (
-                                          <tr key={t.positionId}>
-                                            <td>
-                                              <div className="cell-address">
-                                                <span title={t.positionId}>
-                                                  {shortWallet(t.positionId, 6, 4)}
-                                                </span>
-                                                <CopyButton
-                                                  text={t.positionId}
-                                                  label="Copy position ID"
-                                                />
-                                              </div>
-                                            </td>
-                                            <td>{formatTimestamp(t.openedAt)}</td>
-                                            <td>{formatTimestamp(t.closedAt)}</td>
-                                            <td className="cell-number">
-                                              {formatDuration(t.durationSeconds)}
-                                            </td>
-                                            <td
-                                              className={`cell-number ${
-                                                t.pnlUsd > 0
-                                                  ? "positive"
-                                                  : t.pnlUsd < 0
-                                                  ? "negative"
-                                                  : ""
-                                              }`}
-                                            >
-                                              {formatUsd(t.pnlUsd)}
-                                            </td>
-                                            <td
-                                              className={`cell-number ${
-                                                t.pnlPct > 0
-                                                  ? "positive"
-                                                  : t.pnlPct < 0
-                                                  ? "negative"
-                                                  : ""
-                                              }`}
-                                            >
-                                              {formatPct(t.pnlPct)}
-                                            </td>
-                                          </tr>
-                                        ))}
-                                      </tbody>
-                                    </table>
-                                  </div>
-                                </td>
-                              </tr>
+                                  <td style={{ width: 40, textAlign: "center" }}>
+                                    <button
+                                      type="button"
+                                      className="filter-expand-btn"
+                                      aria-label={isExpanded ? "Collapse trades" : "Expand trades"}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        toggleWalletExpanded(item.wallet);
+                                      }}
+                                    >
+                                      {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                                    </button>
+                                  </td>
+                                  <td>
+                                    <div className="cell-address">
+                                      <span>{shortWallet(item.wallet, 6, 4)}</span>
+                                      <CopyButton text={item.wallet} label="Copy wallet address" />
+                                      <button
+                                        type="button"
+                                        title="Fetch / Refresh Fabriq cumulative aggregate for this wallet"
+                                        style={{ background: "transparent", border: 0, color: "var(--muted)", cursor: "pointer", padding: "0 2px" }}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          handleTargetedCumulativeRefresh(item.wallet);
+                                        }}
+                                        disabled={isRefreshingCumulative}
+                                      >
+                                        <RefreshCw size={11} className={isRefreshingCumulative ? "spin" : ""} />
+                                      </button>
+                                    </div>
+                                  </td>
+                                  <td className="cell-number">
+                                    <span className="matched-trades-badge">
+                                      {item.matchedTradeCount}{" "}
+                                      {item.matchedTradeCount === 1 ? "trade" : "trades"}
+                                    </span>
+                                  </td>
+                                </tr>
+                                {isExpanded && (
+                                  <tr className="filter-wallet-details-row">
+                                    <td colSpan={3} style={{ padding: 0 }}>
+                                      <div className="filter-wallet-trades-wrapper">
+                                        <table className="filter-nested-trades-table">
+                                          <thead>
+                                            <tr>
+                                              <th>POSITION</th>
+                                              <th>OPENED</th>
+                                              <th>CLOSED</th>
+                                              <th className="cell-number">DURATION</th>
+                                              <th className="cell-number">PNL</th>
+                                              <th className="cell-number">PNL %</th>
+                                            </tr>
+                                          </thead>
+                                          <tbody>
+                                            {item.trades.map((t) => (
+                                              <tr key={t.positionId}>
+                                                <td>
+                                                  <div className="cell-address">
+                                                    <span title={t.positionId}>
+                                                      {shortWallet(t.positionId, 6, 4)}
+                                                    </span>
+                                                    <CopyButton
+                                                      text={t.positionId}
+                                                      label="Copy position ID"
+                                                    />
+                                                  </div>
+                                                </td>
+                                                <td>{formatTimestamp(t.openedAt)}</td>
+                                                <td>{formatTimestamp(t.closedAt)}</td>
+                                                <td className="cell-number">
+                                                  {formatDuration(t.durationSeconds)}
+                                                </td>
+                                                <td
+                                                  className={`cell-number ${
+                                                    t.pnlUsd > 0
+                                                      ? "positive"
+                                                      : t.pnlUsd < 0
+                                                      ? "negative"
+                                                      : ""
+                                                  }`}
+                                                >
+                                                  {formatUsd(t.pnlUsd)}
+                                                </td>
+                                                <td
+                                                  className={`cell-number ${
+                                                    t.pnlPct > 0
+                                                      ? "positive"
+                                                      : t.pnlPct < 0
+                                                      ? "negative"
+                                                      : ""
+                                                  }`}
+                                                >
+                                                  {formatPct(t.pnlPct)}
+                                                </td>
+                                              </tr>
+                                            ))}
+                                          </tbody>
+                                        </table>
+                                      </div>
+                                    </td>
+                                  </tr>
+                                )}
+                              </Fragment>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )
+                )}
+
+                {/* Cumulative View */}
+                {(activeMode === "cumulative" ||
+                  (activeMode === "both" && bothResultsTab === "cumulative")) && (
+                  filterResponse.cumulativeStatus === "unavailable" ? (
+                    <div className="state-card" style={{ margin: 16 }}>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "center", padding: "14px 0" }}>
+                        <strong style={{ color: "var(--text)", fontSize: 13 }}>Fabriq Cumulative Aggregate Unavailable</strong>
+                        <span style={{ color: "var(--muted)", fontSize: 12, maxWidth: 480, textAlign: "center" }}>
+                          Official Fabriq cumulative data has not been extracted for this pool yet. You can refresh a single wallet's aggregate directly from Fabriq via CDP bridge without rescanning the pool.
+                        </span>
+                        <div style={{ display: "flex", gap: 8, marginTop: 4, width: "100%", maxWidth: 460 }}>
+                          <input
+                            type="text"
+                            placeholder="Wallet address to refresh (e.g. 73ZALH...)"
+                            value={targetedWalletInput}
+                            onChange={(e) => setTargetedWalletInput(e.target.value)}
+                            className="pool-filter-input"
+                            style={{ fontSize: 12, height: 34 }}
+                            disabled={isRefreshingCumulative}
+                          />
+                          <button
+                            type="button"
+                            className="primary-button"
+                            onClick={() => handleTargetedCumulativeRefresh()}
+                            disabled={isRefreshingCumulative || !targetedWalletInput.trim()}
+                            style={{ height: 34, fontSize: 11, padding: "0 12px", whiteSpace: "nowrap" }}
+                          >
+                            {isRefreshingCumulative ? (
+                              <>
+                                <Loader2 className="spin" size={12} style={{ marginRight: 5 }} />
+                                Refreshing...
+                              </>
+                            ) : (
+                              <>
+                                <RefreshCw size={12} style={{ marginRight: 5 }} />
+                                Refresh Fabriq Aggregate
+                              </>
                             )}
-                          </Fragment>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
+                          </button>
+                        </div>
+                        {targetedRefreshStatus && (
+                          <div style={{ fontSize: 12, color: targetedRefreshStatus.type === "success" ? "var(--green)" : "#ef4444" }}>
+                            {targetedRefreshStatus.message}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ) : filterGroups.length === 0 ? (
+                    <div className="state-card" style={{ margin: 16 }}>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "center", padding: "14px 0" }}>
+                        <strong style={{ color: "var(--text)", fontSize: 13 }}>No Fabriq cumulative groups match these filters</strong>
+                        <span style={{ color: "var(--muted)", fontSize: 12, maxWidth: 480, textAlign: "center" }}>
+                          {(filterResponse.totalPoolAggregates ?? 0).toLocaleString()} Fabriq cumulative {filterResponse.totalPoolAggregates === 1 ? "record" : "records"} evaluated for this pool.
+                        </span>
+                        <div style={{ display: "flex", gap: 8, marginTop: 4, width: "100%", maxWidth: 460 }}>
+                          <input
+                            type="text"
+                            placeholder="Refresh specific wallet (e.g. 73ZALH...)"
+                            value={targetedWalletInput}
+                            onChange={(e) => setTargetedWalletInput(e.target.value)}
+                            className="pool-filter-input"
+                            style={{ fontSize: 12, height: 34 }}
+                            disabled={isRefreshingCumulative}
+                          />
+                          <button
+                            type="button"
+                            className="primary-button"
+                            onClick={() => handleTargetedCumulativeRefresh()}
+                            disabled={isRefreshingCumulative || !targetedWalletInput.trim()}
+                            style={{ height: 34, fontSize: 11, padding: "0 12px", whiteSpace: "nowrap" }}
+                          >
+                            {isRefreshingCumulative ? (
+                              <>
+                                <Loader2 className="spin" size={12} style={{ marginRight: 5 }} />
+                                Refreshing...
+                              </>
+                            ) : (
+                              <>
+                                <RefreshCw size={12} style={{ marginRight: 5 }} />
+                                Refresh Fabriq Aggregate
+                              </>
+                            )}
+                          </button>
+                        </div>
+                        {targetedRefreshStatus && (
+                          <div style={{ fontSize: 12, color: targetedRefreshStatus.type === "success" ? "var(--green)" : "#ef4444" }}>
+                            {targetedRefreshStatus.message}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    <div style={{ overflowX: "auto" }}>
+                      <table className="pool-insight-table filter-results-table">
+                        <thead>
+                          <tr>
+                            <th style={{ width: 40 }}></th>
+                            <th>WALLET</th>
+                            <th>PAIR / POOL</th>
+                            <th className="cell-number">POSITIONS</th>
+                            <th className="cell-number">FABRIQ DURATION</th>
+                            <th className="cell-number">CUMULATIVE PNL</th>
+                            <th className="cell-number">CUMULATIVE PNL %</th>
+                            <th>CAPITAL FLOWS & FEES</th>
+                            <th>LAST CLOSE</th>
+                            <th>SOURCE</th>
+                            <th>LAST UPDATED</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {filterGroups.map((group) => {
+                            const hasPositions = Boolean(group.positions && group.positions.length > 0);
+                            const isExpanded = expandedGroups.has(group.groupId);
+                            return (
+                              <Fragment key={group.groupId}>
+                                <tr
+                                  className={`filter-wallet-row ${isExpanded ? "expanded" : ""}`}
+                                  onClick={() => hasPositions && toggleGroupExpanded(group.groupId)}
+                                  style={{ cursor: hasPositions ? "pointer" : "default" }}
+                                >
+                                  <td style={{ width: 40, textAlign: "center" }}>
+                                    {hasPositions ? (
+                                      <button
+                                        type="button"
+                                        className="filter-expand-btn"
+                                        aria-label={isExpanded ? "Collapse positions" : "Expand positions"}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          toggleGroupExpanded(group.groupId);
+                                        }}
+                                      >
+                                        {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                                      </button>
+                                    ) : null}
+                                  </td>
+                                  <td>
+                                    <div className="cell-address">
+                                      <span>{shortWallet(group.wallet, 6, 4)}</span>
+                                      <CopyButton text={group.wallet} label="Copy wallet address" />
+                                    </div>
+                                  </td>
+                                  <td>
+                                    <span style={{ fontSize: 12, fontWeight: 500 }}>
+                                      {group.pair || poolDetail?.pair || shortWallet(group.poolAddress || "", 6, 4)}
+                                    </span>
+                                  </td>
+                                  <td className="cell-number">
+                                    <span className="matched-trades-badge">
+                                      {group.positionCount !== null ? `${group.positionCount} pos` : "—"}
+                                    </span>
+                                  </td>
+                                  <td className="cell-number">
+                                    {formatDuration(group.cumulativeDurationSeconds)}
+                                  </td>
+                                  <td
+                                    className={`cell-number ${
+                                      group.cumulativePnlUsd !== null && group.cumulativePnlUsd > 0
+                                        ? "positive"
+                                        : group.cumulativePnlUsd !== null && group.cumulativePnlUsd < 0
+                                        ? "negative"
+                                        : ""
+                                    }`}
+                                  >
+                                    {formatUsd(group.cumulativePnlUsd)}
+                                  </td>
+                                  <td
+                                    className={`cell-number ${
+                                      group.cumulativePnlPct !== null && group.cumulativePnlPct > 0
+                                        ? "positive"
+                                        : group.cumulativePnlPct !== null && group.cumulativePnlPct < 0
+                                        ? "negative"
+                                        : ""
+                                    }`}
+                                  >
+                                    {group.cumulativePnlPct !== null
+                                      ? formatPct(group.cumulativePnlPct)
+                                      : "—"}
+                                  </td>
+                                  <td>
+                                    <div className="filter-capital-flows">
+                                      {group.totalAddUsd !== null && group.totalAddUsd !== undefined && (
+                                        <span className="flow-add" title="Total Deposits">+{formatUsd(group.totalAddUsd)}</span>
+                                      )}
+                                      {group.totalRemUsd !== null && group.totalRemUsd !== undefined && (
+                                        <span className="flow-rem" title="Total Withdrawals">-{formatUsd(group.totalRemUsd)}</span>
+                                      )}
+                                      {group.totalFeeUsd !== null && group.totalFeeUsd !== undefined && group.totalFeeUsd > 0 && (
+                                        <span className="fee-badge" title="Total Fees Earned">fee {formatUsd(group.totalFeeUsd)}</span>
+                                      )}
+                                      {group.totalAddUsd === null && group.totalRemUsd === null && group.totalFeeUsd === null && (
+                                        <span style={{ color: "var(--muted)" }}>—</span>
+                                      )}
+                                    </div>
+                                  </td>
+                                  <td>
+                                    <span>{formatTimestamp(group.latestClosedAt)}</span>
+                                  </td>
+                                  <td>
+                                    <span className="filter-source-badge">{group.source || "Fabriq"}</span>
+                                  </td>
+                                  <td>
+                                    <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                                      <span style={{ color: "var(--muted)", fontSize: 11 }}>{formatTimestamp(group.lastUpdated)}</span>
+                                      {group.isStale && (
+                                        <span className="alerts-badge alerts-badge-amber" style={{ fontSize: 9, padding: "1px 4px" }} title="Record is older than 24h">
+                                          STALE
+                                        </span>
+                                      )}
+                                      <button
+                                        type="button"
+                                        title="Refresh Fabriq cumulative aggregate for this wallet"
+                                        style={{ background: "transparent", border: 0, color: "var(--muted)", cursor: "pointer", padding: 2 }}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          handleTargetedCumulativeRefresh(group.wallet);
+                                        }}
+                                        disabled={isRefreshingCumulative}
+                                      >
+                                        <RefreshCw size={11} className={isRefreshingCumulative ? "spin" : ""} />
+                                      </button>
+                                    </div>
+                                  </td>
+                                </tr>
+                                {isExpanded && hasPositions && (
+                                  <tr className="filter-wallet-details-row">
+                                    <td colSpan={11} style={{ padding: 0 }}>
+                                      <div className="filter-wallet-trades-wrapper">
+                                        <table className="filter-nested-trades-table">
+                                          <thead>
+                                            <tr>
+                                              <th>POSITION</th>
+                                              <th>OPENED</th>
+                                              <th>CLOSED</th>
+                                              <th className="cell-number">DURATION</th>
+                                              <th className="cell-number">PNL</th>
+                                              <th className="cell-number">PNL %</th>
+                                            </tr>
+                                          </thead>
+                                          <tbody>
+                                            {(group.positions || []).map((pos) => (
+                                              <tr key={pos.positionId}>
+                                                <td>
+                                                  <div className="cell-address">
+                                                    <span title={pos.positionId}>
+                                                      {shortWallet(pos.positionId, 6, 4)}
+                                                    </span>
+                                                    <CopyButton
+                                                      text={pos.positionId}
+                                                      label="Copy position ID"
+                                                    />
+                                                  </div>
+                                                </td>
+                                                <td>{formatTimestamp(pos.openedAt)}</td>
+                                                <td>{formatTimestamp(pos.closedAt)}</td>
+                                                <td className="cell-number">
+                                                  {formatDuration(pos.durationSeconds)}
+                                                </td>
+                                                <td
+                                                  className={`cell-number ${
+                                                    pos.pnlUsd > 0
+                                                      ? "positive"
+                                                      : pos.pnlUsd < 0
+                                                      ? "negative"
+                                                      : ""
+                                                  }`}
+                                                >
+                                                  {formatUsd(pos.pnlUsd)}
+                                                </td>
+                                                <td
+                                                  className={`cell-number ${
+                                                    pos.pnlPct > 0
+                                                      ? "positive"
+                                                      : pos.pnlPct < 0
+                                                      ? "negative"
+                                                      : ""
+                                                  }`}
+                                                >
+                                                  {formatPct(pos.pnlPct)}
+                                                </td>
+                                              </tr>
+                                            ))}
+                                          </tbody>
+                                        </table>
+                                      </div>
+                                    </td>
+                                  </tr>
+                                )}
+                              </Fragment>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )
+                )}
               </section>
-            )
-          ) : null}
+            );
+          })() : null}
 
           {/* POOL WALLET TABLE */}
           <section className="pool-insight-table-card" style={{ marginTop: 20 }} aria-label="Pool Wallets">
@@ -1238,19 +1989,43 @@ export function PoolInsightPage() {
         <section className="pool-insight-table-card" aria-label="Scanned Pools">
           <div className="pool-insight-table-toolbar">
             <div className="pool-insight-table-toolbar-left">
-              <strong>{tokenGroups.length.toLocaleString()} Token {tokenGroups.length === 1 ? "Group" : "Groups"}</strong>
+              <strong>
+                {searchQuery.trim()
+                  ? `${visibleGroups.length.toLocaleString()} of ${tokenGroups.length.toLocaleString()} Token ${tokenGroups.length === 1 ? "Group" : "Groups"}`
+                  : `${tokenGroups.length.toLocaleString()} Token ${tokenGroups.length === 1 ? "Group" : "Groups"}`}
+              </strong>
               <span>({pools.length.toLocaleString()} Scanned DLMM {pools.length === 1 ? "Pool" : "Pools"})</span>
             </div>
             <div className="pool-insight-table-toolbar-right">
-              {tokenGroups.length > 0 && (
+              <div className="pool-search-box">
+                <Search size={13} className="pool-search-icon" aria-hidden="true" />
+                <input
+                  type="text"
+                  className="pool-search-input"
+                  placeholder="Search pool name..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  aria-label="Search pool name"
+                />
+                {searchQuery ? (
+                  <button
+                    type="button"
+                    className="pool-search-clear-btn"
+                    onClick={() => setSearchQuery("")}
+                    aria-label="Clear search"
+                    title="Clear search"
+                  >
+                    <X size={12} />
+                  </button>
+                ) : null}
+              </div>
+              {visibleGroups.length > 0 && (
                 <button
                   type="button"
                   className="secondary-button token-group-toggle-all-btn"
                   onClick={handleToggleAllGroups}
                 >
-                  {expandedGroupKeys.size === tokenGroups.length
-                    ? "Collapse All"
-                    : "Expand All"}
+                  {allVisibleExpanded ? "Collapse All" : "Expand All"}
                 </button>
               )}
               <button
@@ -1276,6 +2051,17 @@ export function PoolInsightPage() {
             </div>
           ) : pools.length === 0 ? (
             <div className="state-card">No scanned pools found.</div>
+          ) : visibleGroups.length === 0 ? (
+            <div className="state-card pool-search-empty-state">
+              <span>No pools found matching your search.</span>
+              <button
+                type="button"
+                className="secondary-button pool-search-reset-btn"
+                onClick={() => setSearchQuery("")}
+              >
+                Clear search
+              </button>
+            </div>
           ) : (
             <div style={{ overflowX: "auto" }}>
               <table className="pool-insight-table token-groups-table">
@@ -1289,7 +2075,7 @@ export function PoolInsightPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {tokenGroups.map((group) => {
+                  {visibleGroups.map((group) => {
                     const isExpanded = expandedGroupKeys.has(group.groupKey);
                     return (
                       <Fragment key={group.groupKey}>

@@ -272,6 +272,10 @@ let poolScannerState = {
     status: "idle",
     stage: "idle",
     tokenCa: null,
+    scanMode: "full",
+    targetPool: null,
+    tradeOnlyNotice: null,
+    tradeDurationSeconds: null,
     fabriqWorkers: 8,
     startedAt: null,
     finishedAt: null,
@@ -293,6 +297,21 @@ let poolScannerState = {
     tradeHistoryCompletedWallets: 0,
     tradeHistoryFailedWallets: 0,
     tradeHistoryTotalTrades: 0,
+    isRefresh: false,
+    refreshStartedAt: null,
+    refreshRunId: null,
+    scannedPoolsTotal: 0,
+    scannedPoolsAdded: 0,
+    scannedPoolsUpdated: 0,
+    membershipsTotal: 0,
+    membershipsAdded: 0,
+    membershipsUpdated: 0,
+    tradesTotal: 0,
+    tradesAdded: 0,
+    tradesUpdated: 0,
+    aggregatesTotal: 0,
+    aggregatesAdded: 0,
+    aggregatesUpdated: 0,
 };
 
 function readPoolScannerPipelineState(tokenCa) {
@@ -427,6 +446,51 @@ function readSelectedScanState(tokenCa) {
     }
 }
 
+function getExistingTokenScan(tokenCa) {
+    if (!tokenCa) return null;
+    try {
+        const scannedData = loadScannedPools();
+        const pools = Array.isArray(scannedData?.pools) ? scannedData.pools : [];
+        const tokenPools = pools.filter((p) => p.tokenMint === tokenCa);
+        const selectedScan = readSelectedScanState(tokenCa);
+        const isPersisted = tokenPools.length > 0;
+
+        if (!isPersisted && !selectedScan) {
+            return null;
+        }
+
+        let lastScannedAt = null;
+        if (tokenPools.length > 0) {
+            const dates = tokenPools.map((p) => p.lastScannedAt || p.firstScannedAt).filter(Boolean);
+            dates.sort();
+            lastScannedAt = dates[dates.length - 1] || null;
+        } else if (selectedScan?.scanStateStatus === "completed") {
+            lastScannedAt = selectedScan?.completedAt || null;
+        }
+
+        let totalTrades = 0;
+        for (const p of tokenPools) {
+            totalTrades += p.tradeCount || 0;
+        }
+        if (totalTrades === 0 && selectedScan?.tradeHistoryTotalTrades) {
+            totalTrades = selectedScan.tradeHistoryTotalTrades;
+        }
+
+        return {
+            isExisting: true,
+            isPersisted,
+            lastScannedAt,
+            poolCount: tokenPools.length || selectedScan?.selectedPoolCount || 0,
+            pools: tokenPools.length > 0 ? tokenPools.map((p) => p.poolAddress) : (selectedScan?.selectedPools || []),
+            uniqueWallets: selectedScan?.uniqueWallets || 0,
+            tradeCount: totalTrades,
+            fabriqCompleted: selectedScan?.fabriqCompleted || 0,
+        };
+    } catch {
+        return null;
+    }
+}
+
 function poolScannerPublicState(queryToken = null) {
     // Keep the UI lock active until a stopped process tree has actually exited.
     const isRunning = Boolean(poolScannerChild) || poolScannerState.status === "running";
@@ -435,13 +499,14 @@ function poolScannerPublicState(queryToken = null) {
     const pState = readPoolScannerPipelineState(targetToken);
     const isResumable = !isRunning && checkPoolScannerResumable(targetToken);
     const selectedScan = readSelectedScanState(targetToken);
+    const existingScan = getExistingTokenScan(targetToken);
 
     const isPersisted = checkPoolsPersisted(
         targetToken,
         poolScannerState.selectedPools?.length ? poolScannerState.selectedPools : selectedScan?.selectedPools
     );
 
-    // If a job is actively running in memory, preserve in-memory tracking
+    // If a job is actively running in memory, or state is active for this target token, preserve in-memory tracking
     if (isRunning || (poolScannerState.status !== "idle" && (!queryToken || queryToken === poolScannerState.tokenCa))) {
         return {
             ...poolScannerState,
@@ -449,63 +514,32 @@ function poolScannerPublicState(queryToken = null) {
             resumable: isResumable,
             resumableTokenCa: isResumable ? targetToken : null,
             isPersisted,
+            existingScan,
             stage1Complete: pState?.stage1Complete ?? false,
             stage2Complete: pState?.stage2Complete ?? false,
             pipelineComplete: pState?.pipelineComplete ?? false,
         };
     }
 
-    // When idle and targetToken has selected-scan artifacts, return accurate snapshot
-    if (selectedScan) {
-        let derivedStage = "idle";
-        let derivedStatus = "idle";
-
-        if (isPersisted) {
-            derivedStage = "persisted";
-            derivedStatus = "completed";
-        } else if (selectedScan.tradeHistoryStatus === "completed") {
-            derivedStage = "trade_history_completed";
-            derivedStatus = "completed";
-        } else if (selectedScan.fabriqStatus === "completed") {
-            derivedStage = "fabriq_completed";
-            derivedStatus = "completed";
-        } else if (selectedScan.scanStateStatus === "completed") {
-            derivedStage = "extract_completed";
-            derivedStatus = "completed";
-        }
-
-        return {
-            ...poolScannerState,
-            status: derivedStatus,
-            stage: derivedStage,
-            tokenCa: targetToken,
-            selectedPools: selectedScan.selectedPools,
-            selectedPoolCount: selectedScan.selectedPoolCount,
-            completedPoolCount: selectedScan.completedPoolCount,
-            uniqueWallets: selectedScan.uniqueWallets,
-            fabriqTotal: selectedScan.fabriqTotal,
-            fabriqCompleted: selectedScan.fabriqCompleted,
-            fabriqSuccess: selectedScan.fabriqSuccess,
-            tradeHistoryTotalWallets: selectedScan.tradeHistoryTotalWallets,
-            tradeHistoryCompletedWallets: selectedScan.tradeHistoryCompletedWallets,
-            tradeHistoryFailedWallets: selectedScan.tradeHistoryFailedWallets,
-            tradeHistoryTotalTrades: selectedScan.tradeHistoryTotalTrades,
-            isPersisted,
-            running: false,
-            resumable: isResumable,
-            resumableTokenCa: isResumable ? targetToken : null,
-            stage1Complete: pState?.stage1Complete ?? false,
-            stage2Complete: pState?.stage2Complete ?? false,
-            pipelineComplete: pState?.pipelineComplete ?? false,
-        };
-    }
-
+    // When idle: do not automatically assume active pipeline is completed just because token was previously scanned
     return {
         ...poolScannerState,
-        running: isRunning,
+        running: false,
         resumable: isResumable,
         resumableTokenCa: isResumable ? targetToken : null,
-        isPersisted: false,
+        isPersisted,
+        existingScan,
+        selectedPools: selectedScan?.selectedPools || [],
+        selectedPoolCount: selectedScan?.selectedPoolCount || 0,
+        completedPoolCount: selectedScan?.completedPoolCount || 0,
+        uniqueWallets: selectedScan?.uniqueWallets || 0,
+        fabriqTotal: selectedScan?.fabriqTotal || 0,
+        fabriqCompleted: selectedScan?.fabriqCompleted || 0,
+        fabriqSuccess: selectedScan?.fabriqSuccess || 0,
+        tradeHistoryTotalWallets: selectedScan?.tradeHistoryTotalWallets || 0,
+        tradeHistoryCompletedWallets: selectedScan?.tradeHistoryCompletedWallets || 0,
+        tradeHistoryFailedWallets: selectedScan?.tradeHistoryFailedWallets || 0,
+        tradeHistoryTotalTrades: selectedScan?.tradeHistoryTotalTrades || 0,
         stage1Complete: pState?.stage1Complete ?? false,
         stage2Complete: pState?.stage2Complete ?? false,
         pipelineComplete: pState?.pipelineComplete ?? false,
@@ -2166,6 +2200,58 @@ function parsePoolScannerLine(line) {
         poolScannerState.stage = "trade_history_completed";
         return;
     }
+    const cumProgressMatch = line.match(
+        /\[CUMULATIVE_HISTORY\]\s+PROGRESS\s+completed=(\d+)\s+total=(\d+)\s+unavailable=(\d+)\s+aggregates=(\d+)/i
+    );
+    if (cumProgressMatch) {
+        poolScannerState.stage = "cumulative_history";
+        poolScannerState.cumulativeCompletedWallets = Number(cumProgressMatch[1]);
+        poolScannerState.cumulativeTotalWallets = Number(cumProgressMatch[2]);
+        poolScannerState.cumulativeUnavailableWallets = Number(cumProgressMatch[3]);
+        poolScannerState.cumulativeTotalAggregates = Number(cumProgressMatch[4]);
+        return;
+    }
+
+    if (line.includes("[CUMULATIVE_HISTORY] COMPLETE")) {
+        poolScannerState.stage = "cumulative_history_completed";
+        return;
+    }
+
+
+    const poolPersistMatch = line.match(/Scanned pools written:\s*(\d+)\s*\(added:\s*(\d+),\s*updated:\s*(\d+)\)/i);
+    if (poolPersistMatch) {
+        poolScannerState.scannedPoolsTotal = Number(poolPersistMatch[1]);
+        poolScannerState.scannedPoolsAdded = Number(poolPersistMatch[2]);
+        poolScannerState.scannedPoolsUpdated = Number(poolPersistMatch[3]);
+        return;
+    }
+    const membPersistMatch = line.match(/Memberships written:\s*(\d+)\s*\(added:\s*(\d+),\s*updated:\s*(\d+)\)/i);
+    if (membPersistMatch) {
+        poolScannerState.membershipsTotal = Number(membPersistMatch[1]);
+        poolScannerState.membershipsAdded = Number(membPersistMatch[2]);
+        poolScannerState.membershipsUpdated = Number(membPersistMatch[3]);
+        return;
+    }
+    const tradePersistMatch = line.match(/Trades written:\s*(\d+)\s*\(added:\s*(\d+),\s*updated:\s*(\d+)\)/i);
+    if (tradePersistMatch) {
+        poolScannerState.tradesTotal = Number(tradePersistMatch[1]);
+        poolScannerState.tradesAdded = Number(tradePersistMatch[2]);
+        poolScannerState.tradesUpdated = Number(tradePersistMatch[3]);
+        return;
+    }
+    const cumPersistMatch = line.match(/Cumulative aggregates written:\s*(\d+)\s*\(added:\s*(\d+),\s*updated:\s*(\d+)\)/i);
+    if (cumPersistMatch) {
+        poolScannerState.aggregatesTotal = Number(cumPersistMatch[1]);
+        poolScannerState.aggregatesAdded = Number(cumPersistMatch[2]);
+        poolScannerState.aggregatesUpdated = Number(cumPersistMatch[3]);
+        return;
+    }
+    const durationMatch = line.match(/Duration:\s*([\d.]+)s/i);
+    if (durationMatch) {
+        poolScannerState.tradeDurationSeconds = Number(durationMatch[1]);
+        return;
+    }
+
 
     if (line.includes("STEP 3D-A PERSISTENCE COMPLETE")) {
         poolScannerState.status = "completed";
@@ -2186,6 +2272,7 @@ function stopPoolScanner() {
     poolScannerState.stage = "stopped";
     poolScannerState.finishedAt = new Date().toISOString();
     poolScannerState.error = null;
+    poolScannerState.isRefresh = false;
 
     addPoolScannerLog("[CONTROL] Stopping Pool Scanner pipeline...");
 
@@ -2404,16 +2491,26 @@ function startPoolScanner(tokenCa, fabriqWorkers = 8) {
     });
 }
 
-function startSelectedPoolScanner(tokenCa, selectedPoolAddresses) {
+function startSelectedPoolScanner(tokenCa, selectedPoolAddresses, options = {}) {
     assertDataPipelineAvailable();
 
+    const isRefresh = Boolean(options.isRefresh);
+    const fabriqWorkers = options.fabriqWorkers || 8;
+    const tradesOnly = Boolean(options.tradesOnly);
+    const targetPool = options.poolAddress || (tradesOnly ? selectedPoolAddresses[0] : null);
+    const nowIso = new Date().toISOString();
     poolScannerUserStopped = false;
     poolScannerState = {
         status: "running",
         stage: "extract",
+        stage: "extract",
         tokenCa,
-        fabriqWorkers: 8,
-        startedAt: new Date().toISOString(),
+        scanMode: tradesOnly ? "trades_only" : "full",
+        targetPool,
+        tradeOnlyNotice: tradesOnly ? (poolScannerState.tradeOnlyNotice || null) : null,
+        tradeDurationSeconds: null,
+        fabriqWorkers,
+        startedAt: nowIso,
         finishedAt: null,
         exitCode: null,
         error: null,
@@ -2423,10 +2520,25 @@ function startSelectedPoolScanner(tokenCa, selectedPoolAddresses) {
         completedPoolCount: 0,
         uniqueWallets: 0,
         currentPool: null,
+        isRefresh,
+        refreshStartedAt: isRefresh ? nowIso : null,
+        refreshRunId: isRefresh ? `refresh_${tokenCa.slice(0, 8)}_${Date.now()}` : null,
+        scannedPoolsTotal: 0,
+        scannedPoolsAdded: 0,
+        scannedPoolsUpdated: 0,
+        membershipsTotal: 0,
+        membershipsAdded: 0,
+        membershipsUpdated: 0,
+        tradesTotal: 0,
+        tradesAdded: 0,
+        tradesUpdated: 0,
+        aggregatesTotal: 0,
+        aggregatesAdded: 0,
+        aggregatesUpdated: 0,
     };
 
     addPoolScannerLog(
-        `[CONTROL] Starting Selected Pool Scanner for token: ${tokenCa} (${selectedPoolAddresses.length} pools)`
+        `[CONTROL] Starting Selected Pool Scanner for token: ${tokenCa} (${selectedPoolAddresses.length} pools)${isRefresh ? " [REFRESH MODE]" : ""}`
     );
 
     const args = [
@@ -2436,6 +2548,9 @@ function startSelectedPoolScanner(tokenCa, selectedPoolAddresses) {
     ];
     for (const poolAddr of selectedPoolAddresses) {
         args.push("--pool", poolAddr);
+    }
+    if (isRefresh) {
+        args.push("--refresh");
     }
 
     poolScannerChild = spawn(
@@ -2542,8 +2657,28 @@ function startSelectedPoolScanner(tokenCa, selectedPoolAddresses) {
             addPoolScannerLog(
                 "[CONTROL] Selected Pool Scanner finished successfully."
             );
+            if (tradesOnly) {
+                addPoolScannerLog("[CONTROL] Mode is Pool Trade Only: skipping Wallet Enrichment, proceeding directly to Trade History...");
+                try {
+                    startPoolTradeHistory(tokenCa, fabriqWorkers, null, null, isRefresh, targetPool, true);
+                } catch (err) {
+                    poolScannerState.status = "error";
+                    poolScannerState.stage = "error";
+                    poolScannerState.error = err instanceof Error ? err.message : String(err);
+                    addPoolScannerLog(`[CONTROL] Failed to start trade history: ${poolScannerState.error}`);
+                }
+            } else if (isRefresh) {
+                addPoolScannerLog("[CONTROL] Refresh pipeline: Proceeding to wallet enrichment...");
+                try {
+                    startSelectedWalletsEnrichment(tokenCa, fabriqWorkers, null, true);
+                } catch (err) {
+                    poolScannerState.status = "error";
+                    poolScannerState.stage = "error";
+                    poolScannerState.error = err instanceof Error ? err.message : String(err);
+                    addPoolScannerLog(`[CONTROL] Failed to start enrichment: ${poolScannerState.error}`);
+                }
+            }
         } else {
-            poolScannerState.status = "error";
             poolScannerState.stage = "error";
             poolScannerState.error =
                 poolScannerState.error ??
@@ -2555,8 +2690,16 @@ function startSelectedPoolScanner(tokenCa, selectedPoolAddresses) {
     });
 }
 
-function startSelectedWalletsEnrichment(tokenCa, fabriqWorkers = 8, limit = null) {
-    assertDataPipelineAvailable();
+function startSelectedWalletsEnrichment(tokenCa, fabriqWorkers = 8, limit = null, isRefresh = false) {
+    if (!isRefresh) {
+        assertDataPipelineAvailable();
+    } else {
+        if (Boolean(currentChild || lpAgentChild || walletIntelligenceChild || poolRefreshChild || activeSingleWalletChild?.child || activePositionAnalyticsChild?.child)) {
+            const error = new Error("Another data pipeline is currently running");
+            error.statusCode = 409;
+            throw error;
+        }
+    }
 
     poolScannerUserStopped = false;
     poolScannerState = {
@@ -2566,10 +2709,11 @@ function startSelectedWalletsEnrichment(tokenCa, fabriqWorkers = 8, limit = null
         tokenCa,
         fabriqWorkers,
         fabriqLimit: limit || null,
-        startedAt: new Date().toISOString(),
+        startedAt: poolScannerState.startedAt || new Date().toISOString(),
         finishedAt: null,
         exitCode: null,
         error: null,
+        isRefresh: isRefresh || poolScannerState.isRefresh || false,
         fabriqTotal: poolScannerState.uniqueWallets || 0,
         fabriqCompleted: 0,
         fabriqSuccess: 0,
@@ -2580,7 +2724,7 @@ function startSelectedWalletsEnrichment(tokenCa, fabriqWorkers = 8, limit = null
     addPoolScannerLog(
         `[CONTROL] Starting Selected Wallets Fabriq Enrichment for token: ${tokenCa} [workers: ${fabriqWorkers}${
             limit ? `, limit: ${limit}` : ""
-        }]`
+        }${isRefresh ? ", refresh: true" : ""}]`
     );
 
     const args = [
@@ -2590,6 +2734,9 @@ function startSelectedWalletsEnrichment(tokenCa, fabriqWorkers = 8, limit = null
         "--workers",
         String(fabriqWorkers),
     ];
+    if (isRefresh || poolScannerState.isRefresh) {
+        args.push("--refresh");
+    }
 
     if (limit && Number.isInteger(limit) && limit >= 1) {
         args.push("--limit", String(limit));
@@ -2699,6 +2846,17 @@ function startSelectedWalletsEnrichment(tokenCa, fabriqWorkers = 8, limit = null
             addPoolScannerLog(
                 "[CONTROL] Selected Wallets Fabriq Enrichment finished successfully."
             );
+            if (isRefresh || poolScannerState.isRefresh) {
+                addPoolScannerLog("[CONTROL] Refresh pipeline: Proceeding to trade history extraction...");
+                try {
+                    startPoolTradeHistory(tokenCa, 2, null, null, true);
+                } catch (err) {
+                    poolScannerState.status = "error";
+                    poolScannerState.stage = "error";
+                    poolScannerState.error = err instanceof Error ? err.message : String(err);
+                    addPoolScannerLog(`[CONTROL] Failed to start trade history: ${poolScannerState.error}`);
+                }
+            }
         } else {
             poolScannerState.status = "error";
             poolScannerState.stage = "error";
@@ -2712,8 +2870,19 @@ function startSelectedWalletsEnrichment(tokenCa, fabriqWorkers = 8, limit = null
     });
 }
 
-function startPoolTradeHistory(tokenCa, workers = 2, wallet = null, limit = null) {
-    assertDataPipelineAvailable();
+function startPoolTradeHistory(tokenCa, workers = 2, wallet = null, limit = null, isRefresh = false, poolAddress = null, tradesOnly = false) {
+    if (!isRefresh && !tradesOnly) {
+        assertDataPipelineAvailable();
+    } else {
+        if (Boolean(currentChild || lpAgentChild || walletIntelligenceChild || poolRefreshChild || activeSingleWalletChild?.child || activePositionAnalyticsChild?.child)) {
+            const error = new Error("Another data pipeline is currently running");
+            error.statusCode = 409;
+            throw error;
+        }
+    }
+
+    const isTradeOnlyMode = tradesOnly || poolScannerState.scanMode === "trades_only";
+    const targetPoolAddress = poolAddress || poolScannerState.targetPool;
 
     poolScannerUserStopped = false;
     poolScannerState = {
@@ -2721,10 +2890,13 @@ function startPoolTradeHistory(tokenCa, workers = 2, wallet = null, limit = null
         status: "running",
         stage: "trade_history",
         tokenCa,
-        startedAt: new Date().toISOString(),
+        scanMode: isTradeOnlyMode ? "trades_only" : "full",
+        targetPool: targetPoolAddress,
+        startedAt: poolScannerState.startedAt || new Date().toISOString(),
         finishedAt: null,
         exitCode: null,
         error: null,
+        isRefresh: isRefresh || poolScannerState.isRefresh || false,
         tradeHistoryTotalWallets: poolScannerState.uniqueWallets || 0,
         tradeHistoryCompletedWallets: 0,
         tradeHistoryFailedWallets: 0,
@@ -2733,8 +2905,8 @@ function startPoolTradeHistory(tokenCa, workers = 2, wallet = null, limit = null
 
     addPoolScannerLog(
         `[CONTROL] Starting Pool Trade History extraction for token: ${tokenCa} [workers: ${workers}${
-            wallet ? `, wallet: ${wallet}` : ""
-        }${limit ? `, limit: ${limit}` : ""}]`
+            targetPoolAddress ? `, pool: ${targetPoolAddress}` : ""
+        }${wallet ? `, wallet: ${wallet}` : ""}${limit ? `, limit: ${limit}` : ""}${isRefresh ? ", refresh: true" : ""}${isTradeOnlyMode ? ", mode: trades_only" : ""}]`
     );
 
     const args = [
@@ -2745,6 +2917,12 @@ function startPoolTradeHistory(tokenCa, workers = 2, wallet = null, limit = null
         "--workers",
         String(workers),
     ];
+    if (targetPoolAddress) {
+        args.push("--pool", targetPoolAddress);
+    }
+    if (isRefresh || poolScannerState.isRefresh) {
+        args.push("--refresh");
+    }
 
     if (wallet && typeof wallet === "string" && wallet.trim()) {
         args.push("--wallet", wallet.trim());
@@ -2859,21 +3037,46 @@ function startPoolTradeHistory(tokenCa, workers = 2, wallet = null, limit = null
                 addPoolScannerLog(
                     "[CONTROL] Test trade history extraction finished successfully (partial run). Full run required to persist to Pool Insight."
                 );
-            } else {
+            } else if (isTradeOnlyMode) {
+                poolScannerState.status = "completed";
+                poolScannerState.stage = "trade_history_completed";
+                poolScannerState.error = null;
                 addPoolScannerLog(
-                    "[CONTROL] Pool Trade History extraction finished successfully. Starting canonical persistence..."
+                    "[CONTROL] Pool Trade History extraction finished successfully. Mode is Pool Trade Only: skipping Cumulative Extraction. Proceeding to Trade History persistence..."
                 );
                 try {
-                    validateTradeHistoryArtifacts(tokenCa);
-                    startCanonicalPersistence(tokenCa, true);
+                    startTradeOnlyPersistence(tokenCa, targetPoolAddress);
                 } catch (persistErr) {
                     poolScannerState.status = "error";
                     poolScannerState.stage = "persistence_error";
                     poolScannerState.error =
                         persistErr instanceof Error ? persistErr.message : String(persistErr);
                     addPoolScannerLog(
-                        `[CONTROL] Failed to start canonical persistence: ${poolScannerState.error}`
+                        `[CONTROL] Failed to start Trade History persistence: ${poolScannerState.error}`
                     );
+                }
+            } else {
+                addPoolScannerLog(
+                    "[CONTROL] Pool Trade History extraction finished successfully. Starting cumulative extraction..."
+                );
+                try {
+                    startPoolCumulativeHistory(tokenCa, 8, null, null, true, isRefresh || poolScannerState.isRefresh);
+                } catch (cumErr) {
+                    addPoolScannerLog(
+                        `[CONTROL] Could not start cumulative extraction (${cumErr instanceof Error ? cumErr.message : String(cumErr)}). Proceeding directly to persistence...`
+                    );
+                    try {
+                        validateTradeHistoryArtifacts(tokenCa);
+                        startCanonicalPersistence(tokenCa, true);
+                    } catch (persistErr) {
+                        poolScannerState.status = "error";
+                        poolScannerState.stage = "persistence_error";
+                        poolScannerState.error =
+                            persistErr instanceof Error ? persistErr.message : String(persistErr);
+                        addPoolScannerLog(
+                            `[CONTROL] Failed to start canonical persistence: ${poolScannerState.error}`
+                        );
+                    }
                 }
             }
         } else {
@@ -2885,6 +3088,192 @@ function startPoolTradeHistory(tokenCa, workers = 2, wallet = null, limit = null
             addPoolScannerLog(
                 `[CONTROL] ${poolScannerState.error}`
             );
+        }
+    });
+}
+function startPoolCumulativeHistory(tokenCa, workers = 8, wallet = null, limit = null, isChained = false, isRefresh = false) {
+    if (!isChained) {
+        assertDataPipelineAvailable();
+    } else {
+        if (Boolean(currentChild || lpAgentChild || walletIntelligenceChild || poolRefreshChild || activeSingleWalletChild?.child || activePositionAnalyticsChild?.child)) {
+            const error = new Error("Another data pipeline is currently running");
+            error.statusCode = 409;
+            throw error;
+        }
+    }
+    poolScannerState = {
+        ...poolScannerState,
+        status: "running",
+        stage: "cumulative_history",
+        tokenCa,
+        startedAt: poolScannerState.startedAt || new Date().toISOString(),
+        finishedAt: null,
+        exitCode: null,
+        error: null,
+        cumulativeTotalWallets: poolScannerState.uniqueWallets || 0,
+        cumulativeCompletedWallets: 0,
+        cumulativeUnavailableWallets: 0,
+        cumulativeTotalAggregates: 0,
+    };
+
+    addPoolScannerLog(
+        `[CONTROL] Starting Pool Cumulative Extraction for token: ${tokenCa} [workers: ${workers}${
+            wallet ? `, wallet: ${wallet}` : ""
+        }${limit ? `, limit: ${limit}` : ""}${isRefresh ? ", refresh: true" : ""}]`
+    );
+
+    const args = [
+        "--experimental-strip-types",
+        "scripts/pool/extract-pool-cumulative.ts",
+        "--token",
+        tokenCa,
+        "--workers",
+        String(workers),
+    ];
+    if (isRefresh || poolScannerState.isRefresh) {
+        args.push("--refresh");
+    }
+    if (wallet && typeof wallet === "string" && wallet.trim()) {
+        args.push("--wallet", wallet.trim());
+    }
+
+    if (limit && Number.isInteger(limit) && limit >= 1) {
+        args.push("--limit", String(limit));
+    }
+
+    poolScannerChild = spawn(
+        process.execPath,
+        args,
+        {
+            cwd: ROOT,
+            env: {
+                ...process.env,
+            },
+            detached: process.platform !== "win32",
+            stdio: ["ignore", "pipe", "pipe"],
+        }
+    );
+
+    let stdoutBuffer = "";
+    let stderrBuffer = "";
+
+    function consumeBuffer(buffer, chunk, onLine) {
+        buffer += String(chunk);
+        const lines = buffer.split("\n");
+        const remainder = lines.pop() ?? "";
+        for (const line of lines) {
+            const trimmed = line.trimEnd();
+            if (trimmed) {
+                onLine(trimmed);
+            }
+        }
+        return remainder;
+    }
+
+    poolScannerChild.stdout.on("data", (chunk) => {
+        stdoutBuffer = consumeBuffer(stdoutBuffer, chunk, (line) => {
+            addPoolScannerLog(line);
+            parsePoolScannerLine(line);
+        });
+    });
+
+    poolScannerChild.stderr.on("data", (chunk) => {
+        stderrBuffer = consumeBuffer(stderrBuffer, chunk, (line) => {
+            addPoolScannerLog(line);
+            parsePoolScannerLine(line);
+        });
+    });
+
+    poolScannerChild.on("error", (error) => {
+        const wasUserStopped =
+            poolScannerUserStopped || poolScannerState.status === "stopped";
+        poolScannerChild = null;
+
+        if (wasUserStopped) {
+            poolScannerState.status = "stopped";
+            poolScannerState.stage = "stopped";
+            poolScannerState.error = null;
+            return;
+        }
+
+        addPoolScannerLog(
+            `[CONTROL] Cumulative Extraction error: ${error instanceof Error ? error.message : String(error)}. Trade history remains intact.`
+        );
+
+        if (isChained) {
+            addPoolScannerLog(
+                "[CONTROL] Proceeding to canonical persistence with existing trade history..."
+            );
+            try {
+                validateTradeHistoryArtifacts(tokenCa);
+                startCanonicalPersistence(tokenCa, true);
+            } catch (persistErr) {
+                poolScannerState.status = "error";
+                poolScannerState.stage = "persistence_error";
+                poolScannerState.error =
+                    persistErr instanceof Error ? persistErr.message : String(persistErr);
+                addPoolScannerLog(
+                    `[CONTROL] Failed to start canonical persistence: ${poolScannerState.error}`
+                );
+            }
+        }
+    });
+
+    poolScannerChild.on("exit", (code, signal) => {
+        if (stdoutBuffer.trim()) {
+            const trimmed = stdoutBuffer.trimEnd();
+            addPoolScannerLog(trimmed);
+            parsePoolScannerLine(trimmed);
+            stdoutBuffer = "";
+        }
+        if (stderrBuffer.trim()) {
+            const trimmed = stderrBuffer.trimEnd();
+            addPoolScannerLog(trimmed);
+            parsePoolScannerLine(trimmed);
+            stderrBuffer = "";
+        }
+
+        const wasUserStopped =
+            poolScannerUserStopped || poolScannerState.status === "stopped";
+        poolScannerChild = null;
+
+        if (wasUserStopped) {
+            poolScannerState.status = "stopped";
+            poolScannerState.stage = "stopped";
+            poolScannerState.error = null;
+            return;
+        }
+
+        if (code === 0) {
+            addPoolScannerLog(
+                "[CONTROL] Pool Cumulative Extraction finished successfully."
+            );
+        } else {
+            addPoolScannerLog(
+                `[CONTROL] Pool Cumulative Extraction finished with warnings (code ${code}${signal ? ` signal ${signal}` : ""}). Trade history remains intact.`
+            );
+        }
+
+        if (isChained) {
+            addPoolScannerLog(
+                "[CONTROL] Proceeding to canonical persistence..."
+            );
+            try {
+                validateTradeHistoryArtifacts(tokenCa);
+                startCanonicalPersistence(tokenCa, true);
+            } catch (persistErr) {
+                poolScannerState.status = "error";
+                poolScannerState.stage = "persistence_error";
+                poolScannerState.error =
+                    persistErr instanceof Error ? persistErr.message : String(persistErr);
+                addPoolScannerLog(
+                    `[CONTROL] Failed to start canonical persistence: ${poolScannerState.error}`
+                );
+            }
+        } else {
+            poolScannerState.status = "completed";
+            poolScannerState.stage = "cumulative_history_completed";
+            poolScannerState.error = null;
         }
     });
 }
@@ -3079,6 +3468,212 @@ function startCanonicalPersistence(tokenCa, isChained = false) {
             );
         }
     });
+}
+function startTradeOnlyPersistence(tokenCa, poolAddress) {
+    if (Boolean(currentChild || lpAgentChild || walletIntelligenceChild || poolRefreshChild || activeSingleWalletChild?.child || activePositionAnalyticsChild?.child)) {
+        const error = new Error("Another data pipeline is currently running");
+        error.statusCode = 409;
+        throw error;
+    }
+
+    poolScannerUserStopped = false;
+    poolScannerState = {
+        ...poolScannerState,
+        status: "running",
+        stage: "persisting",
+        tokenCa,
+        targetPool: poolAddress,
+        startedAt: poolScannerState.startedAt || new Date().toISOString(),
+        finishedAt: null,
+        exitCode: null,
+        error: null,
+    };
+
+    addPoolScannerLog(
+        `[CONTROL] Starting Safe Canonical Persistence (Trade Only) for token: ${tokenCa}${poolAddress ? `, pool: ${poolAddress}` : ""}`
+    );
+
+    const args = [
+        "--experimental-strip-types",
+        "scripts/pipeline/persist-pool-scanner.ts",
+        "--token",
+        tokenCa,
+        "--trades-only",
+    ];
+    if (poolAddress) {
+        args.push("--pool", poolAddress);
+    }
+
+    poolScannerChild = spawn(
+        process.execPath,
+        args,
+        {
+            cwd: ROOT,
+            env: {
+                ...process.env,
+            },
+            detached: process.platform !== "win32",
+            stdio: ["ignore", "pipe", "pipe"],
+        }
+    );
+
+    let stdoutBuffer = "";
+    let stderrBuffer = "";
+
+    function consumeBuffer(buffer, chunk, onLine) {
+        buffer += String(chunk);
+        const lines = buffer.split("\n");
+        const remainder = lines.pop() ?? "";
+        for (const line of lines) {
+            const trimmed = line.trimEnd();
+            if (trimmed) {
+                onLine(trimmed);
+            }
+        }
+        return remainder;
+    }
+
+    poolScannerChild.stdout.on("data", (chunk) => {
+        stdoutBuffer = consumeBuffer(stdoutBuffer, chunk, (line) => {
+            addPoolScannerLog(line);
+            parsePoolScannerLine(line);
+        });
+    });
+
+    poolScannerChild.stderr.on("data", (chunk) => {
+        stderrBuffer = consumeBuffer(stderrBuffer, chunk, (line) => {
+            addPoolScannerLog(line);
+            parsePoolScannerLine(line);
+        });
+    });
+
+    poolScannerChild.on("error", (error) => {
+        const wasUserStopped =
+            poolScannerUserStopped || poolScannerState.status === "stopped";
+        poolScannerChild = null;
+
+        if (wasUserStopped) {
+            poolScannerState.status = "stopped";
+            poolScannerState.stage = "stopped";
+            poolScannerState.error = null;
+            return;
+        }
+
+        poolScannerState.status = "error";
+        poolScannerState.stage = "persistence_error";
+        poolScannerState.error =
+            error instanceof Error ? error.message : String(error);
+        poolScannerState.finishedAt = new Date().toISOString();
+        addPoolScannerLog(
+            `[CONTROL] Trade Only Persistence process error: ${poolScannerState.error}`
+        );
+    });
+
+    poolScannerChild.on("exit", (code, signal) => {
+        if (stdoutBuffer.trim()) {
+            const trimmed = stdoutBuffer.trimEnd();
+            addPoolScannerLog(trimmed);
+            parsePoolScannerLine(trimmed);
+            stdoutBuffer = "";
+        }
+        if (stderrBuffer.trim()) {
+            const trimmed = stderrBuffer.trimEnd();
+            addPoolScannerLog(trimmed);
+            parsePoolScannerLine(trimmed);
+            stderrBuffer = "";
+        }
+
+        const wasUserStopped =
+            poolScannerUserStopped || poolScannerState.status === "stopped";
+        poolScannerChild = null;
+
+        if (wasUserStopped) {
+            poolScannerState.status = "stopped";
+            poolScannerState.stage = "stopped";
+            poolScannerState.error = null;
+            if (!poolScannerState.finishedAt) {
+                poolScannerState.finishedAt = new Date().toISOString();
+            }
+            addPoolScannerLog("[CONTROL] Trade Only Persistence stopped.");
+            return;
+        }
+
+        poolScannerState.finishedAt = new Date().toISOString();
+        poolScannerState.exitCode = code;
+
+        if (code === 0) {
+            scannedPoolsCache = null;
+            scannedPoolsMtimeMs = null;
+            poolTradesCache = null;
+            poolTradesMtimeMs = null;
+            poolScannerState.status = "completed";
+            poolScannerState.stage = "persisted";
+            poolScannerState.isPersisted = true;
+            poolScannerState.error = null;
+            addPoolScannerLog(
+                `[CONTROL] Safe Canonical Persistence (Trade Only) completed for pool ${poolAddress || poolScannerState.targetPool}. Trades published to Pool Insight.`
+            );
+        } else {
+            poolScannerState.status = "error";
+            poolScannerState.stage = "persistence_error";
+            poolScannerState.error =
+                poolScannerState.error ??
+                `Trade Only Persistence failed with exit code ${code}${signal ? ` (signal ${signal})` : ""}`;
+            addPoolScannerLog(
+                `[CONTROL] ${poolScannerState.error}`
+            );
+        }
+    });
+}
+
+function triggerPoolTradeOnly(tokenCa, poolAddress, isRefresh = false, workers = 8) {
+    let hasMembership = false;
+    let membershipCount = 0;
+    try {
+        const rawM = fs.readFileSync(path.join(ROOT, "data/master/pool-wallet-membership.json"), "utf8");
+        const mData = JSON.parse(rawM);
+        const mList = (mData?.memberships || []).filter(
+            (m) => m?.poolAddress === poolAddress && m?.isLatestSnapshot !== false
+        );
+        if (mList.length > 0) {
+            hasMembership = true;
+            membershipCount = mList.length;
+        }
+    } catch {}
+
+    if (!hasMembership) {
+        const pwPath = path.join(ROOT, "data/discovery/pool-scanner", tokenCa, "selected-scan/pool-wallets.json");
+        try {
+            if (fs.existsSync(pwPath)) {
+                const pwData = JSON.parse(fs.readFileSync(pwPath, "utf8"));
+                const pool = (pwData?.pools || []).find((p) => p?.poolAddress === poolAddress);
+                if (pool && Array.isArray(pool.wallets) && pool.wallets.length > 0) {
+                    hasMembership = true;
+                    membershipCount = pool.wallets.length;
+                }
+            }
+        } catch {}
+    }
+
+    poolScannerState.scanMode = "trades_only";
+    poolScannerState.targetPool = poolAddress;
+
+    if (hasMembership) {
+        poolScannerState.tradeOnlyNotice = `Fast Path Active: using ${membershipCount} membership wallets. New wallets outside this snapshot are not included.`;
+        addPoolScannerLog(`[CONTROL] Mode: POOL TRADE ONLY for pool ${poolAddress}`);
+        addPoolScannerLog(`[CONTROL] ${poolScannerState.tradeOnlyNotice}`);
+        startPoolTradeHistory(tokenCa, workers, null, null, isRefresh, poolAddress, true);
+    } else {
+        poolScannerState.tradeOnlyNotice = "Pool membership not found. Running minimal LP Wallet Extraction first...";
+        addPoolScannerLog(`[CONTROL] Mode: POOL TRADE ONLY for pool ${poolAddress}`);
+        addPoolScannerLog(`[CONTROL] ${poolScannerState.tradeOnlyNotice}`);
+        startSelectedPoolScanner(tokenCa, [poolAddress], {
+            isRefresh,
+            fabriqWorkers: workers,
+            tradesOnly: true,
+            poolAddress,
+        });
+    }
 }
 function startGlobalWalletSync(tokenCa) {
     poolScannerState.stage = "syncing";
@@ -4019,6 +4614,28 @@ let poolMembershipMtimeMs = null;
 
 let poolTradesCache = null;
 let poolTradesMtimeMs = null;
+let poolCumulativeCache = null;
+let poolCumulativeMtimeMs = null;
+const POOL_CUMULATIVE_PATH = path.join(ROOT, "data/master/pool-cumulative-history.json");
+
+function loadPoolCumulativeHistory() {
+    if (!fs.existsSync(POOL_CUMULATIVE_PATH)) {
+        return { version: "v1", updatedAt: null, aggregates: [] };
+    }
+    try {
+        const stats = fs.statSync(POOL_CUMULATIVE_PATH);
+        if (poolCumulativeCache && poolCumulativeMtimeMs === stats.mtimeMs) {
+            return poolCumulativeCache;
+        }
+        const raw = fs.readFileSync(POOL_CUMULATIVE_PATH, "utf8");
+        const parsed = JSON.parse(raw);
+        poolCumulativeCache = parsed;
+        poolCumulativeMtimeMs = stats.mtimeMs;
+        return parsed;
+    } catch {
+        return { version: "v1", updatedAt: null, aggregates: [] };
+    }
+}
 
 function loadScannedPools() {
     const stats = fs.statSync(SCANNED_POOLS_PATH);
@@ -4120,6 +4737,9 @@ function startPoolRefresh(poolAddress, options = {}) {
         "--pool",
         poolAddress,
     ];
+    if (options?.tradesOnly) {
+        args.push("--trades-only");
+    }
 
     const workers = options?.workers ?? (
         process.env.FABRIQ_CONCURRENCY
@@ -4244,6 +4864,7 @@ function startPoolRefresh(poolAddress, options = {}) {
         scannedPoolsCache = null;
         poolMembershipCache = null;
         poolTradesCache = null;
+        poolCumulativeCache = null;
         if (code === 0) {
             poolRefreshState.status = "completed";
             poolRefreshState.stage = "completed";
@@ -6195,6 +6816,21 @@ const server = http.createServer(async (request, response) => {
             }
             const maxPnlPct = maxPnlPctRes;
 
+            const validMatchModes = ["individual", "cumulative", "both"];
+            const rawMatchMode = url.searchParams.get("matchMode");
+            let matchMode = "individual";
+            if (rawMatchMode !== null && rawMatchMode !== undefined && rawMatchMode.trim() !== "") {
+                const trimmed = rawMatchMode.trim().toLowerCase();
+                if (!validMatchModes.includes(trimmed)) {
+                    json(request, response, 400, {
+                        error: "Query parameter 'matchMode' must be 'individual', 'cumulative', or 'both'",
+                    });
+                    return;
+                }
+                matchMode = trimmed;
+            }
+
+
             // Validate duration bounds
             if (minDurationSeconds !== undefined && minDurationSeconds < 0) {
                 json(request, response, 400, { error: "minDurationSeconds must not be negative" });
@@ -6220,7 +6856,6 @@ const server = http.createServer(async (request, response) => {
                 json(request, response, 400, { error: "minPnlPct cannot be greater than maxPnlPct" });
                 return;
             }
-
             try {
                 // 1. Verify pool exists in scanned-pools.json
                 const scannedData = loadScannedPools();
@@ -6242,81 +6877,240 @@ const server = http.createServer(async (request, response) => {
                 const hasPnlUsdFilter = minPnlUsd !== undefined || maxPnlUsd !== undefined;
                 const hasPnlPctFilter = minPnlPct !== undefined || maxPnlPct !== undefined;
 
-                const matchedTrades = poolTrades.filter((trade) => {
-                    if (hasDurationFilter) {
-                        const d = trade?.durationSeconds;
-                        if (typeof d !== "number" || !Number.isFinite(d)) {
-                            return false;
+                const includeIndividual = matchMode === "individual" || matchMode === "both";
+                const includeCumulative = matchMode === "cumulative" || matchMode === "both";
+
+                let matchedTrades = [];
+                let individualWallets = [];
+
+                if (includeIndividual) {
+                    matchedTrades = poolTrades.filter((trade) => {
+                        if (hasDurationFilter) {
+                            const d = trade?.durationSeconds;
+                            if (typeof d !== "number" || !Number.isFinite(d)) {
+                                return false;
+                            }
+                            if (minDurationSeconds !== undefined && d < minDurationSeconds) {
+                                return false;
+                            }
+                            if (maxDurationSeconds !== undefined && d > maxDurationSeconds) {
+                                return false;
+                            }
                         }
-                        if (minDurationSeconds !== undefined && d < minDurationSeconds) {
-                            return false;
+
+                        if (hasPnlUsdFilter) {
+                            const pnl = trade?.pnlUsd;
+                            if (typeof pnl !== "number" || !Number.isFinite(pnl)) {
+                                return false;
+                            }
+                            if (minPnlUsd !== undefined && pnl < minPnlUsd) {
+                                return false;
+                            }
+                            if (maxPnlUsd !== undefined && pnl > maxPnlUsd) {
+                                return false;
+                            }
                         }
-                        if (maxDurationSeconds !== undefined && d > maxDurationSeconds) {
-                            return false;
+
+                        if (hasPnlPctFilter) {
+                            const pct = trade?.pnlPct;
+                            if (typeof pct !== "number" || !Number.isFinite(pct)) {
+                                return false;
+                            }
+                            if (minPnlPct !== undefined && pct < minPnlPct) {
+                                return false;
+                            }
+                            if (maxPnlPct !== undefined && pct > maxPnlPct) {
+                                return false;
+                            }
                         }
+
+                        return true;
+                    });
+
+                    // Group by wallet preserving canonical trade order within each wallet
+                    const walletMap = new Map();
+                    for (const trade of matchedTrades) {
+                        const w = trade?.wallet;
+                        if (!w) continue;
+                        let entry = walletMap.get(w);
+                        if (!entry) {
+                            entry = {
+                                wallet: w,
+                                matchedTradeCount: 0,
+                                trades: [],
+                            };
+                            walletMap.set(w, entry);
+                        }
+                        entry.matchedTradeCount += 1;
+                        entry.trades.push({
+                            positionId: trade.positionId,
+                            openedAt: trade.openedAt,
+                            closedAt: trade.closedAt,
+                            durationSeconds: trade.durationSeconds,
+                            pnlUsd: trade.pnlUsd,
+                            pnlPct: trade.pnlPct,
+                        });
                     }
 
-                    if (hasPnlUsdFilter) {
-                        const pnl = trade?.pnlUsd;
-                        if (typeof pnl !== "number" || !Number.isFinite(pnl)) {
-                            return false;
+                    individualWallets = Array.from(walletMap.values()).sort((a, b) => {
+                        if (b.matchedTradeCount !== a.matchedTradeCount) {
+                            return b.matchedTradeCount - a.matchedTradeCount;
                         }
-                        if (minPnlUsd !== undefined && pnl < minPnlUsd) {
-                            return false;
-                        }
-                        if (maxPnlUsd !== undefined && pnl > maxPnlUsd) {
-                            return false;
-                        }
-                    }
-
-                    if (hasPnlPctFilter) {
-                        const pct = trade?.pnlPct;
-                        if (typeof pct !== "number" || !Number.isFinite(pct)) {
-                            return false;
-                        }
-                        if (minPnlPct !== undefined && pct < minPnlPct) {
-                            return false;
-                        }
-                        if (maxPnlPct !== undefined && pct > maxPnlPct) {
-                            return false;
-                        }
-                    }
-
-                    return true;
-                });
-
-                // 4. Group by wallet preserving canonical trade order within each wallet
-                const walletMap = new Map();
-                for (const trade of matchedTrades) {
-                    const w = trade?.wallet;
-                    if (!w) continue;
-                    let entry = walletMap.get(w);
-                    if (!entry) {
-                        entry = {
-                            wallet: w,
-                            matchedTradeCount: 0,
-                            trades: [],
-                        };
-                        walletMap.set(w, entry);
-                    }
-                    entry.matchedTradeCount += 1;
-                    entry.trades.push({
-                        positionId: trade.positionId,
-                        openedAt: trade.openedAt,
-                        closedAt: trade.closedAt,
-                        durationSeconds: trade.durationSeconds,
-                        pnlUsd: trade.pnlUsd,
-                        pnlPct: trade.pnlPct,
+                        return a.wallet.localeCompare(b.wallet);
                     });
                 }
 
-                // 5. Sort wallets by matchedTradeCount descending, tie-break deterministically by wallet address
-                const wallets = Array.from(walletMap.values()).sort((a, b) => {
-                    if (b.matchedTradeCount !== a.matchedTradeCount) {
-                        return b.matchedTradeCount - a.matchedTradeCount;
+                let cumulativeGroups = [];
+                let cumulativeStatus = "unavailable";
+                let totalPoolAggregates = 0;
+
+                if (includeCumulative) {
+                    const cumulativeData = loadPoolCumulativeHistory();
+                    const rawAggregates = Array.isArray(cumulativeData?.aggregates) ? cumulativeData.aggregates : [];
+                    const poolAggregates = rawAggregates.filter((a) => a?.poolAddress === poolAddress);
+                    totalPoolAggregates = poolAggregates.length;
+
+                    if (totalPoolAggregates > 0) {
+                        const now = Date.now();
+                        const STALE_MS = 24 * 60 * 60 * 1000;
+                        const freshCount = poolAggregates.filter((a) => {
+                            const ts = a?.updatedAt ? Date.parse(a.updatedAt) : 0;
+                            return Number.isFinite(ts) && (now - ts) < STALE_MS;
+                        }).length;
+                        cumulativeStatus = freshCount === 0 ? "stale" : "available";
                     }
-                    return a.wallet.localeCompare(b.wallet);
-                });
+                    // Group pool trades by wallet for linking constituent positions
+                    const poolTradesByWallet = new Map();
+                    for (let i = 0; i < poolTrades.length; i++) {
+                        const t = poolTrades[i];
+                        const w = t?.wallet;
+                        if (!w || !t?.positionId) continue;
+                        let list = poolTradesByWallet.get(w);
+                        if (!list) {
+                            list = [];
+                            poolTradesByWallet.set(w, list);
+                        }
+                        list.push(t);
+                    }
+
+                    const currentPool = pools.find((p) => p?.poolAddress === poolAddress);
+                    const pairName = currentPool?.pair ?? "";
+
+                    for (const agg of poolAggregates) {
+                        const w = agg?.wallet;
+                        if (!w) continue;
+
+                        // Apply duration filter to Fabriq duration
+                        if (hasDurationFilter) {
+                            const d = agg.cumulativeDurationSeconds;
+                            if (typeof d !== "number" || !Number.isFinite(d)) {
+                                continue;
+                            }
+                            if (minDurationSeconds !== undefined && d < minDurationSeconds) {
+                                continue;
+                            }
+                            if (maxDurationSeconds !== undefined && d > maxDurationSeconds) {
+                                continue;
+                            }
+                        }
+
+                        // Apply PnL USD filter to Fabriq total_pnl_usd
+                        if (hasPnlUsdFilter) {
+                            const pnl = agg.cumulativePnlUsd;
+                            if (typeof pnl !== "number" || !Number.isFinite(pnl)) {
+                                continue;
+                            }
+                            if (minPnlUsd !== undefined && pnl < minPnlUsd) {
+                                continue;
+                            }
+                            if (maxPnlUsd !== undefined && pnl > maxPnlUsd) {
+                                continue;
+                            }
+                        }
+
+                        // Apply PnL % filter to Fabriq total_pnl_pct_usd
+                        if (hasPnlPctFilter) {
+                            const pct = agg.cumulativePnlPct;
+                            if (typeof pct !== "number" || !Number.isFinite(pct)) {
+                                continue;
+                            }
+                            if (minPnlPct !== undefined && pct < minPnlPct) {
+                                continue;
+                            }
+                            if (maxPnlPct !== undefined && pct > maxPnlPct) {
+                                continue;
+                            }
+                        }
+
+                        // Constituent trades strictly linked to this pool and wallet
+                        const rawConstituent = poolTradesByWallet.get(w) || [];
+                        const constituentPositions = rawConstituent.map((x) => ({
+                            positionId: x.positionId,
+                            openedAt: x.openedAt,
+                            closedAt: x.closedAt,
+                            durationSeconds: x.durationSeconds,
+                            pnlUsd: x.pnlUsd,
+                            pnlPct: x.pnlPct,
+                        }));
+
+                        const closeMs = agg.latestClosedAt ? Date.parse(agg.latestClosedAt) : 0;
+
+                        cumulativeGroups.push({
+                            groupId: `${w}:${poolAddress}`,
+                            wallet: w,
+                            poolAddress,
+                            pair: agg.pair || pairName,
+                            positionCount: agg.positionCount ?? (constituentPositions.length > 0 ? constituentPositions.length : null),
+                            cumulativePnlUsd: agg.cumulativePnlUsd ?? null,
+                            cumulativePnlPct: agg.cumulativePnlPct ?? null,
+                            cumulativeDurationSeconds: agg.cumulativeDurationSeconds ?? null,
+                            totalAddUsd: agg.totalAddUsd ?? null,
+                            totalRemUsd: agg.totalRemUsd ?? null,
+                            totalFeeUsd: agg.totalFeeUsd ?? null,
+                            earliestOpenedAt: agg.earliestOpenedAt ?? null,
+                            latestClosedAt: agg.latestClosedAt ?? null,
+                            source: "Fabriq",
+                            lastUpdated: agg.updatedAt ?? cumulativeData?.updatedAt ?? null,
+                            isStale: agg.updatedAt ? (Date.now() - Date.parse(agg.updatedAt)) >= (24 * 60 * 60 * 1000) : true,
+                            positions: constituentPositions,
+                            _latestCloseMs: Number.isFinite(closeMs) ? closeMs : 0,
+                        });
+                    }
+
+                    cumulativeGroups.sort((a, b) => {
+                        if (b._latestCloseMs !== a._latestCloseMs) {
+                            return b._latestCloseMs - a._latestCloseMs;
+                        }
+                        const bPnl = typeof b.cumulativePnlUsd === "number" ? b.cumulativePnlUsd : -Infinity;
+                        const aPnl = typeof a.cumulativePnlUsd === "number" ? a.cumulativePnlUsd : -Infinity;
+                        if (bPnl !== aPnl) {
+                            return bPnl - aPnl;
+                        }
+                        return a.wallet.localeCompare(b.wallet);
+                    });
+
+                    cumulativeGroups = cumulativeGroups.map((g) => {
+                        const { _latestCloseMs, ...rest } = g;
+                        return rest;
+                    });
+                }
+
+                let matchedWalletCount = 0;
+                if (matchMode === "individual") {
+                    matchedWalletCount = individualWallets.length;
+                } else if (matchMode === "cumulative") {
+                    const uniqueCumWallets = new Set(cumulativeGroups.map((g) => g.wallet));
+                    matchedWalletCount = uniqueCumWallets.size;
+                } else if (matchMode === "both") {
+                    const combined = new Set();
+                    for (let i = 0; i < individualWallets.length; i++) {
+                        combined.add(individualWallets[i].wallet);
+                    }
+                    for (let i = 0; i < cumulativeGroups.length; i++) {
+                        combined.add(cumulativeGroups[i].wallet);
+                    }
+                    matchedWalletCount = combined.size;
+                }
 
                 json(request, response, 200, {
                     poolAddress,
@@ -6327,11 +7121,16 @@ const server = http.createServer(async (request, response) => {
                         maxPnlUsd: maxPnlUsd ?? null,
                         minPnlPct: minPnlPct ?? null,
                         maxPnlPct: maxPnlPct ?? null,
+                        matchMode,
                     },
                     totalPoolTrades,
                     matchedTradeCount: matchedTrades.length,
-                    matchedWalletCount: wallets.length,
-                    wallets,
+                    matchedGroupCount: cumulativeGroups.length,
+                    matchedWalletCount,
+                    wallets: individualWallets,
+                    cumulativeGroups,
+                    cumulativeStatus,
+                    totalPoolAggregates,
                 });
             } catch (error) {
                 console.error("[POOL INSIGHT] Error filtering trades:", error.message);
@@ -6348,6 +7147,121 @@ const server = http.createServer(async (request, response) => {
     // ------------------------------------------------------
     // POST /api/pool-insight/pools/:poolAddress/refresh
     // ------------------------------------------------------
+
+    // ------------------------------------------------------
+    // POST /api/pool-insight/pools/:poolAddress/wallets/:wallet/refresh-cumulative
+    // POST /api/pool-insight/pools/:poolAddress/refresh-cumulative
+    // ------------------------------------------------------
+
+    if (request.method === "POST") {
+        const matchTargetedCumulative = url.pathname.match(
+            /^\/api\/pool-insight\/pools\/([^/]+)\/wallets\/([^/]+)\/refresh-cumulative\/?$/
+        );
+        const matchPoolCumulativeRefresh = url.pathname.match(
+            /^\/api\/pool-insight\/pools\/([^/]+)\/refresh-cumulative\/?$/
+        );
+
+        if (matchTargetedCumulative || matchPoolCumulativeRefresh) {
+            const poolAddress = safeDecodeURIComponent(
+                matchTargetedCumulative ? matchTargetedCumulative[1] : matchPoolCumulativeRefresh[1]
+            );
+
+            let wallet = null;
+            if (matchTargetedCumulative) {
+                wallet = safeDecodeURIComponent(matchTargetedCumulative[2]);
+            } else {
+                try {
+                    const body = await readJson(request);
+                    wallet = (typeof body?.wallet === "string" ? body.wallet : null) || url.searchParams.get("wallet");
+                } catch {
+                    wallet = url.searchParams.get("wallet");
+                }
+            }
+
+            if (!poolAddress || !poolAddress.trim()) {
+                json(request, response, 400, { error: "Invalid pool address" });
+                return;
+            }
+            if (!wallet || !wallet.trim()) {
+                json(request, response, 400, { error: "Wallet address is required for targeted cumulative refresh" });
+                return;
+            }
+
+            const cleanPool = poolAddress.trim();
+            const cleanWallet = wallet.trim();
+
+            let scannedData;
+            try {
+                scannedData = loadScannedPools();
+            } catch (err) {
+                json(request, response, 500, { error: "Failed to read scanned pools data" });
+                return;
+            }
+
+            const pools = Array.isArray(scannedData?.pools) ? scannedData.pools : [];
+            const canonicalPool = pools.find((p) => p?.poolAddress === cleanPool);
+            if (!canonicalPool) {
+                json(request, response, 404, { error: `Pool ${cleanPool} not found in canonical registry` });
+                return;
+            }
+
+            try {
+                const child = spawn(
+                    process.execPath,
+                    [
+                        "--experimental-strip-types",
+                        "scripts/pool/refresh-wallet-cumulative.ts",
+                        "--pool",
+                        cleanPool,
+                        "--wallet",
+                        cleanWallet,
+                    ],
+                    {
+                        cwd: ROOT,
+                        env: process.env,
+                        stdio: ["ignore", "pipe", "pipe"],
+                    }
+                );
+
+                let stdout = "";
+                let stderr = "";
+                child.stdout.on("data", (chunk) => { stdout += chunk; });
+                child.stderr.on("data", (chunk) => { stderr += chunk; });
+
+                child.on("error", (err) => {
+                    console.error("[CUMULATIVE REFRESH] Process error:", err);
+                    json(request, response, 500, { error: err.message });
+                });
+
+                child.on("close", (code) => {
+                    poolCumulativeCache = null;
+                    if (code === 0) {
+                        const cumData = loadPoolCumulativeHistory();
+                        const aggs = Array.isArray(cumData?.aggregates) ? cumData.aggregates : [];
+                        const found = aggs.find((a) => a?.poolAddress === cleanPool && a?.wallet === cleanWallet) || null;
+                        json(request, response, 200, {
+                            success: true,
+                            poolAddress: cleanPool,
+                            wallet: cleanWallet,
+                            aggregate: found,
+                            message: "Fabriq cumulative aggregate refreshed successfully",
+                        });
+                    } else {
+                        const errMsg = (stderr || stdout || `Process exited with code ${code}`).trim();
+                        json(request, response, 500, {
+                            success: false,
+                            error: errMsg,
+                        });
+                    }
+                });
+            } catch (spawnErr) {
+                console.error("[CUMULATIVE REFRESH] Spawn error:", spawnErr);
+                json(request, response, 500, { error: spawnErr.message });
+            }
+
+            return;
+        }
+    }
 
     if (request.method === "POST") {
         const matchRefresh = url.pathname.match(
@@ -6381,12 +7295,21 @@ const server = http.createServer(async (request, response) => {
                 return;
             }
 
+            let body = {};
+            try {
+                body = await readJson(request);
+            } catch {}
+
             try {
                 const queryWorkers = url.searchParams.get("workers");
                 const parsedWorkers = queryWorkers ? parseInt(queryWorkers, 10) : null;
+                const isTradesOnly = url.searchParams.get("mode") === "trades_only" || Boolean(body?.tradesOnly) || body?.mode === "trades_only";
                 const options = {};
                 if (parsedWorkers && Number.isInteger(parsedWorkers) && parsedWorkers >= 1) {
                     options.workers = parsedWorkers;
+                }
+                if (isTradesOnly) {
+                    options.tradesOnly = true;
                 }
                 const jobState = startPoolRefresh(poolAddress, options);
                 json(request, response, 202, jobState);
@@ -6748,6 +7671,116 @@ const server = http.createServer(async (request, response) => {
     }
 
     // ------------------------------------------------------
+    // POST /api/pool-scanner/refresh
+    // ------------------------------------------------------
+
+    if (
+        request.method === "POST" &&
+        url.pathname === "/api/pool-scanner/refresh"
+    ) {
+        if (dataPipelineBusy()) {
+            json(
+                request,
+                response,
+                409,
+                {
+                    error: "Another update process is already running",
+                    poolScanner: poolScannerPublicState(),
+                    fabriq: publicState(),
+                    lpagent: lpAgentPublicState(),
+                },
+            );
+            return;
+        }
+
+        let body = {};
+        try {
+            body = await readJson(request);
+        } catch {
+            json(request, response, 400, { error: "Invalid JSON body" });
+            return;
+        }
+
+        const rawToken = body?.tokenCa;
+        if (typeof rawToken !== "string" || !rawToken.trim()) {
+            json(request, response, 400, { error: "tokenCa must be a non-empty string" });
+            return;
+        }
+
+        const tokenCa = rawToken.trim();
+        if (tokenCa.length < 32 || tokenCa.length > 50) {
+            json(request, response, 400, { error: "tokenCa must be a valid Solana address (32-50 characters)" });
+            return;
+        }
+
+        if (poolScannerChild && poolScannerState.tokenCa === tokenCa) {
+            json(request, response, 409, { error: `Refresh is already running for token ${tokenCa}` });
+            return;
+        }
+
+        let fabriqWorkers = 8;
+        if (body?.fabriqWorkers !== undefined && body?.fabriqWorkers !== null) {
+            const rawVal = body.fabriqWorkers;
+            const strVal = String(rawVal).trim();
+            if (/^[1-9]\d*$/.test(strVal)) {
+                fabriqWorkers = Number(strVal);
+            }
+        }
+        if (body?.scanMode === "trades_only" && typeof body?.poolAddress === "string" && body.poolAddress.trim()) {
+            const poolAddress = body.poolAddress.trim();
+            try {
+                triggerPoolTradeOnly(tokenCa, poolAddress, true, fabriqWorkers);
+                json(request, response, 202, poolScannerPublicState());
+            } catch (error) {
+                json(request, response, 500, {
+                    error: error instanceof Error ? error.message : String(error),
+                });
+            }
+            return;
+        }
+
+
+        if (rejectBusyDataPipeline(request, response)) return;
+
+        let discoveryResult;
+        try {
+            discoveryResult = await discoverTokenPools(tokenCa);
+        } catch (err) {
+            json(request, response, 502, {
+                error: `Pool discovery failed during refresh: ${err instanceof Error ? err.message : String(err)}`,
+            });
+            return;
+        }
+
+        let selectedAddresses = (discoveryResult?.pools || []).map((p) => p.poolAddress);
+        if (Array.isArray(body?.poolAddresses) && body.poolAddresses.length > 0) {
+            const validSet = new Set(selectedAddresses);
+            const userSelected = body.poolAddresses
+                .map((a) => (typeof a === "string" ? a.trim() : ""))
+                .filter((a) => a && validSet.has(a));
+            if (userSelected.length > 0) {
+                selectedAddresses = userSelected;
+            }
+        }
+
+        if (selectedAddresses.length === 0) {
+            json(request, response, 404, {
+                error: `No valid TOKEN/SOL or TOKEN/USDC DLMM pools found for token ${tokenCa}`,
+            });
+            return;
+        }
+
+        try {
+            startSelectedPoolScanner(tokenCa, selectedAddresses, { isRefresh: true, fabriqWorkers });
+            json(request, response, 202, poolScannerPublicState());
+        } catch (error) {
+            json(request, response, 500, {
+                error: error instanceof Error ? error.message : String(error),
+            });
+        }
+        return;
+    }
+    // ------------------------------------------------------
     // POST /api/pool-scanner/scan-selected
     // ------------------------------------------------------
 
@@ -6907,7 +7940,7 @@ const server = http.createServer(async (request, response) => {
         }
 
         try {
-            startSelectedPoolScanner(tokenCa, selectedAddresses);
+            startSelectedPoolScanner(tokenCa, selectedAddresses, { isRefresh: Boolean(body?.refresh) });
             json(
                 request,
                 response,
@@ -7112,7 +8145,7 @@ const server = http.createServer(async (request, response) => {
         }
 
         try {
-            startSelectedWalletsEnrichment(tokenCa, fabriqWorkers, limit);
+            startSelectedWalletsEnrichment(tokenCa, fabriqWorkers, limit, Boolean(body?.refresh));
             json(
                 request,
                 response,
@@ -7346,7 +8379,12 @@ const server = http.createServer(async (request, response) => {
         }
 
         try {
-            startPoolTradeHistory(tokenCa, workers, wallet, limit);
+            let poolAddress = null;
+            if (body?.poolAddress && typeof body.poolAddress === "string" && body.poolAddress.trim()) {
+                poolAddress = body.poolAddress.trim();
+            }
+            const tradesOnly = Boolean(body?.tradesOnly) || body?.scanMode === "trades_only";
+            startPoolTradeHistory(tokenCa, workers, wallet, limit, Boolean(body?.refresh), poolAddress, tradesOnly);
             json(
                 request,
                 response,
@@ -7369,6 +8407,146 @@ const server = http.createServer(async (request, response) => {
 
         return;
     }
+    // ------------------------------------------------------
+    // POST /api/pool-scanner/cumulative-history
+    // ------------------------------------------------------
+
+    if (
+        request.method === "POST" &&
+        url.pathname === "/api/pool-scanner/cumulative-history"
+    ) {
+        if (dataPipelineBusy()) {
+            json(
+                request,
+                response,
+                409,
+                {
+                    error:
+                        "Another update process is already running",
+                    poolScanner:
+                        poolScannerPublicState(),
+                    fabriq:
+                        publicState(),
+                    lpagent:
+                        lpAgentPublicState(),
+                },
+            );
+            return;
+        }
+
+        let body = {};
+        try {
+            body = await readJson(request);
+        } catch {
+            json(
+                request,
+                response,
+                400,
+                {
+                    error: "Invalid JSON body",
+                },
+            );
+            return;
+        }
+
+        const rawToken = body?.tokenCa;
+        if (typeof rawToken !== "string" || !rawToken.trim()) {
+            json(
+                request,
+                response,
+                400,
+                {
+                    error: "tokenCa must be a non-empty string",
+                },
+            );
+            return;
+        }
+        const tokenCa = rawToken.trim();
+
+        let workers = 8;
+        if (body?.workers !== undefined && body?.workers !== null) {
+            const rawWorkers = body.workers;
+            const strWorkers = String(rawWorkers).trim();
+            const isValid =
+                (typeof rawWorkers === "number" && Number.isInteger(rawWorkers) && rawWorkers >= 1) ||
+                (typeof rawWorkers === "string" && /^[1-9]\d*$/.test(strWorkers));
+            if (!isValid) {
+                json(
+                    request,
+                    response,
+                    400,
+                    {
+                        error: "workers must be an integer >= 1",
+                    },
+                );
+                return;
+            }
+            workers = Math.min(8, Math.max(1, Number(strWorkers)));
+        }
+
+        let wallet = null;
+        if (body?.wallet !== undefined && body?.wallet !== null) {
+            if (typeof body.wallet !== "string" || !body.wallet.trim()) {
+                json(
+                    request,
+                    response,
+                    400,
+                    {
+                        error: "wallet must be a non-empty string if provided",
+                    },
+                );
+                return;
+            }
+            wallet = body.wallet.trim();
+        }
+
+        let limit = null;
+        if (body?.limit !== undefined && body?.limit !== null) {
+            const rawLimit = body.limit;
+            const strLimit = String(rawLimit).trim();
+            const isValid =
+                (typeof rawLimit === "number" && Number.isInteger(rawLimit) && rawLimit >= 1) ||
+                (typeof rawLimit === "string" && /^[1-9]\d*$/.test(strLimit));
+            if (!isValid) {
+                json(
+                    request,
+                    response,
+                    400,
+                    {
+                        error: "limit must be an integer >= 1",
+                    },
+                );
+                return;
+            }
+            limit = Number(strLimit);
+        }
+
+        if (rejectBusyDataPipeline(request, response)) return;
+
+        try {
+            startPoolCumulativeHistory(tokenCa, workers, wallet, limit, false);
+            json(
+                request,
+                response,
+                200,
+                poolScannerPublicState(),
+            );
+        } catch (error) {
+            json(
+                request,
+                response,
+                500,
+                {
+                    error:
+                        error instanceof Error
+                            ? error.message
+                            : String(error),
+                },
+            );
+        }
+        return;
+    }
+
 
     // ------------------------------------------------------
     // POST /api/pool-scanner/persist
@@ -7467,6 +8645,80 @@ const server = http.createServer(async (request, response) => {
     }
 
     // ------------------------------------------------------
+    // POST /api/pool-scanner/trade-only
+    // ------------------------------------------------------
+
+    if (
+        request.method === "POST" &&
+        url.pathname === "/api/pool-scanner/trade-only"
+    ) {
+        if (dataPipelineBusy()) {
+            json(
+                request,
+                response,
+                409,
+                {
+                    error: "Another update process is already running",
+                    poolScanner: poolScannerPublicState(),
+                },
+            );
+            return;
+        }
+
+        let body = {};
+        try {
+            body = await readJson(request);
+        } catch {
+            json(request, response, 400, { error: "Invalid JSON body" });
+            return;
+        }
+
+        const rawToken = body?.tokenCa;
+        if (typeof rawToken !== "string" || !rawToken.trim()) {
+            json(request, response, 400, { error: "tokenCa must be a non-empty string" });
+            return;
+        }
+        const tokenCa = rawToken.trim();
+
+        const rawPool = body?.poolAddress;
+        if (typeof rawPool !== "string" || !rawPool.trim()) {
+            json(request, response, 400, { error: "poolAddress must be a non-empty string" });
+            return;
+        }
+        const poolAddress = rawPool.trim();
+
+        let workers = 8;
+        if (body?.workers !== undefined && body?.workers !== null) {
+            const parsed = parseInt(String(body.workers), 10);
+            if (Number.isInteger(parsed) && parsed >= 1) {
+                workers = Math.min(20, parsed);
+            }
+        }
+        const isRefresh = Boolean(body?.refresh);
+
+        if (poolScannerChild && (poolScannerState.targetPool === poolAddress || poolScannerState.tokenCa === tokenCa)) {
+            json(request, response, 409, { error: `Job is already running for pool ${poolAddress}` });
+            return;
+        }
+        if (poolRefreshChild && poolRefreshState.poolAddress === poolAddress) {
+            json(request, response, 409, { error: `Refresh is already running for pool ${poolAddress}` });
+            return;
+        }
+
+        if (rejectBusyDataPipeline(request, response)) return;
+
+        try {
+            triggerPoolTradeOnly(tokenCa, poolAddress, isRefresh, workers);
+            json(request, response, 202, poolScannerPublicState());
+        } catch (error) {
+            json(request, response, 500, {
+                error: error instanceof Error ? error.message : String(error),
+            });
+        }
+        return;
+    }
+
+    // ------------------------------------------------------
     // POST /api/pool-scanner/start
     // ------------------------------------------------------
 
@@ -7560,6 +8812,26 @@ const server = http.createServer(async (request, response) => {
 
         try {
             if (rejectBusyDataPipeline(request, response)) return;
+        if (body?.scanMode === "trades_only") {
+            const rawPool = body?.poolAddress;
+            if (typeof rawPool !== "string" || !rawPool.trim()) {
+                json(request, response, 400, { error: "poolAddress is required when scanMode is trades_only" });
+                return;
+            }
+            const poolAddress = rawPool.trim();
+            const isRefresh = Boolean(body?.refresh);
+            try {
+                if (rejectBusyDataPipeline(request, response)) return;
+                triggerPoolTradeOnly(tokenCa, poolAddress, isRefresh, fabriqWorkers);
+                json(request, response, 202, poolScannerPublicState());
+            } catch (error) {
+                json(request, response, 500, {
+                    error: error instanceof Error ? error.message : String(error),
+                });
+            }
+            return;
+        }
+
             startPoolScanner(tokenCa, fabriqWorkers);
 
             json(

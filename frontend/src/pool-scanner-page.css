@@ -1791,6 +1791,287 @@
   margin-top: 10px;
 }
 
+/* Existing Token Card & Refresh Workflow */
+.pool-scanner-existing-card {
+  margin-top: 18px;
+  padding: 14px 16px;
+  border: 1px solid rgba(85, 214, 157, 0.28);
+  border-radius: 8px;
+  background: rgba(14, 26, 20, 0.65);
+}
+
+.pool-scanner-existing-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.pool-scanner-existing-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  color: #55d69d;
+}
+
+.pool-scanner-existing-date {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.pool-scanner-existing-stats {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text);
+  margin-top: 2px;
+}
+
+.pool-scanner-existing-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.pool-scanner-view-btn {
+  height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #171817;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 150ms ease;
+}
+
+.pool-scanner-view-btn:hover:not(:disabled) {
+  background: #232523;
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.pool-scanner-refresh-btn {
+  margin-top: 0 !important;
+  height: 42px !important;
+}
+
+.pool-scanner-warning-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  margin-bottom: 16px;
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  border-radius: 8px;
+  background: rgba(245, 158, 11, 0.08);
+  color: #fbbf24;
+  font-size: 12px;
+}
+
+.pool-scanner-diff-summary-card {
+  margin-bottom: 16px;
+  padding: 16px;
+  border: 1px solid rgba(85, 214, 157, 0.25);
+  border-radius: 8px;
+  background: rgba(14, 26, 20, 0.4);
+}
+
+.diff-summary-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text);
+  margin-bottom: 12px;
+}
+
+.diff-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+}
+
+.diff-summary-item {
+  display: flex;
+  flex-direction: column;
+  padding: 10px 12px;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+}
+
+.diff-summary-item .diff-label {
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--muted);
+  letter-spacing: 0.08em;
+}
+
+.diff-summary-item strong {
+  font-size: 16px;
+  color: var(--green);
+  margin-top: 2px;
+}
+
+.diff-summary-item small {
+  font-size: 10px;
+  color: var(--muted);
+  margin-top: 2px;
+}
 
 
+/* Mode Selector */
+.pool-scanner-mode-selector {
+  margin-bottom: 18px;
+  padding: 12px 14px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+}
+
+.pool-scanner-mode-label {
+  display: block;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+
+.pool-scanner-mode-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.pool-scanner-mode-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.pool-scanner-mode-btn:hover:not(:disabled) {
+  border-color: rgba(255, 255, 255, 0.2);
+  color: var(--text);
+}
+
+.pool-scanner-mode-btn.active {
+  background: rgba(85, 214, 157, 0.12);
+  border-color: rgba(85, 214, 157, 0.4);
+  color: #55d69d;
+}
+
+.pool-scanner-mode-btn.active.trades-only {
+  background: rgba(34, 211, 238, 0.12);
+  border-color: rgba(34, 211, 238, 0.4);
+  color: #22d3ee;
+}
+
+.pool-scanner-mode-description {
+  margin: 8px 0 0;
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+/* Skipped Stage State */
+.stage-state-badge.skipped {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: var(--muted);
+}
+
+.pool-scanner-stage-card.skipped {
+  opacity: 0.65;
+  border-style: dashed;
+}
+
+/* Trade Only Notice Banner */
+.pool-scanner-notice-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  margin-bottom: 16px;
+  border: 1px solid rgba(34, 211, 238, 0.3);
+  border-radius: 8px;
+  background: rgba(34, 211, 238, 0.08);
+  color: #22d3ee;
+  font-size: 12px;
+}
+
+/* Trade Only Action Box */
+.pool-trade-only-action-box {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+}
+
+.pool-trade-only-notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: rgba(85, 214, 157, 0.08);
+  border: 1px solid rgba(85, 214, 157, 0.2);
+  border-radius: 6px;
+  font-size: 11px;
+  color: #6ee7b7;
+}
+
+.refresh-trades-btn {
+  background: linear-gradient(135deg, rgba(34, 211, 238, 0.2) 0%, rgba(85, 214, 157, 0.2) 100%);
+  border-color: rgba(34, 211, 238, 0.4);
+  color: #a5f3fc;
+}
+
+.refresh-trades-btn:hover:not(:disabled) {
+  border-color: #22d3ee;
+  color: #fff;
+}
+
+.fetch-trades-btn {
+  background: linear-gradient(135deg, rgba(85, 214, 157, 0.2) 0%, rgba(59, 130, 246, 0.2) 100%);
+  border-color: rgba(85, 214, 157, 0.4);
+  color: #6ee7b7;
+}
+
+.fetch-trades-btn:hover:not(:disabled) {
+  border-color: #55d69d;
+  color: #fff;
+}
+
+.existing-pool-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  background: rgba(85, 214, 157, 0.15);
+  border: 1px solid rgba(85, 214, 157, 0.35);
+  border-radius: 4px;
+  font-size: 10px;
+  color: #6ee7b7;
+  font-weight: 600;
+}
+
+.trade-only-summary strong {
+  color: #22d3ee !important;
+}
 

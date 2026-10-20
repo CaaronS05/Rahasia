@@ -32,6 +32,81 @@ export function randomDelay(min, max) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
+export const SCANNER_TAB_MARKER_PREFIX = "dllm-scanner-worker-";
+
+export function getScannerWorkerMarker(workerId) {
+  return `${SCANNER_TAB_MARKER_PREFIX}${workerId}`;
+}
+
+export async function isScannerTab(page, workerId) {
+  if (!page || (typeof page.isClosed === "function" && page.isClosed())) {
+    return false;
+  }
+  const marker = getScannerWorkerMarker(workerId);
+  const legacyMarker = `dllm-worker-${workerId}`;
+
+  if (page.__dllm_scanner_worker__ === workerId) {
+    return true;
+  }
+
+  try {
+    const url = typeof page.url === "function" ? page.url() : "";
+    if (url && (url.includes(`#${marker}`) || url.includes(`#${legacyMarker}`))) {
+      return true;
+    }
+  } catch {}
+
+  try {
+    if (typeof page.evaluate === "function") {
+      const winName = await page.evaluate(() => window.name).catch(() => null);
+      if (winName === marker || winName === legacyMarker) {
+        return true;
+      }
+    }
+  } catch {}
+
+  return false;
+}
+
+export async function markScannerTab(page, workerId) {
+  const marker = getScannerWorkerMarker(workerId);
+  page.__dllm_scanner_worker__ = workerId;
+
+  try {
+    if (typeof page.evaluate === "function") {
+      await page.evaluate((m) => {
+        try {
+          window.name = m;
+        } catch {}
+      }, marker);
+    }
+  } catch {}
+
+  try {
+    const url = typeof page.url === "function" ? page.url() : "";
+    if (url === "about:blank" && typeof page.goto === "function") {
+      await page.goto(`about:blank#${marker}`);
+    }
+  } catch {}
+}
+
+export async function getOrCreateScannerTab(context, workerId, excludedPages = []) {
+  const pages = typeof context.pages === "function" ? context.pages() : [];
+
+  for (const p of pages) {
+    if (excludedPages.includes(p)) continue;
+    const matches = await isScannerTab(p, workerId);
+    if (matches) {
+      p.__dllm_scanner_worker__ = workerId;
+      return p;
+    }
+  }
+
+  const newPage = await context.newPage();
+  await markScannerTab(newPage, workerId);
+  return newPage;
+}
+
 export function parseCliArgs(argv = process.argv.slice(2)) {
   let tokenCA = null;
   let refresh = false;
@@ -732,13 +807,24 @@ export async function scanPoolDirect({
   diagnosticsCollector = null,
 }) {
   const poolAddress = pool.poolAddress;
+  const marker = getScannerWorkerMarker(workerId);
   await page.goto(
-    `https://app.lpagent.io/pools/${poolAddress}?tab=top`,
+    `https://app.lpagent.io/pools/${poolAddress}?tab=top#${marker}`,
     {
       waitUntil: "domcontentloaded",
       timeout: 120000,
     }
   );
+
+  try {
+    if (typeof page.evaluate === "function") {
+      await page.evaluate((m) => {
+        try {
+          window.name = m;
+        } catch {}
+      }, marker);
+    }
+  } catch {}
 
   if (navSettleMs > 0) {
     await sleep(navSettleMs);
@@ -1054,13 +1140,13 @@ export async function scanSelectedPools(options = {}) {
   process.on("SIGTERM", onSignal);
   browser?.on?.("disconnected", onDisconnect);
   try {
-    const page1 = await context.newPage();
+    const page1 = await getOrCreateScannerTab(context, 1);
     scannerPages.push(page1);
 
     const activeWorkerCount = Math.min(workers, pendingPools.length);
     let page2 = null;
     if (activeWorkerCount > 1) {
-      page2 = await context.newPage();
+      page2 = await getOrCreateScannerTab(context, 2, [page1]);
       scannerPages.push(page2);
     }
 
@@ -1217,14 +1303,8 @@ export async function scanSelectedPools(options = {}) {
     rateLimiter.destroy();
     process.off("SIGINT", onSignal);
     process.off("SIGTERM", onSignal);
-    // Close only scanner-owned tabs; keep CloakBrowser and existing tabs alive
-    for (const p of scannerPages) {
-      try {
-        if (!p.isClosed()) {
-          await p.close();
-        }
-      } catch {}
-    }
+    // Persistent scanner tabs are preserved across scan sessions.
+    // Do NOT close persistent scanner tabs or user tabs.
   }
 }
 

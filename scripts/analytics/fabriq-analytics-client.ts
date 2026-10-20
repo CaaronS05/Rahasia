@@ -3,6 +3,7 @@ import {
     getFabriqCdpUrl,
     fabriqFetch,
     isFabriqDlmmPool,
+    parseSafeNumber,
     type FabriqFetchOptions,
     type FabriqFetchCooldownCoordinator,
     SharedCooldownCoordinator,
@@ -26,6 +27,47 @@ export interface DiscoveredPoolItem {
     dex?: string;
     isDlmm: boolean;
     raw?: Record<string, unknown>;
+}
+
+export interface FabriqPoolCumulativeAggregate {
+    poolAddress: string;
+    wallet: string;
+    positionCount: number | null;
+    cumulativePnlUsd: number | null;
+    cumulativePnlPct: number | null;
+    cumulativeDurationSeconds: number | null;
+    earliestOpenedAt: string | null;
+    latestClosedAt: string | null;
+    totalAddUsd: number | null;
+    totalRemUsd: number | null;
+    totalFeeUsd: number | null;
+    pair?: string;
+    source: "Fabriq";
+    updatedAt: string;
+    selectionFingerprint?: string;
+    refreshFailed?: boolean;
+    refreshError?: string;
+    refreshPending?: boolean;
+}
+
+export function parseSafeIsoDate(val: unknown): string | null {
+    if (val === undefined || val === null || val === "") return null;
+    let d: Date;
+    if (typeof val === "number") {
+        const ms = val < 10_000_000_000 ? val * 1000 : val;
+        d = new Date(ms);
+    } else {
+        const num = Number(val);
+        if (!isNaN(num) && String(num) === String(val).trim()) {
+            const ms = num < 10_000_000_000 ? num * 1000 : num;
+            d = new Date(ms);
+        } else {
+            d = new Date(String(val));
+        }
+    }
+    const ms = d.getTime();
+    if (!Number.isFinite(ms)) return null;
+    return d.toISOString();
 }
 
 export interface FabriqPoolDiscoveryResult {
@@ -72,12 +114,180 @@ export const defaultPositionAnalyticsCooldown = new SharedCooldownCoordinator();
 
 export interface ClientLoggingOptions {
     onLog?: (msg: string) => void;
+    onRetry?: (info: { status?: number; attempt: number; delayMs: number; error?: unknown }) => void;
     max404Retries?: number;
     delay404Ms?: number;
     timeoutMs?: number;
     signal?: AbortSignal;
     concurrency?: number;
     cooldownCoordinator?: FabriqFetchCooldownCoordinator;
+}
+export interface AdaptiveLimiterOptions {
+    maxConcurrency?: number;
+    minConcurrency?: number;
+    minIntervalMs?: number;
+    onConcurrencyChange?: (newConcurrency: number, reason: string) => void;
+}
+
+export class AdaptiveRequestLimiter {
+    private maxConcurrency: number;
+    private minConcurrency: number;
+    private currentConcurrency: number;
+    private activeCount = 0;
+    private queue: Array<() => void> = [];
+    private consecutiveSuccesses = 0;
+    private recoveryThreshold = 5;
+    private minIntervalMs: number;
+    private lastDispatchTime = 0;
+    private timer: NodeJS.Timeout | null = null;
+    private onConcurrencyChange?: (newConcurrency: number, reason: string) => void;
+
+    constructor(options: AdaptiveLimiterOptions = {}) {
+        this.maxConcurrency = Math.min(8, Math.max(1, options.maxConcurrency ?? 8));
+        this.minConcurrency = Math.max(1, options.minConcurrency ?? 1);
+        this.currentConcurrency = this.maxConcurrency;
+        this.minIntervalMs = options.minIntervalMs ?? 50;
+        this.onConcurrencyChange = options.onConcurrencyChange;
+    }
+
+    getConcurrency(): number {
+        return this.currentConcurrency;
+    }
+
+    getActiveCount(): number {
+        return this.activeCount;
+    }
+
+    async acquire(signal?: AbortSignal): Promise<void> {
+        if (signal?.aborted) throw signal.reason ?? new Error("Operation aborted");
+        return new Promise<void>((resolve, reject) => {
+            const onAbort = () => {
+                const idx = this.queue.indexOf(resume);
+                if (idx !== -1) this.queue.splice(idx, 1);
+                reject(signal?.reason ?? new Error("Operation aborted"));
+            };
+            const resume = () => {
+                signal?.removeEventListener("abort", onAbort);
+                this.activeCount++;
+                this.lastDispatchTime = Date.now();
+                resolve();
+            };
+            signal?.addEventListener("abort", onAbort, { once: true });
+            this.queue.push(resume);
+            this.scheduleDrain();
+        });
+    }
+
+    release(): void {
+        this.activeCount = Math.max(0, this.activeCount - 1);
+        this.scheduleDrain();
+    }
+
+    recordSuccess(): void {
+        this.consecutiveSuccesses++;
+        if (this.consecutiveSuccesses >= this.recoveryThreshold) {
+            this.consecutiveSuccesses = 0;
+            if (this.currentConcurrency < this.maxConcurrency) {
+                this.currentConcurrency++;
+                this.onConcurrencyChange?.(this.currentConcurrency, "recovery_step");
+                this.scheduleDrain();
+            }
+        }
+    }
+
+    recordError(status?: number): void {
+        this.consecutiveSuccesses = 0;
+        if (status === 429 || (status !== undefined && status >= 500)) {
+            const prev = this.currentConcurrency;
+            this.currentConcurrency = Math.max(this.minConcurrency, Math.floor(this.currentConcurrency / 2));
+            if (this.currentConcurrency !== prev) {
+                this.onConcurrencyChange?.(this.currentConcurrency, `backoff_${status}`);
+            }
+        }
+    }
+
+    private scheduleDrain(): void {
+        if (this.timer) return;
+        const now = Date.now();
+        const waitMs = Math.max(0, this.lastDispatchTime + this.minIntervalMs - now);
+        this.timer = setTimeout(() => {
+            this.timer = null;
+            this.drain();
+        }, waitMs);
+    }
+
+    private drain(): void {
+        while (this.queue.length > 0 && this.activeCount < this.currentConcurrency) {
+            const next = this.queue.shift();
+            if (next) {
+                next();
+            }
+        }
+        if (this.queue.length > 0 && this.activeCount < this.currentConcurrency) {
+            this.scheduleDrain();
+        }
+    }
+}
+
+export function extractPoolSearchQueries(pairOrSymbol?: string): string[] {
+    if (!pairOrSymbol || typeof pairOrSymbol !== "string") return [];
+    const clean = pairOrSymbol.trim();
+    if (!clean) return [];
+
+    const GENERIC_TOKENS: Record<string, true> = { SOL: true, WSOL: true, USDC: true, USDT: true };
+    const parts = clean.split(/[\/\-\s]+/).map((s) => s.trim()).filter(Boolean);
+
+    if (parts.length <= 1) {
+        return parts.length === 1 ? [parts[0]] : [];
+    }
+
+    const baseSymbol = parts[0];
+    const quoteSymbol = parts[1];
+
+    const isBaseGeneric = Boolean(GENERIC_TOKENS[baseSymbol.toUpperCase()]);
+    const isQuoteGeneric = Boolean(GENERIC_TOKENS[quoteSymbol.toUpperCase()]);
+
+    const queries: string[] = [];
+
+    // Prioritize specific/non-generic token symbol
+    if (!isBaseGeneric) {
+        queries.push(baseSymbol);
+    }
+    if (!isQuoteGeneric) {
+        queries.push(quoteSymbol);
+    }
+
+    // Fallback if both tokens are generic (e.g. USDC before SOL)
+    if (queries.length === 0) {
+        if (quoteSymbol.toUpperCase() !== "SOL" && quoteSymbol.toUpperCase() !== "WSOL") {
+            queries.push(quoteSymbol);
+            queries.push(baseSymbol);
+        } else {
+            queries.push(baseSymbol);
+            queries.push(quoteSymbol);
+        }
+    }
+
+    return Array.from(new Set(queries));
+}
+
+export interface CumulativeFetchStats {
+    searchMode: "server_search" | "pagination" | "search_fallback_to_pagination";
+    queries: string[];
+    targetPoolIds: string[];
+    pagesFetched: number;
+    totalHttpRequests: number;
+    http500Count: number;
+    http429Count: number;
+    retriesCount: number;
+    activeConcurrency: number;
+    durationMs: number;
+}
+
+export interface CumulativeFetchOptions extends ClientLoggingOptions {
+    poolQueries?: string[];
+    limiter?: AdaptiveRequestLimiter;
+    onStats?: (stats: CumulativeFetchStats) => void;
 }
 
 export interface BoundedQueueOptions<TItem, TResult> {
@@ -347,6 +557,329 @@ export async function discoverWalletDlmmPools(
         pagesFetched,
     };
 }
+function isSolanaAddressCaseMismatch(candidate: string, canonical: string): boolean {
+    if (candidate === canonical || candidate.length !== canonical.length) return false;
+    for (let i = 0; i < candidate.length; i++) {
+        const codeA = candidate.charCodeAt(i);
+        const codeB = canonical.charCodeAt(i);
+        if (codeA === codeB) continue;
+        const isUpperA = codeA >= 65 && codeA <= 90;
+        const isLowerA = codeA >= 97 && codeA <= 122;
+        const isUpperB = codeB >= 65 && codeB <= 90;
+        const isLowerB = codeB >= 97 && codeB <= 122;
+        if ((isUpperA && isLowerB && codeA + 32 === codeB) || (isLowerA && isUpperB && codeB + 32 === codeA)) {
+            continue;
+        }
+        return false;
+    }
+    return true;
+}
+
+/**
+ * Fetch official Fabriq cumulative DLMM aggregates per pool for a wallet via GET /history/<wallet>/pnl-by-pool.
+ */
+export async function fetchWalletPoolCumulativeAggregates(
+    wallet: string,
+    poolIds?: string[],
+    options?: CumulativeFetchOptions
+): Promise<FabriqPoolCumulativeAggregate[]> {
+    const log = options?.onLog ?? ((msg: string) => console.log(msg));
+    log(`[FABRIQ-CUM] Fetching cumulative aggregates for wallet: ${wallet}`);
+    const allowedPoolIds = poolIds && poolIds.length > 0 ? new Set(poolIds.map((p) => p.trim())) : null;
+    const targetPoolIdList = allowedPoolIds ? Array.from(allowedPoolIds) : [];
+    const aggregates: FabriqPoolCumulativeAggregate[] = [];
+    const matchedTargetPoolIds = new Set<string>();
+    const allSeenPoolAddresses = new Set<string>();
+
+    const rawQueries = options?.poolQueries || [];
+    const queries = Array.from(new Set(rawQueries.map((q) => q.trim()).filter(Boolean)));
+
+    let totalHttpRequests = 0;
+    let pagesFetched = 0;
+    let http500Count = 0;
+    let http429Count = 0;
+    let retriesCount = 0;
+    const startTimeMs = Date.now();
+
+    const handleRetry = (info: { status?: number; attempt: number; delayMs: number; error?: unknown }) => {
+        retriesCount++;
+        if (info.status && info.status >= 500) http500Count++;
+        if (info.status === 429) http429Count++;
+        options?.limiter?.recordError(info.status);
+        options?.onRetry?.(info);
+    };
+
+    const executePageRequest = async (params: URLSearchParams): Promise<unknown> => {
+        totalHttpRequests++;
+        pagesFetched++;
+        if (options?.limiter) {
+            await options.limiter.acquire(options?.signal);
+        }
+        const fetchOpts: FabriqFetchOptions = {
+            onLog: log,
+            onRetry: handleRetry,
+            max404Retries: options?.max404Retries ?? DEFAULT_MAX_404_RETRIES,
+            delay404Ms: options?.delay404Ms ?? DEFAULT_DELAY_404_MS,
+            timeoutMs: options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+            signal: options?.signal,
+            cooldownCoordinator: options?.cooldownCoordinator ?? defaultPositionAnalyticsCooldown,
+        };
+        try {
+            const resJson = await fabriqFetch<unknown>(
+                `/history/${wallet}/pnl-by-pool`,
+                params,
+                fetchOpts
+            );
+            options?.limiter?.recordSuccess();
+            return resJson;
+        } catch (err: unknown) {
+            const errMsg = err instanceof Error ? err.message : String(err);
+            if (errMsg.includes("500") || errMsg.includes("Server error 5")) http500Count++;
+            if (errMsg.includes("429") || errMsg.includes("RATE_LIMITED")) http429Count++;
+            options?.limiter?.recordError();
+            throw err;
+        } finally {
+            options?.limiter?.release();
+        }
+    };
+
+    const extractItemsAndMeta = (resJson: unknown): { pageItems: unknown[]; paginationMeta: Record<string, unknown> | null } => {
+        let pageItems: unknown[] = [];
+        let paginationMeta: Record<string, unknown> | null = null;
+        if (Array.isArray(resJson)) {
+            pageItems = resJson;
+        } else if (resJson && typeof resJson === "object") {
+            const container = resJson as Record<string, unknown>;
+            if (container.pagination && typeof container.pagination === "object") {
+                paginationMeta = container.pagination as Record<string, unknown>;
+            } else if (container.meta && typeof container.meta === "object") {
+                paginationMeta = container.meta as Record<string, unknown>;
+            }
+
+            const dataNode = container.data;
+            if (Array.isArray(dataNode)) {
+                pageItems = dataNode;
+            } else if (dataNode && typeof dataNode === "object") {
+                const inner = dataNode as Record<string, unknown>;
+                if (inner.pagination && typeof inner.pagination === "object") {
+                    paginationMeta = inner.pagination as Record<string, unknown>;
+                } else if (inner.meta && typeof inner.meta === "object") {
+                    paginationMeta = inner.meta as Record<string, unknown>;
+                }
+                if (Array.isArray(inner.items)) pageItems = inner.items;
+                else if (Array.isArray(inner.pools)) pageItems = inner.pools;
+                else if (Array.isArray(inner.data)) pageItems = inner.data;
+            } else if (Array.isArray(container.items)) {
+                pageItems = container.items;
+            } else if (Array.isArray(container.pools)) {
+                pageItems = container.pools;
+            }
+        }
+        return { pageItems, paginationMeta };
+    };
+
+    const processItems = (pageItems: unknown[]): boolean => {
+        let hasNewPoolOnPage = false;
+        for (const item of pageItems) {
+            if (!item || typeof item !== "object") continue;
+            const row = item as Record<string, unknown>;
+            const poolObj = row.pool && typeof row.pool === "object" ? (row.pool as Record<string, unknown>) : null;
+
+            const poolIdCandidate =
+                row.pool_id ||
+                row.poolId ||
+                poolObj?.id ||
+                poolObj?.address ||
+                row.id;
+
+            if (!poolIdCandidate || typeof poolIdCandidate !== "string") continue;
+            const poolAddress = poolIdCandidate.trim();
+            if (!poolAddress) continue;
+
+            if (!allSeenPoolAddresses.has(poolAddress)) {
+                allSeenPoolAddresses.add(poolAddress);
+                hasNewPoolOnPage = true;
+            }
+
+            if (allowedPoolIds && !allowedPoolIds.has(poolAddress)) {
+                for (const canonical of allowedPoolIds) {
+                    if (isSolanaAddressCaseMismatch(poolAddress, canonical)) {
+                        log(
+                            `[FABRIQ-CUM] [${wallet}] Diagnostic: pool_id casing mismatch detected. Fabriq returned "${poolAddress}" but canonical is "${canonical}". Solana Base58 addresses are case-sensitive; treating as non-matching.`
+                        );
+                        break;
+                    }
+                }
+                continue;
+            }
+
+            const matchedPoolAddress = poolAddress;
+            if (matchedTargetPoolIds.has(matchedPoolAddress)) continue;
+            matchedTargetPoolIds.add(matchedPoolAddress);
+            let pair: string | undefined;
+            if (poolObj) {
+                const tokenX = poolObj.tokenX && typeof poolObj.tokenX === "object" ? (poolObj.tokenX as Record<string, unknown>) : null;
+                const tokenY = poolObj.tokenY && typeof poolObj.tokenY === "object" ? (poolObj.tokenY as Record<string, unknown>) : null;
+                const symX = typeof tokenX?.symbol === "string" ? tokenX.symbol : "";
+                const symY = typeof tokenY?.symbol === "string" ? tokenY.symbol : "";
+                if (symX && symY) {
+                    pair = `${symX}-${symY}`;
+                }
+            }
+
+            aggregates.push({
+                poolAddress: matchedPoolAddress,
+                wallet,
+                positionCount: parseSafeNumber(row.position_count),
+                cumulativePnlUsd: parseSafeNumber(row.total_pnl_usd),
+                cumulativePnlPct: parseSafeNumber(row.total_pnl_pct_usd),
+                cumulativeDurationSeconds: parseSafeNumber(row.duration),
+                earliestOpenedAt: parseSafeIsoDate(row.earliest_open_ts),
+                latestClosedAt: parseSafeIsoDate(row.latest_close_ts),
+                totalAddUsd: parseSafeNumber(row.total_add_usd),
+                totalRemUsd: parseSafeNumber(row.total_rem_usd),
+                totalFeeUsd: parseSafeNumber(row.total_fee_usd),
+                pair,
+                source: "Fabriq",
+                updatedAt: new Date().toISOString(),
+            });
+        }
+        return hasNewPoolOnPage;
+    };
+
+    const buildBaseParams = (pageNum: number): URLSearchParams => {
+        const params = new URLSearchParams();
+        params.set("page", String(pageNum));
+        params.set("limit", "100");
+        params.set("sortBy", "latest_close_ts");
+        params.set("sortOrder", "desc");
+        params.set("pnlCurrency", "USD");
+        params.set("timezone", "Asia/Jakarta");
+        params.append("sources", "wallet");
+        params.append("sources", "hawkfi");
+        params.set("pnlScope", "pool");
+        params.set("lastCloseScope", "pool");
+        params.set("durationScope", "pool");
+        params.set("depositsScope", "pool");
+        params.set("withdrawalsScope", "pool");
+        params.set("feesScope", "pool");
+        return params;
+    };
+
+    let searchMode: "server_search" | "pagination" | "search_fallback_to_pagination" = "server_search";
+
+    // PHASE 1: Server-side search if pool queries are provided and target pools specified
+    if (queries.length > 0 && allowedPoolIds && allowedPoolIds.size > 0) {
+        for (const query of queries) {
+            if (Array.from(allowedPoolIds).every((id) => matchedTargetPoolIds.has(id))) break;
+
+            let queryPage = 1;
+            while (true) {
+                const params = buildBaseParams(queryPage);
+                params.set("symbol", query);
+
+                const pageStartTime = Date.now();
+                const resJson = await executePageRequest(params);
+                const reqDurationMs = Date.now() - pageStartTime;
+
+                const { pageItems, paginationMeta } = extractItemsAndMeta(resJson);
+                log(`[FABRIQ-CUM] [${wallet}] [SEARCH: ${query}] Page ${queryPage}: fetched ${pageItems.length} items (${reqDurationMs}ms)`);
+
+                if (pageItems.length === 0) break;
+
+                processItems(pageItems);
+
+                if (Array.from(allowedPoolIds).every((id) => matchedTargetPoolIds.has(id))) break;
+                if (pageItems.length < 100) break;
+
+                if (paginationMeta) {
+                    const totalPages = parseSafeNumber(paginationMeta.totalPages ?? paginationMeta.total_pages);
+                    if (totalPages !== null && queryPage >= totalPages) break;
+                    if (paginationMeta.hasMore === false || paginationMeta.has_more === false) break;
+                    const totalCount = parseSafeNumber(paginationMeta.totalCount ?? paginationMeta.total ?? paginationMeta.count);
+                    if (totalCount !== null && (queryPage - 1) * 100 + pageItems.length >= totalCount) break;
+                }
+                queryPage++;
+            }
+        }
+    }
+
+    // PHASE 2: Fallback to pagination if targets remain unresolved or no search queries provided
+    const needsPagination = allowedPoolIds
+        ? !Array.from(allowedPoolIds).every((id) => matchedTargetPoolIds.has(id))
+        : true;
+    if (needsPagination) {
+        if (queries.length > 0 && allowedPoolIds && allowedPoolIds.size > 0) {
+            searchMode = "search_fallback_to_pagination";
+            log(`[FABRIQ-CUM] [${wallet}] Server search did not resolve all targets (${matchedTargetPoolIds.size}/${allowedPoolIds.size}); falling back to pagination`);
+        } else {
+            searchMode = "pagination";
+        }
+
+        let page = 1;
+        while (true) {
+            const params = buildBaseParams(page);
+
+            const pageStartTime = Date.now();
+            const resJson = await executePageRequest(params);
+            const reqDurationMs = Date.now() - pageStartTime;
+
+            const { pageItems, paginationMeta } = extractItemsAndMeta(resJson);
+            log(`[FABRIQ-CUM] [${wallet}] Page ${page}: fetched ${pageItems.length} items (${reqDurationMs}ms)`);
+
+            if (pageItems.length === 0) break;
+
+            const hasNew = processItems(pageItems);
+
+            if (allowedPoolIds && Array.from(allowedPoolIds).every((id) => matchedTargetPoolIds.has(id))) break;
+            if (pageItems.length < 100) break;
+
+            if (!hasNew) {
+                log(`[FABRIQ-CUM] [${wallet}] Page ${page}: no new pools discovered; terminating pagination`);
+                if (allowedPoolIds && !Array.from(allowedPoolIds).every((id) => matchedTargetPoolIds.has(id))) {
+                    throw new Error(
+                        `[FABRIQ-CUM] Pagination stagnant: page ${page} returned duplicate pools before all target pools were resolved`
+                    );
+                }
+                break;
+            }
+
+            if (paginationMeta) {
+                const totalPages = parseSafeNumber(paginationMeta.totalPages ?? paginationMeta.total_pages);
+                if (totalPages !== null && page >= totalPages) break;
+                if (paginationMeta.hasMore === false || paginationMeta.has_more === false) break;
+                const totalCount = parseSafeNumber(paginationMeta.totalCount ?? paginationMeta.total ?? paginationMeta.count);
+                if (totalCount !== null && (page - 1) * 100 + pageItems.length >= totalCount) break;
+            }
+
+            page++;
+        }
+    }
+
+    const durationMs = Date.now() - startTimeMs;
+    const activeConcurrency = options?.limiter?.getConcurrency() ?? 1;
+
+    const stats: CumulativeFetchStats = {
+        searchMode,
+        queries,
+        targetPoolIds: targetPoolIdList,
+        pagesFetched,
+        totalHttpRequests,
+        http500Count,
+        http429Count,
+        retriesCount,
+        activeConcurrency,
+        durationMs,
+    };
+
+    log(
+        `[FABRIQ-CUM] [${wallet}] mode=${searchMode} queries=${queries.join(",") || "none"} targets=${targetPoolIdList.join(",") || "none"} aggs=${aggregates.length} pages=${pagesFetched} reqs=${totalHttpRequests} 500=${http500Count} 429=${http429Count} retries=${retriesCount} concurrency=${activeConcurrency} (${durationMs}ms)`
+    );
+
+    options?.onStats?.(stats);
+    return aggregates;
+}
+
 
 /**
  * Fetch positions for discovered DLMM pools in bounded batches.

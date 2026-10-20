@@ -19,6 +19,8 @@ import {
   Search,
   Filter,
   X,
+  Droplets,
+  Activity,
 } from "lucide-react";
 import {
   fetchAlertsStatus,
@@ -35,6 +37,11 @@ import {
   pauseAlertsEngine,
   resumeAlertsEngine,
   isValidSolanaAddress,
+  getRpcHealthPresentation,
+  getProtocolIndicator,
+  isPollingStale,
+  formatWib,
+  formatLastSuccessfulPoll,
   type AlertsStatus,
   type WatchlistWallet,
   type ActivePosition,
@@ -45,29 +52,13 @@ import {
 } from "../lib/alertsApi";
 import "../alerts-view.css";
 
-type TabId = "watchlist" | "positions" | "events" | "telegram";
+type TabId = "positions" | "watchlist" | "events" | "telegram";
 
 function truncateAddress(addr: string, head = 4, tail = 4): string {
   if (!addr || addr.length <= head + tail) return addr || "—";
   return `${addr.slice(0, head)}...${addr.slice(-tail)}`;
 }
 
-function formatWib(timestamp: number | null | undefined): string {
-  if (!timestamp || timestamp <= 0) return "—";
-  const d = new Date(timestamp);
-  if (isNaN(d.getTime())) return "—";
-  return (
-    new Intl.DateTimeFormat("en-GB", {
-      timeZone: "Asia/Jakarta",
-      day: "2-digit",
-      month: "short",
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-      hour12: false,
-    }).format(d) + " WIB"
-  );
-}
 
 function getEventTypeBadgeClass(eventType: DlmmEventType): string {
   switch (eventType) {
@@ -86,8 +77,9 @@ function getEventTypeBadgeClass(eventType: DlmmEventType): string {
   }
 }
 
+
 export function AlertsView() {
-  const [activeTab, setActiveTab] = useState<TabId>("watchlist");
+  const [activeTab, setActiveTab] = useState<TabId>("positions");
 
   // State from server
   const [status, setStatus] = useState<AlertsStatus | null>(null);
@@ -125,7 +117,8 @@ export function AlertsView() {
   const [walletFilter, setWalletFilter] = useState<string>("ALL");
   const [eventTypeFilter, setEventTypeFilter] = useState<string>("ALL");
   const [searchQuery, setSearchQuery] = useState<string>("");
-
+  const [positionsSearch, setPositionsSearch] = useState<string>("");
+  const [liquidityFilter, setLiquidityFilter] = useState<"ALL" | "HAS_LIQUIDITY" | "ZERO_LIQUIDITY">("ALL");
   // Clipboard feedback
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
@@ -169,6 +162,7 @@ export function AlertsView() {
           totalPolls: 0,
           totalEventsEmitted: 0,
           lastPollAt: null,
+          lastSuccessfulPollAt: null,
           retryCount: 0,
           errorCount: 0,
           coverageGaps: [],
@@ -397,11 +391,54 @@ export function AlertsView() {
     }
   }, [effectiveStatus]);
 
+  // Unique pools count across active positions
+  const uniquePoolsCount = useMemo(() => {
+    const set = new Set<string>();
+    for (const p of positions) {
+      if (p.poolAddress) set.add(p.poolAddress);
+    }
+    return set.size;
+  }, [positions]);
+  const isStale = useMemo(() => isPollingStale(status), [status]);
+  const rpcHealth = useMemo(
+    () => getRpcHealthPresentation(effectiveStatus, status),
+    [effectiveStatus, status]
+  );
+
+  const protocolIndicator = useMemo(
+    () => getProtocolIndicator(status),
+    [status]
+  );
+
+  const enabledWalletsCount = useMemo(
+    () => wallets.filter((w) => w.enabled).length,
+    [wallets]
+  );
+
+  const activelyPollingCount = useMemo(() => {
+    if (effectiveStatus !== "RUNNING") return 0;
+    return status ? status.monitoredWalletsCount : enabledWalletsCount;
+  }, [effectiveStatus, status, enabledWalletsCount]);
+
+
   // Filtered positions
   const filteredPositions = useMemo(() => {
-    if (walletFilter === "ALL") return positions;
-    return positions.filter((p) => p.owner === walletFilter);
-  }, [positions, walletFilter]);
+    return positions.filter((p) => {
+      if (walletFilter !== "ALL" && p.owner !== walletFilter) return false;
+      if (liquidityFilter === "HAS_LIQUIDITY" && !p.hasLiquidity) return false;
+      if (liquidityFilter === "ZERO_LIQUIDITY" && p.hasLiquidity) return false;
+      if (positionsSearch.trim()) {
+        const q = positionsSearch.trim().toLowerCase();
+        const matchPos = p.positionAddress.toLowerCase().includes(q);
+        const matchPool = p.poolAddress.toLowerCase().includes(q);
+        const matchOwner = p.owner.toLowerCase().includes(q);
+        const ownerWallet = wallets.find((w) => w.address === p.owner);
+        const matchAlias = ownerWallet?.alias ? ownerWallet.alias.toLowerCase().includes(q) : false;
+        if (!matchPos && !matchPool && !matchOwner && !matchAlias) return false;
+      }
+      return true;
+    });
+  }, [positions, walletFilter, liquidityFilter, positionsSearch, wallets]);
 
   // Filtered events
   const filteredEvents = useMemo(() => {
@@ -446,82 +483,119 @@ export function AlertsView() {
     <div className="alerts-page">
       {/* Top Header */}
       <header className="alerts-header">
-        <div className="alerts-title">
-          <h1>
-            <Bell size={22} color="var(--green, #55d69d)" />
-            Alerts & Active Positions
-          </h1>
-          <p>Real-time Meteora DLMM active-position monitoring & dry-run alert engine</p>
-        </div>
-
-        <div className="alerts-header-actions">
-          {/* Status Indicator */}
-          <div className={`alerts-status-indicator ${statusBadgeClass}`}>
-            <span
-              className={`alerts-status-dot ${
-                effectiveStatus === "RUNNING" || effectiveStatus === "INITIALIZING" ? "pulse" : ""
-              }`}
-            />
-            <span>{effectiveStatus}</span>
+        <div className="alerts-header-top">
+          <div className="alerts-title">
+            <h1>
+              <span className="alerts-title-icon-wrap">
+                <Bell size={20} color="var(--orange, #ff5a2b)" />
+              </span>
+              Alerts & Active Positions
+            </h1>
+            <p>Real-time Meteora DLMM active-position monitoring & dry-run alert engine</p>
           </div>
 
-          {/* Engine Lifecycle Controls */}
-          {effectiveStatus === "RUNNING" && (
+          <div className="alerts-header-actions">
+            {/* Status Indicator */}
+            <div className={`alerts-status-indicator ${statusBadgeClass}`}>
+              <span
+                className={`alerts-status-dot ${
+                  effectiveStatus === "RUNNING" || effectiveStatus === "INITIALIZING" ? "pulse" : ""
+                }`}
+              />
+              <span>{effectiveStatus}</span>
+            </div>
+
+            {/* Engine Lifecycle Controls */}
+            {effectiveStatus === "RUNNING" && (
+              <button
+                className="alerts-btn alerts-btn-warning"
+                onClick={handleEnginePause}
+                disabled={engineMutating}
+                title="Pause monitoring for all wallets"
+              >
+                <Pause size={13} />
+                Pause Engine
+              </button>
+            )}
+
+            {effectiveStatus === "PAUSED" && (
+              <button
+                className="alerts-btn alerts-btn-primary"
+                onClick={handleEngineResume}
+                disabled={engineMutating}
+                title="Fresh resume monitoring from chain tip"
+              >
+                <Play size={13} />
+                Resume Engine
+              </button>
+            )}
+
+            {(effectiveStatus === "IDLE" || effectiveStatus === "STOPPED") && (
+              <button
+                className="alerts-btn alerts-btn-primary"
+                onClick={handleEngineStart}
+                disabled={engineMutating}
+                title="Start alerts monitoring engine"
+              >
+                <Play size={13} />
+                Start Engine
+              </button>
+            )}
+
+            {/* Auto Refresh Toggle */}
             <button
-              className="alerts-btn alerts-btn-warning"
-              onClick={handleEnginePause}
-              disabled={engineMutating}
-              title="Pause monitoring for all wallets"
+              className={`alerts-btn ${autoRefresh ? "alerts-btn-accent" : ""}`}
+              onClick={() => setAutoRefresh(!autoRefresh)}
+              title="Auto-refresh UI every 5 seconds (reads local control server RAM only)"
             >
-              <Pause size={13} />
-              Pause Engine
+              <Radio size={13} className={autoRefresh ? "pulse" : ""} />
+              {autoRefresh ? "Auto (5s)" : "Auto: Off"}
             </button>
-          )}
 
-          {effectiveStatus === "PAUSED" && (
+            {/* Manual Refresh */}
             <button
-              className="alerts-btn alerts-btn-primary"
-              onClick={handleEngineResume}
-              disabled={engineMutating}
-              title="Fresh resume monitoring from chain tip"
+              className="alerts-btn"
+              onClick={() => loadData(false)}
+              disabled={refreshing}
+              title="Refresh alerts state"
             >
-              <Play size={13} />
-              Resume Engine
+              <RotateCw size={13} className={refreshing ? "spin" : ""} />
+              Refresh
             </button>
-          )}
+          </div>
+        </div>
 
-          {(effectiveStatus === "IDLE" || effectiveStatus === "STOPPED") && (
-            <button
-              className="alerts-btn alerts-btn-primary"
-              onClick={handleEngineStart}
-              disabled={engineMutating}
-              title="Start alerts monitoring engine"
-            >
-              <Play size={13} />
-              Start Engine
-            </button>
-          )}
+        {/* Header Engine Telemetry Strip */}
+        <div className="alerts-header-strip">
+          <div className="alerts-strip-item">
+            <span className="alerts-strip-label">Cadence:</span>
+            <span className="alerts-strip-value">
+              {status?.configuredPollIntervalMs ? `${status.configuredPollIntervalMs / 1000}s target` : "5s target"}
+              <span className="alerts-strip-sub">
+                (eff: {status?.effectivePollIntervalMs ? `${status.effectivePollIntervalMs}ms` : "5,000ms"}
+                {status?.lastPollDurationMs !== null && status?.lastPollDurationMs !== undefined ? `, dur: ${status.lastPollDurationMs}ms` : ""})
+              </span>
+            </span>
+          </div>
 
-          {/* Auto Refresh Toggle */}
-          <button
-            className={`alerts-btn ${autoRefresh ? "alerts-btn-primary" : ""}`}
-            onClick={() => setAutoRefresh(!autoRefresh)}
-            title="Auto-refresh UI every 5 seconds (reads local control server RAM only)"
-          >
-            <Radio size={13} className={autoRefresh ? "pulse" : ""} />
-            {autoRefresh ? "Auto (5s)" : "Auto: Off"}
-          </button>
+          <div className="alerts-strip-item">
+            <span className="alerts-strip-label">Last Successful Poll:</span>
+            <span className="alerts-strip-value" style={isStale ? { color: "var(--amber, #f1c84d)" } : undefined}>
+              {formatLastSuccessfulPoll(status?.lastSuccessfulPollAt)}
+              {isStale && (
+                <span className="alerts-badge alerts-badge-amber alerts-stale-tag" style={{ marginLeft: 6 }}>
+                  STALE
+                </span>
+              )}
+            </span>
+          </div>
 
-          {/* Manual Refresh */}
-          <button
-            className="alerts-btn"
-            onClick={() => loadData(false)}
-            disabled={refreshing}
-            title="Refresh alerts state"
-          >
-            <RotateCw size={13} className={refreshing ? "spin" : ""} />
-            Refresh
-          </button>
+          <div className="alerts-strip-item">
+            <span className="alerts-strip-label">Protocol:</span>
+            <span className="alerts-strip-value" style={{ color: protocolIndicator.color }}>
+              {protocolIndicator.label}
+            </span>
+          </div>
         </div>
       </header>
 
@@ -570,102 +644,91 @@ export function AlertsView() {
           </div>
         </div>
       )}
+      {/* Stale Polling Warning */}
+      {effectiveStatus === "RUNNING" && isStale && (
+        <div className="alerts-banner alerts-banner-warning">
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <AlertTriangle size={16} />
+            <span>
+              <strong>Monitoring Freshness Warning:</strong>{" "}
+              {status?.lastSuccessfulPollAt ? (
+                <>Last successful poll was at {formatWib(status.lastSuccessfulPollAt)}. </>
+              ) : (
+                <>Awaiting First Successful Poll. </>
+              )}
+              Polling exceeds the{" "}
+              {status?.configuredPollIntervalMs ? `${status.configuredPollIntervalMs / 1000}s` : "5s"} cadence threshold. Live monitoring may be delayed.
+            </span>
+          </div>
+        </div>
+      )}
 
       {/* Overview Metric Cards */}
       <div className="alerts-overview-grid">
         <div className="alerts-card">
           <div className="alerts-card-label">
-            <Radio size={13} />
-            Monitoring State
-          </div>
-          <div className="alerts-card-value" style={{ color: effectiveStatus === "RUNNING" ? "var(--green)" : "inherit" }}>
-            {effectiveStatus}
-          </div>
-          <div className="alerts-card-subtext">
-            {status?.sdkCompatible ? "SDK Compatible: Yes" : "Meteora DLMM Program Verified"}
-          </div>
-        </div>
-
-        <div className="alerts-card">
-          <div className="alerts-card-label">
-            <Layers size={13} />
+            <Layers size={14} color="var(--orange, #ff5a2b)" />
             Monitored Wallets
           </div>
           <div className="alerts-card-value">
-            {status ? status.monitoredWalletsCount : 0}{" "}
-            <span style={{ fontSize: 13, fontWeight: 400, color: "var(--muted)" }}>
-              / {wallets.length} in watchlist
+            {activelyPollingCount}{" "}
+            <span className="alerts-card-unit">
+              polling / {enabledWalletsCount} enabled
             </span>
           </div>
           <div className="alerts-card-subtext">
-            {wallets.filter((w) => w.enabled).length} configured enabled
+            {effectiveStatus === "PAUSED" ? (
+              <span>Last sync: {formatLastSuccessfulPoll(status?.lastSuccessfulPollAt)} • {wallets.length} total in watchlist</span>
+            ) : (
+              <span>{enabledWalletsCount} configured active for live scanning • {wallets.length} in watchlist</span>
+            )}
           </div>
         </div>
 
         <div className="alerts-card">
           <div className="alerts-card-label">
-            <Database size={13} />
-            Active Positions
+            <Database size={14} color="var(--green, #55d69d)" />
+            Open DLMM Positions
           </div>
           <div className="alerts-card-value">
             {status ? status.activePositionsCount : positions.length}
           </div>
           <div className="alerts-card-subtext">
-            Open DLMM positions across active wallets
+            {positions.filter((p) => p.hasLiquidity).length} with liquidity • {positions.filter((p) => !p.hasLiquidity).length} zero-liq
           </div>
         </div>
 
         <div className="alerts-card">
           <div className="alerts-card-label">
-            <Bell size={13} />
-            Recent Activity Buffer
+            <Droplets size={14} color="#5ba4e6" />
+            Unique Pools
           </div>
           <div className="alerts-card-value">
-            {status ? status.bufferedEventsCount : events.length}{" "}
-            <span style={{ fontSize: 13, fontWeight: 400, color: "var(--muted)" }}>/ 100 max</span>
+            {uniquePoolsCount}
           </div>
           <div className="alerts-card-subtext">
-            {status ? status.bufferedPreviewsCount : previews.length} Telegram previews in RAM
+            Across {positions.length} active position{positions.length === 1 ? "" : "s"}
           </div>
         </div>
 
         <div className="alerts-card">
           <div className="alerts-card-label">
-            <Clock size={13} />
-            Cadence & Last Duration
+            <Activity size={14} color={rpcHealth.color} />
+            RPC & Polling Health
           </div>
-          <div className="alerts-card-value" style={{ fontSize: 16, paddingTop: 2 }}>
-            {status?.configuredPollIntervalMs ? `${status.configuredPollIntervalMs / 1000}s target` : "5s target"}
-          </div>
-          <div className="alerts-card-subtext">
-            {status?.effectivePollIntervalMs ? `Effective: ${status.effectivePollIntervalMs}ms` : "Cadence: active"}{" "}
-            {status?.lastPollDurationMs !== null && status?.lastPollDurationMs !== undefined ? `(dur: ${status.lastPollDurationMs}ms)` : ""}
-          </div>
-        </div>
-
-        <div className="alerts-card">
-          <div className="alerts-card-label">
-            <Clock size={13} />
-            Last Successful Poll
-          </div>
-          <div className="alerts-card-value" style={{ fontSize: 14, paddingTop: 3 }}>
-            {formatWib(status?.lastSuccessfulPollAt || status?.lastPollAt)}
+          <div className="alerts-card-value" style={{ color: rpcHealth.color }}>
+            {rpcHealth.label}
           </div>
           <div className="alerts-card-subtext">
-            Cycles: {status?.totalPollsSuccessful ?? 0} ok / {status?.totalPollsPartial ?? 0} part / {status?.totalPollsFailed ?? 0} fail ({status?.totalPollsAttempted ?? status?.totalPolls ?? 0} total)
-          </div>
-        </div>
-
-        <div className="alerts-card">
-          <div className="alerts-card-label">
-            <ShieldAlert size={13} />
-            RPC Health & 429 Rate Limits
-          </div>
-          <div className="alerts-card-value">
-            {status ? `${status.rpcErrorCount ?? status.errorCount} err / ${status.http429Count ?? 0} 429s` : "0 / 0"}
-          </div>
-          <div className="alerts-card-subtext">
-            {status?.coverageGaps ? `${status.coverageGaps.length} coverage gaps` : "0 gaps"} ({status?.retryCount ?? 0} retries)
+            {status ? (
+              isStale ? (
+                <span style={{ color: "var(--amber, #f1c84d)" }}>
+                  Warning: No successful response in &gt;{status.configuredPollIntervalMs ? Math.round((status.configuredPollIntervalMs * 3) / 1000) : 15}s • Historical: {status.totalPollsSuccessful ?? 0} ok
+                </span>
+              ) : (
+                `Historical: ${status.totalPollsSuccessful ?? 0} cycles ok • ${status.http429Count ?? 0} 429s • ${status.retryCount ?? 0} retries`
+              )
+            ) : "No connection"}
           </div>
         </div>
       </div>
@@ -673,19 +736,19 @@ export function AlertsView() {
       {/* Navigation Tabs */}
       <div className="alerts-tabs">
         <button
-          className={`alerts-tab ${activeTab === "watchlist" ? "active" : ""}`}
-          onClick={() => setActiveTab("watchlist")}
-        >
-          Wallet Watchlist
-          <span className="alerts-tab-badge">{wallets.length}</span>
-        </button>
-
-        <button
           className={`alerts-tab ${activeTab === "positions" ? "active" : ""}`}
           onClick={() => setActiveTab("positions")}
         >
           Active Positions
           <span className="alerts-tab-badge">{positions.length}</span>
+        </button>
+
+        <button
+          className={`alerts-tab ${activeTab === "watchlist" ? "active" : ""}`}
+          onClick={() => setActiveTab("watchlist")}
+        >
+          Wallet Watchlist
+          <span className="alerts-tab-badge">{wallets.length}</span>
         </button>
 
         <button
@@ -900,30 +963,60 @@ export function AlertsView() {
         </div>
       )}
 
-      {/* TAB 2: ACTIVE POSITIONS */}
+      {/* TAB: ACTIVE POSITIONS */}
       {activeTab === "positions" && (
         <div className="alerts-section">
           {/* Positions Filter Bar */}
           <div className="alerts-filters-bar">
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <Filter size={13} color="var(--muted)" />
-              <span style={{ fontSize: 12, color: "var(--muted)" }}>Filter by Wallet:</span>
-              <select
-                className="alerts-input"
-                value={walletFilter}
-                onChange={(e) => setWalletFilter(e.target.value)}
-              >
-                <option value="ALL">All Monitored Wallets ({positions.length})</option>
-                {uniqueWallets.map((w) => (
-                  <option key={w.address} value={w.address}>
-                    {w.alias ? `${w.alias} (${truncateAddress(w.address)})` : w.address}
-                  </option>
-                ))}
-              </select>
+            <div className="alerts-filters-left">
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <Filter size={13} color="var(--muted)" />
+                <span style={{ fontSize: 12, color: "var(--muted)" }}>Wallet:</span>
+                <select
+                  className="alerts-input"
+                  value={walletFilter}
+                  onChange={(e) => setWalletFilter(e.target.value)}
+                >
+                  <option value="ALL">All Monitored Wallets ({uniqueWallets.length} wallet{uniqueWallets.length === 1 ? "" : "s"})</option>
+                  {uniqueWallets.map((w) => (
+                    <option key={w.address} value={w.address}>
+                      {w.alias ? `${w.alias} (${truncateAddress(w.address)})` : truncateAddress(w.address)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontSize: 12, color: "var(--muted)" }}>Liquidity:</span>
+                <select
+                  className="alerts-input"
+                  value={liquidityFilter}
+                  onChange={(e) => setLiquidityFilter(e.target.value as any)}
+                >
+                  <option value="ALL">All Liquidity States</option>
+                  <option value="HAS_LIQUIDITY">Active Liquidity Only</option>
+                  <option value="ZERO_LIQUIDITY">Zero Liquidity Only</option>
+                </select>
+              </div>
             </div>
 
-            <div style={{ marginLeft: "auto", fontSize: 12, color: "var(--muted)" }}>
-              Showing {filteredPositions.length} open position{filteredPositions.length === 1 ? "" : "s"}
+            <div className="alerts-search-wrap">
+              <input
+                type="text"
+                className="alerts-input alerts-search-input"
+                placeholder="Search position, pool, or wallet..."
+                value={positionsSearch}
+                onChange={(e) => setPositionsSearch(e.target.value)}
+              />
+              <Search
+                size={13}
+                color="var(--muted)"
+                className="alerts-search-icon"
+              />
+            </div>
+
+            <div className="alerts-filters-count">
+              Showing {filteredPositions.length} of {positions.length} position{filteredPositions.length === 1 ? "" : "s"}
             </div>
           </div>
 
@@ -940,117 +1033,199 @@ export function AlertsView() {
             </div>
           )}
 
-          {/* Positions Table */}
-          <div className="alerts-table-container">
-            <table className="alerts-table">
-              <thead>
-                <tr>
-                  <th>Position Address</th>
-                  <th>Owner Wallet</th>
-                  <th>Pool Address</th>
-                  <th>Version</th>
-                  <th>Liquidity Status</th>
-                  <th>Discovered At</th>
-                  <th>Last Updated</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredPositions.length === 0 ? (
-                  <tr>
-                    <td colSpan={7} style={{ textAlign: "center", padding: "40px 14px", color: "var(--muted)" }}>
-                      {positionsError
-                        ? "Position discovery encountered an error (shown above)."
-                        : "No active positions found for the selected wallet filter. Positions appear here once discovered on-chain."}
-                    </td>
-                  </tr>
-                ) : (
-                  filteredPositions.map((pos) => {
-                    const ownerWallet = wallets.find((w) => w.address === pos.owner);
-                    const ownerLabel = ownerWallet?.alias
-                      ? `${ownerWallet.alias} (${truncateAddress(pos.owner)})`
-                      : truncateAddress(pos.owner);
+          {/* Position Card Grid */}
+          {filteredPositions.length === 0 ? (
+            <div className="alerts-card alerts-empty-state">
+              <Database size={32} color="var(--muted)" />
+              <h4>No active positions found</h4>
+              <p>
+                {positionsError
+                  ? "Position discovery encountered an error (shown above)."
+                  : "No positions match the current filters. Positions appear here once discovered on-chain for actively monitored wallets."}
+              </p>
+            </div>
+          ) : (
+            <div className="alerts-positions-grid">
+              {filteredPositions.map((pos) => {
+                const ownerWallet = wallets.find((w) => w.address === pos.owner);
 
-                    return (
-                      <tr key={pos.positionAddress}>
-                        <td>
-                          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                            <span className="alerts-monospace" title={pos.positionAddress}>
-                              {truncateAddress(pos.positionAddress, 6, 6)}
+                return (
+                  <div key={pos.positionAddress} className="alerts-pos-card">
+                    {/* Card Top Row: Version & Liquidity & Quick Actions */}
+                    <div className="alerts-pos-header">
+                      <div className="alerts-pos-badges">
+                        <span className="alerts-badge alerts-badge-muted">{pos.version}</span>
+                        {pos.hasLiquidity ? (
+                          <span className="alerts-badge alerts-badge-green">
+                            <span className="alerts-status-dot pulse" style={{ width: 5, height: 5 }} />
+                            Active Liquidity
+                          </span>
+                        ) : (
+                          <span
+                            className="alerts-badge alerts-badge-amber"
+                            title="Open position with zero liquidity. Zero liquidity is not a closed position."
+                          >
+                            Zero Liquidity (Active)
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="alerts-pos-quick-actions">
+                        <button
+                          className="alerts-link-btn"
+                          onClick={() => copyToClipboard(pos.positionAddress, `pos_${pos.positionAddress}`)}
+                          title="Copy position address"
+                        >
+                          {copiedKey === `pos_${pos.positionAddress}` ? (
+                            <Check size={13} color="var(--green)" />
+                          ) : (
+                            <Copy size={13} />
+                          )}
+                        </button>
+                        <a
+                          href={`https://explorer.solana.com/address/${pos.positionAddress}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="alerts-link-btn"
+                          title="View position on Solana Explorer"
+                        >
+                          <ExternalLink size={13} />
+                        </a>
+                      </div>
+                    </div>
+
+                    {/* Primary Identifier: DLMM Pool Address */}
+                    <div className="alerts-pos-primary-pool">
+                      <div className="alerts-pos-primary-header">
+                        <span className="alerts-pos-field-label">Meteora DLMM Pool</span>
+                        <div className="alerts-pos-inline-actions">
+                          <button
+                            className="alerts-link-btn"
+                            onClick={() => copyToClipboard(pos.poolAddress, `pool_${pos.positionAddress}`)}
+                            title="Copy pool address"
+                          >
+                            {copiedKey === `pool_${pos.positionAddress}` ? (
+                              <Check size={12} color="var(--green)" />
+                            ) : (
+                              <Copy size={12} />
+                            )}
+                          </button>
+                          <a
+                            href={`https://explorer.solana.com/address/${pos.poolAddress}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="alerts-link-btn"
+                            title="View pool on Solana Explorer"
+                          >
+                            <ExternalLink size={12} />
+                          </a>
+                        </div>
+                      </div>
+                      <a
+                        href={`/pools/${pos.poolAddress}`}
+                        className="alerts-monospace alerts-pos-pool-link"
+                        title={`View pool insight: ${pos.poolAddress}`}
+                      >
+                        {truncateAddress(pos.poolAddress, 8, 8)}
+                      </a>
+                    </div>
+
+                    {/* Streamlined Metadata Grid: Position & Watched Wallet */}
+                    <div className="alerts-pos-details-grid">
+                      <div className="alerts-pos-detail-item">
+                        <span className="alerts-pos-field-label">Position</span>
+                        <div className="alerts-pos-detail-row">
+                          <span className="alerts-monospace alerts-pos-addr" title={pos.positionAddress}>
+                            {truncateAddress(pos.positionAddress, 6, 6)}
+                          </span>
+                          <button
+                            className="alerts-link-btn alerts-pos-mini-btn"
+                            onClick={() => copyToClipboard(pos.positionAddress, `pos_${pos.positionAddress}`)}
+                            title="Copy position address"
+                          >
+                            {copiedKey === `pos_${pos.positionAddress}` ? (
+                              <Check size={11} color="var(--green)" />
+                            ) : (
+                              <Copy size={11} />
+                            )}
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="alerts-pos-detail-item">
+                        <span className="alerts-pos-field-label">Watched Wallet</span>
+                        <div className="alerts-pos-detail-row">
+                          <div className="alerts-pos-owner-block">
+                            {ownerWallet?.alias && (
+                              <span className="alerts-pos-owner-alias">{ownerWallet.alias}</span>
+                            )}
+                            <span className="alerts-monospace alerts-pos-owner-addr" title={pos.owner}>
+                              {truncateAddress(pos.owner, ownerWallet?.alias ? 4 : 6, 4)}
                             </span>
+                          </div>
+                          <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
                             <button
-                              className="alerts-link-btn"
-                              onClick={() => copyToClipboard(pos.positionAddress, `pos_${pos.positionAddress}`)}
-                              title="Copy position address"
+                              className="alerts-link-btn alerts-pos-mini-btn"
+                              onClick={() => copyToClipboard(pos.owner, `own_${pos.positionAddress}`)}
+                              title="Copy wallet address"
                             >
-                              {copiedKey === `pos_${pos.positionAddress}` ? (
-                                <Check size={12} color="var(--green)" />
+                              {copiedKey === `own_${pos.positionAddress}` ? (
+                                <Check size={11} color="var(--green)" />
                               ) : (
-                                <Copy size={12} />
+                                <Copy size={11} />
                               )}
                             </button>
                             <a
-                              href={`https://explorer.solana.com/address/${pos.positionAddress}`}
+                              href={`https://explorer.solana.com/address/${pos.owner}`}
                               target="_blank"
                               rel="noreferrer"
                               className="alerts-link-btn"
-                              title="View on Solana Explorer"
+                              title="View wallet on Solana Explorer"
                             >
-                              <ExternalLink size={12} />
+                              <ExternalLink size={11} />
                             </a>
                           </div>
-                        </td>
-                        <td>
-                          <span title={pos.owner} className="alerts-monospace">
-                            {ownerLabel}
-                          </span>
-                        </td>
-                        <td>
-                          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                            <a
-                              href={`/pools/${pos.poolAddress}`}
-                              style={{ color: "var(--green, #55d69d)", textDecoration: "none" }}
-                              className="alerts-monospace"
-                              title={`View pool insight: ${pos.poolAddress}`}
-                            >
-                              {truncateAddress(pos.poolAddress, 5, 5)}
-                            </a>
-                            <button
-                              className="alerts-link-btn"
-                              onClick={() => copyToClipboard(pos.poolAddress, `pool_${pos.poolAddress}`)}
-                              title="Copy pool address"
-                            >
-                              {copiedKey === `pool_${pos.poolAddress}` ? (
-                                <Check size={12} color="var(--green)" />
-                              ) : (
-                                <Copy size={12} />
-                              )}
-                            </button>
-                          </div>
-                        </td>
-                        <td>
-                          <span className="alerts-badge alerts-badge-muted">{pos.version}</span>
-                        </td>
-                        <td>
-                          {pos.hasLiquidity ? (
-                            <span className="alerts-badge alerts-badge-green">Has Liquidity</span>
-                          ) : (
-                            <span
-                              className="alerts-badge alerts-badge-amber"
-                              title="Open position with zero liquidity. Zero liquidity is not a closed position."
-                            >
-                              Zero Liquidity (Active)
-                            </span>
-                          )}
-                        </td>
-                        <td style={{ color: "var(--muted)" }}>{formatWib(pos.discoveredAt)}</td>
-                        <td style={{ color: "var(--muted)" }}>{formatWib(pos.lastUpdatedAt)}</td>
-                      </tr>
-                    );
-                  })
-                )}
-              </tbody>
-            </table>
-          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Lifecycle Timestamps */}
+                    <div className="alerts-pos-timestamps">
+                      <div className="alerts-pos-time-col">
+                        <span className="alerts-pos-time-label">Discovered</span>
+                        <span className="alerts-pos-time-val">{formatWib(pos.discoveredAt)}</span>
+                      </div>
+                      <div className="alerts-pos-time-col">
+                        <span className="alerts-pos-time-label">Last Updated</span>
+                        <span className="alerts-pos-time-val">{formatWib(pos.lastUpdatedAt)}</span>
+                      </div>
+                    </div>
+
+                    {/* Card Actions Footer */}
+                    <div className="alerts-pos-actions-footer">
+                      <a
+                        href={`/pools/${pos.poolAddress}`}
+                        className="alerts-btn alerts-btn-sm alerts-btn-primary"
+                        style={{ flex: 1, justifyContent: "center" }}
+                      >
+                        Inspect Pool
+                      </a>
+                      <a
+                        href={`https://explorer.solana.com/address/${pos.positionAddress}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="alerts-btn alerts-btn-sm"
+                        style={{ flex: 1, justifyContent: "center" }}
+                      >
+                        <ExternalLink size={12} />
+                        Explorer
+                      </a>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 

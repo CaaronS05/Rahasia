@@ -104,6 +104,8 @@ class MockPage {
   id: string;
   _url = "about:blank";
   _closed = false;
+  _windowName = "";
+  bringToFrontCalled = false;
   options: MockPageOptions;
 
   constructor(options: MockPageOptions = {}) {
@@ -123,6 +125,10 @@ class MockPage {
     this._closed = true;
   }
 
+  async bringToFront(): Promise<void> {
+    this.bringToFrontCalled = true;
+  }
+
   async goto(url: string): Promise<void> {
     if (this._closed) throw new Error("Target page closed");
     if (this.options.browser && !this.options.browser.isConnected()) {
@@ -133,21 +139,31 @@ class MockPage {
   }
 
   async evaluate(
-    _fn: unknown,
-    args: { poolAddress: string; pageNumber: number }
-  ): Promise<{
-    ok: boolean;
-    status: number;
-    retryAfterSec: number | null;
-    text: string;
-  }> {
+    fn: unknown,
+    args?: unknown
+  ): Promise<unknown> {
     if (this._closed) throw new Error("Target page closed");
     if (this.options.browser && !this.options.browser.isConnected()) {
       throw new Error("Target page closed due to browser disconnect");
     }
 
-    const { poolAddress, pageNumber } = args;
-    this.options.onRequest?.(poolAddress, pageNumber, this.id);
+    if (typeof fn === "function") {
+      const fnStr = fn.toString();
+      if (fnStr.includes("window.name =") || fnStr.includes("window.name=")) {
+        this._windowName = typeof args === "string" ? args : "";
+        return undefined;
+      }
+      if (fnStr.includes("window.name")) {
+        return this._windowName || "";
+      }
+    }
+
+    const evaluatedArgs = (args && typeof args === "object" ? args : {}) as { poolAddress?: string; pageNumber?: number };
+    const poolAddress = evaluatedArgs.poolAddress ?? "";
+    const pageNumber = evaluatedArgs.pageNumber ?? 1;
+    if (poolAddress) {
+      this.options.onRequest?.(poolAddress, pageNumber, this.id);
+    }
 
     if (this.options.browser && !this.options.browser.isConnected()) {
       throw new Error("Browser CDP session disconnected");
@@ -293,7 +309,8 @@ describe("CloakBrowser 2-Tab LP Agent Selected Pool Scanner Suite", () => {
     });
 
     assert.equal(createdPages.length, 1, "Only 1 scanner tab should be created for 1 worker");
-    assert.equal(createdPages[0].isClosed(), true, "Scanner tab must be closed when complete");
+    assert.equal(createdPages[0].isClosed(), false, "Scanner tab must remain open (persistent) when complete");
+    assert.equal(createdPages[0].bringToFrontCalled, false, "bringToFront must not be called");
     assert.equal(result.completedPoolsMap.size, 2);
     assert.equal(result.uniqueWallets, 2);
 
@@ -341,8 +358,10 @@ describe("CloakBrowser 2-Tab LP Agent Selected Pool Scanner Suite", () => {
 
     assert.equal(createdPages.length, 2, "Exactly 2 scanner tabs must be opened for 2 workers");
     assert.notEqual(createdPages[0].id, createdPages[1].id, "Tabs must be distinct");
-    assert.equal(createdPages[0].isClosed(), true, "Tab 1 must be closed on completion");
-    assert.equal(createdPages[1].isClosed(), true, "Tab 2 must be closed on completion");
+    assert.equal(createdPages[0].isClosed(), false, "Tab 1 must remain open (persistent) on completion");
+    assert.equal(createdPages[1].isClosed(), false, "Tab 2 must remain open (persistent) on completion");
+    assert.equal(createdPages[0].bringToFrontCalled, false, "bringToFront must not be called on tab 1");
+    assert.equal(createdPages[1].bringToFrontCalled, false, "bringToFront must not be called on tab 2");
     assert.equal(browser.isConnected(), true, "Browser must remain connected after scan");
   });
 
@@ -1212,6 +1231,325 @@ describe("CloakBrowser 2-Tab LP Agent Selected Pool Scanner Suite", () => {
     assert.ok(!serialized.includes("cookie"));
   });
 
+  // ---------------------------------------------------------------------------
+  // 20. Persistent Tab Reuse and Background Invariants
+  // ---------------------------------------------------------------------------
+  it("20. First scan creates scanner tab and second scan reuses same tab without calling newPage (1 worker)", async () => {
+    const dataMap: Record<string, Record<number, TopLperRow[]>> = {
+      [POOL_A]: { 1: [{ owner: "WalletA" }] },
+      [POOL_B]: { 1: [{ owner: "WalletB" }] },
+    };
+
+    let newPageCalls = 0;
+    const context = new MockBrowserContext({ dataMap });
+    const origNewPage = context.newPage.bind(context);
+    context.newPage = async () => {
+      newPageCalls++;
+      return origNewPage();
+    };
+    const browser = new MockBrowser(context);
+
+    // First scan
+    const res1 = await scanSelectedPools({
+      tokenCA: TEST_TOKEN,
+      pools: [POOL_A],
+      workers: 1,
+      outputDir: tmpDir,
+      discoverTokenPoolsFn: createMockDiscoveryResult([
+        { poolAddress: POOL_A, pair: "TEST/SOL" },
+      ]),
+      context: context as unknown as Parameters<typeof scanSelectedPools>[0]["context"],
+      browser: browser as unknown as Parameters<typeof scanSelectedPools>[0]["browser"],
+      minPageDelay: 0,
+      maxPageDelay: 0,
+      minPoolDelay: 0,
+      maxPoolDelay: 0,
+    });
+
+    assert.equal(newPageCalls, 1, "First scan should create exactly 1 scanner tab");
+    const tab1 = context.pages()[0];
+    assert.equal(tab1.isClosed(), false, "Tab must be preserved after first scan");
+    assert.equal(tab1.bringToFrontCalled, false, "bringToFront must not be called");
+
+    // Second scan on same context with different pool
+    const tmpDir2 = await fs.mkdtemp(path.join(os.tmpdir(), "dllm-pool-scan-test2-"));
+    try {
+      const res2 = await scanSelectedPools({
+        tokenCA: TEST_TOKEN,
+        pools: [POOL_B],
+        workers: 1,
+        outputDir: tmpDir2,
+        discoverTokenPoolsFn: createMockDiscoveryResult([
+          { poolAddress: POOL_B, pair: "TEST/USDC" },
+        ]),
+        context: context as unknown as Parameters<typeof scanSelectedPools>[0]["context"],
+        browser: browser as unknown as Parameters<typeof scanSelectedPools>[0]["browser"],
+        minPageDelay: 0,
+        maxPageDelay: 0,
+        minPoolDelay: 0,
+        maxPoolDelay: 0,
+      });
+
+      assert.equal(newPageCalls, 1, "Second scan must NOT call newPage (reuses existing tab)");
+      assert.equal(context.pages().length, 1, "Total pages count in context must remain 1");
+      assert.equal(tab1.isClosed(), false, "Tab must remain open after second scan");
+      assert.ok(tab1.url().includes(POOL_B), "Tab must have navigated to POOL_B");
+      assert.ok(tab1.url().includes("#dllm-scanner-worker-1"), "Tab URL must retain worker marker hash");
+      assert.equal(tab1.bringToFrontCalled, false, "bringToFront must not be called in second scan");
+    } finally {
+      await fs.rm(tmpDir2, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
+  it("21. Two-worker scan creates two persistent tabs and subsequent scan reuses both without newPage", async () => {
+    const dataMap: Record<string, Record<number, TopLperRow[]>> = {
+      [POOL_A]: { 1: [{ owner: "WalletA" }] },
+      [POOL_B]: { 1: [{ owner: "WalletB" }] },
+      [POOL_C]: { 1: [{ owner: "WalletC" }] },
+      [POOL_D]: { 1: [{ owner: "WalletD" }] },
+    };
+
+    let newPageCalls = 0;
+    const context = new MockBrowserContext({ dataMap });
+    const origNewPage = context.newPage.bind(context);
+    context.newPage = async () => {
+      newPageCalls++;
+      return origNewPage();
+    };
+    const browser = new MockBrowser(context);
+
+    // Run 1: 2 workers scanning POOL_A and POOL_B
+    await scanSelectedPools({
+      tokenCA: TEST_TOKEN,
+      pools: [POOL_A, POOL_B],
+      workers: 2,
+      outputDir: tmpDir,
+      discoverTokenPoolsFn: createMockDiscoveryResult([
+        { poolAddress: POOL_A, pair: "TEST/SOL" },
+        { poolAddress: POOL_B, pair: "TEST/USDC" },
+      ]),
+      context: context as unknown as Parameters<typeof scanSelectedPools>[0]["context"],
+      browser: browser as unknown as Parameters<typeof scanSelectedPools>[0]["browser"],
+      minPageDelay: 0,
+      maxPageDelay: 0,
+      minPoolDelay: 0,
+      maxPoolDelay: 0,
+    });
+
+    assert.equal(newPageCalls, 2, "First 2-worker scan creates exactly 2 tabs");
+    const pagesRun1 = context.pages();
+    assert.equal(pagesRun1.length, 2);
+    assert.equal(pagesRun1[0].isClosed(), false, "Tab 1 preserved");
+    assert.equal(pagesRun1[1].isClosed(), false, "Tab 2 preserved");
+
+    // Run 2: 2 workers scanning POOL_C and POOL_D
+    const tmpDir2 = await fs.mkdtemp(path.join(os.tmpdir(), "dllm-pool-scan-test2-"));
+    try {
+      await scanSelectedPools({
+        tokenCA: TEST_TOKEN,
+        pools: [POOL_C, POOL_D],
+        workers: 2,
+        outputDir: tmpDir2,
+        discoverTokenPoolsFn: createMockDiscoveryResult([
+          { poolAddress: POOL_C, pair: "TEST/SOL" },
+          { poolAddress: POOL_D, pair: "TEST/USDC" },
+        ]),
+        context: context as unknown as Parameters<typeof scanSelectedPools>[0]["context"],
+        browser: browser as unknown as Parameters<typeof scanSelectedPools>[0]["browser"],
+        minPageDelay: 0,
+        maxPageDelay: 0,
+        minPoolDelay: 0,
+        maxPoolDelay: 0,
+      });
+
+      assert.equal(newPageCalls, 2, "Second 2-worker scan must make 0 newPage calls");
+      assert.equal(context.pages().length, 2, "Tab count must remain exactly 2");
+      assert.equal(pagesRun1[0].isClosed(), false);
+      assert.equal(pagesRun1[1].isClosed(), false);
+    } finally {
+      await fs.rm(tmpDir2, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
+  it("22. Failed scans preserve persistent tabs for recovery without closing", async () => {
+    const dataMap: Record<string, Record<number, TopLperRow[]>> = {
+      [POOL_A]: { 1: [{ owner: "WalletA" }] },
+    };
+    const statusOverrides: Record<string, { status: number; text: string }> = {
+      [`${POOL_A}:1`]: { status: 500, text: "Internal Server Error" },
+    };
+
+    const context = new MockBrowserContext({ dataMap, statusOverrides });
+    const browser = new MockBrowser(context);
+
+    let failed = false;
+    try {
+      await scanSelectedPools({
+        tokenCA: TEST_TOKEN,
+        pools: [POOL_A],
+        workers: 1,
+        outputDir: tmpDir,
+        discoverTokenPoolsFn: createMockDiscoveryResult([
+          { poolAddress: POOL_A, pair: "TEST/SOL" },
+        ]),
+        context: context as unknown as Parameters<typeof scanSelectedPools>[0]["context"],
+        browser: browser as unknown as Parameters<typeof scanSelectedPools>[0]["browser"],
+        maxRetries: 0,
+        minPageDelay: 0,
+        maxPageDelay: 0,
+        minPoolDelay: 0,
+        maxPoolDelay: 0,
+      });
+    } catch {
+      failed = true;
+    }
+
+    assert.equal(failed, true, "Scan should have failed due to HTTP 500");
+    const pages = context.pages();
+    assert.equal(pages.length, 1, "Scanner tab should exist");
+    assert.equal(pages[0].isClosed(), false, "Scanner tab must remain open despite failure");
+  });
+
+  it("23. Manually closed tab recovery: recreates only closed tab while keeping existing open tab", async () => {
+    const dataMap: Record<string, Record<number, TopLperRow[]>> = {
+      [POOL_A]: { 1: [{ owner: "WalletA" }] },
+      [POOL_B]: { 1: [{ owner: "WalletB" }] },
+    };
+
+    let newPageCalls = 0;
+    const context = new MockBrowserContext({ dataMap });
+    const origNewPage = context.newPage.bind(context);
+    context.newPage = async () => {
+      newPageCalls++;
+      return origNewPage();
+    };
+    const browser = new MockBrowser(context);
+
+    // Initial 2-worker scan
+    await scanSelectedPools({
+      tokenCA: TEST_TOKEN,
+      pools: [POOL_A, POOL_B],
+      workers: 2,
+      outputDir: tmpDir,
+      discoverTokenPoolsFn: createMockDiscoveryResult([
+        { poolAddress: POOL_A, pair: "TEST/SOL" },
+        { poolAddress: POOL_B, pair: "TEST/USDC" },
+      ]),
+      context: context as unknown as Parameters<typeof scanSelectedPools>[0]["context"],
+      browser: browser as unknown as Parameters<typeof scanSelectedPools>[0]["browser"],
+      minPageDelay: 0,
+      maxPageDelay: 0,
+      minPoolDelay: 0,
+      maxPoolDelay: 0,
+    });
+
+    assert.equal(newPageCalls, 2);
+    const [tab1, tab2] = context.pages();
+
+    // User manually closes tab 1, but keeps tab 2 open
+    await tab1.close();
+    assert.equal(tab1.isClosed(), true);
+    assert.equal(tab2.isClosed(), false);
+
+    // Next scan with 2 workers: should recreate only 1 tab (for worker 1) and reuse tab 2
+    const tmpDir2 = await fs.mkdtemp(path.join(os.tmpdir(), "dllm-pool-scan-test2-"));
+    try {
+      await scanSelectedPools({
+        tokenCA: TEST_TOKEN,
+        pools: [POOL_A, POOL_B],
+        workers: 2,
+        outputDir: tmpDir2,
+        discoverTokenPoolsFn: createMockDiscoveryResult([
+          { poolAddress: POOL_A, pair: "TEST/SOL" },
+          { poolAddress: POOL_B, pair: "TEST/USDC" },
+        ]),
+        context: context as unknown as Parameters<typeof scanSelectedPools>[0]["context"],
+        browser: browser as unknown as Parameters<typeof scanSelectedPools>[0]["browser"],
+        minPageDelay: 0,
+        maxPageDelay: 0,
+        minPoolDelay: 0,
+        maxPoolDelay: 0,
+      });
+
+      assert.equal(newPageCalls, 3, "Exactly 1 new page should be created to replace closed tab 1");
+      assert.equal(tab2.isClosed(), false, "Tab 2 must still remain open and reused");
+    } finally {
+      await fs.rm(tmpDir2, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
+  it("24. Reconnection over CDP identifies and reuses existing scanner tabs via markers", async () => {
+    const dataMap: Record<string, Record<number, TopLperRow[]>> = {
+      [POOL_A]: { 1: [{ owner: "WalletA" }] },
+    };
+
+    // Pre-create an existing scanner-tagged tab (simulating persistent tab from previous process)
+    const existingTab = new MockPage({ id: "persistent-scanner-tab" });
+    await existingTab.goto("https://app.lpagent.io/pools/PREV_POOL?tab=top#dllm-scanner-worker-1");
+    existingTab._windowName = "dllm-scanner-worker-1";
+
+    let newPageCalls = 0;
+    const context = new MockBrowserContext({ dataMap }, [existingTab]);
+    const origNewPage = context.newPage.bind(context);
+    context.newPage = async () => {
+      newPageCalls++;
+      return origNewPage();
+    };
+    const browser = new MockBrowser(context);
+
+    await scanSelectedPools({
+      tokenCA: TEST_TOKEN,
+      pools: [POOL_A],
+      workers: 1,
+      outputDir: tmpDir,
+      discoverTokenPoolsFn: createMockDiscoveryResult([
+        { poolAddress: POOL_A, pair: "TEST/SOL" },
+      ]),
+      context: context as unknown as Parameters<typeof scanSelectedPools>[0]["context"],
+      browser: browser as unknown as Parameters<typeof scanSelectedPools>[0]["browser"],
+      minPageDelay: 0,
+      maxPageDelay: 0,
+      minPoolDelay: 0,
+      maxPoolDelay: 0,
+    });
+
+    assert.equal(newPageCalls, 0, "Must not create a new page when pre-existing marked tab exists");
+    assert.equal(context.pages().length, 1);
+    assert.equal(existingTab.isClosed(), false);
+    assert.ok(existingTab.url().includes(POOL_A));
+  });
+
+  it("25. Browser focus is never activated: bringToFront is never called on any persistent tab", async () => {
+    const dataMap: Record<string, Record<number, TopLperRow[]>> = {
+      [POOL_A]: { 1: [{ owner: "WalletA" }] },
+      [POOL_B]: { 1: [{ owner: "WalletB" }] },
+    };
+
+    const context = new MockBrowserContext({ dataMap });
+    const browser = new MockBrowser(context);
+
+    await scanSelectedPools({
+      tokenCA: TEST_TOKEN,
+      pools: [POOL_A, POOL_B],
+      workers: 2,
+      outputDir: tmpDir,
+      discoverTokenPoolsFn: createMockDiscoveryResult([
+        { poolAddress: POOL_A, pair: "TEST/SOL" },
+        { poolAddress: POOL_B, pair: "TEST/USDC" },
+      ]),
+      context: context as unknown as Parameters<typeof scanSelectedPools>[0]["context"],
+      browser: browser as unknown as Parameters<typeof scanSelectedPools>[0]["browser"],
+      minPageDelay: 0,
+      maxPageDelay: 0,
+      minPoolDelay: 0,
+      maxPoolDelay: 0,
+    });
+
+    const pages = context.pages();
+    for (const page of pages) {
+      assert.equal(page.bringToFrontCalled, false, "bringToFront must NEVER be called");
+    }
+  });
 
   // ---------------------------------------------------------------------------
   // CLI Arguments Validation
